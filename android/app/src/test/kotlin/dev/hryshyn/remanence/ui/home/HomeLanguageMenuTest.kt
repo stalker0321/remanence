@@ -7,9 +7,10 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.ui.hold.HoldTheme
 import dev.hryshyn.remanence.ui.locale.AppLocale
@@ -18,16 +19,21 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /**
  * Signed-out public home shows ONE compact localized Language trigger
  * opening the language menu — never the full option row. Tag-based,
  * locale-independent (self-names are stable; the trigger line is
- * asserted in the test-default English locale). NOT run in this tick
- * (no Gradle execution per the task brief).
+ * asserted in the test-default English locale).
+ *
+ * Host mirrors the proven popup fixture (activity rule, native graphics,
+ * realistic viewport): the trigger sits at the bottom of a full home
+ * surface, so tests scroll it into view exactly as the UI requires.
  */
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35])
+@Config(sdk = [35], qualifiers = "w390dp-h844dp-xhdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class HomeLanguageMenuTest {
 
     @get:Rule
@@ -54,7 +60,7 @@ class HomeLanguageMenuTest {
     fun publicHomeShowsCompactTriggerNotFullRow() {
         mountPublicHome(AppLocale.SYSTEM) {}
 
-        composeRule.onNodeWithTag("access_language").assertIsDisplayed()
+        composeRule.onNodeWithTag("access_language").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("language_switch_row").assertDoesNotExist()
         composeRule.onNodeWithTag("language_select_group").assertDoesNotExist()
         // Menu options exist only once the menu opens.
@@ -80,7 +86,7 @@ class HomeLanguageMenuTest {
             }
         }
 
-        composeRule.onNodeWithTag("access_language").performClick()
+        composeRule.onNodeWithTag("access_language").performScrollTo().performClick()
         composeRule.onNodeWithTag("language_option_system").assertIsDisplayed()
         composeRule.onNodeWithTag("language_option_english").assertIsDisplayed()
         composeRule.onNodeWithTag("language_option_russian").assertIsDisplayed()
@@ -98,7 +104,7 @@ class HomeLanguageMenuTest {
     fun openMenuMarksCurrentOptionSelected() {
         mountPublicHome(AppLocale.RUSSIAN) {}
 
-        composeRule.onNodeWithTag("access_language").performClick()
+        composeRule.onNodeWithTag("access_language").performScrollTo().performClick()
         // Selected menu-item semantics (radio + selected) ride on the
         // option itself; only the current choice carries them.
         composeRule.onNodeWithTag("language_option_russian").assertIsSelected()
@@ -110,7 +116,7 @@ class HomeLanguageMenuTest {
         var calls = 0
         mountPublicHome(AppLocale.RUSSIAN) { calls++ }
 
-        composeRule.onNodeWithTag("access_language").performClick()
+        composeRule.onNodeWithTag("access_language").performScrollTo().performClick()
         composeRule.onNodeWithTag("language_option_russian").performClick()
 
         // The menu itself only reports taps; the production funnel turns
@@ -140,7 +146,7 @@ class HomeLanguageMenuTest {
         }
 
         for (option in listOf(AppLocale.ENGLISH, AppLocale.UKRAINIAN, AppLocale.RUSSIAN)) {
-            composeRule.onNodeWithTag("access_language").performClick()
+            composeRule.onNodeWithTag("access_language").performScrollTo().performClick()
             composeRule.onNodeWithTag("language_option_${option.name.lowercase()}").performClick()
         }
 

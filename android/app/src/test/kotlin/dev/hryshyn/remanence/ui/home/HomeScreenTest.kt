@@ -55,11 +55,12 @@ class HomeScreenTest {
         val diff = scanHeight - createHeight
         assertTrue("scan must lead create per 1.25/.83 flex: diff=$diff", diff > 0f)
         assertTrue("neither card may greedily absorb the viewport: diff=$diff", diff < 120f)
-        // No dead blank band: the language row sits at the bottom padding.
+        // No dead blank band: the compact language trigger sits at the
+        // bottom padding (public home uses the popup trigger, not a row).
         val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
-        val langBounds = composeRule.onNodeWithTag("language_switch_row").getUnclippedBoundsInRoot()
+        val langBounds = composeRule.onNodeWithTag("access_language").getUnclippedBoundsInRoot()
         val deadBand = (rootBounds.bottom - langBounds.bottom).value
-        assertTrue("no dead band may sit under the language row: $deadBand", deadBand < 48f)
+        assertTrue("no dead band may sit under the language trigger: $deadBand", deadBand < 48f)
     }
 
     @Test
@@ -78,11 +79,11 @@ class HomeScreenTest {
         // Leftover splits ~1.25/.83 ≈ 1.5 between the extras above the floors.
         val extraRatio = (scanHeight - 245f) / (createHeight - 222f)
         assertTrue("leftover must split ~1.25/.83: ratio=$extraRatio", extraRatio in 1.0f..2.0f)
-        // Language row still pinned to the bottom padding.
+        // Language trigger still pinned to the bottom padding.
         val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
-        val langBounds = composeRule.onNodeWithTag("language_switch_row").getUnclippedBoundsInRoot()
+        val langBounds = composeRule.onNodeWithTag("access_language").getUnclippedBoundsInRoot()
         val deadBand = (rootBounds.bottom - langBounds.bottom).value
-        assertTrue("no dead band may sit under the language row on tall screens: $deadBand", deadBand < 48f)
+        assertTrue("no dead band may sit under the language trigger on tall screens: $deadBand", deadBand < 48f)
     }
 
     @Test
@@ -146,9 +147,9 @@ class HomeScreenTest {
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
         composeRule.onNodeWithTag("create_action").assertIsDisplayed()
         val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
-        val langBounds = composeRule.onNodeWithTag("language_switch_row").getUnclippedBoundsInRoot()
+        val langBounds = composeRule.onNodeWithTag("access_language").getUnclippedBoundsInRoot()
         val deadBand = (rootBounds.bottom - langBounds.bottom).value
-        assertTrue("no dead band may sit under the language row: $deadBand", deadBand < 48f)
+        assertTrue("no dead band may sit under the language trigger: $deadBand", deadBand < 48f)
     }
 
     @Test
@@ -159,9 +160,14 @@ class HomeScreenTest {
             HoldTheme { HomeScreen(BackendHealthUiState.AVAILABLE, publicEntry = true,
                 onLocaleSelected = { selected = it }) }
         }
+        // Public home exposes languages through the compact popup
+        // trigger: each option is opened, reached, and chosen in turn
+        // (choosing dismisses the menu, so it reopens per option).
         for (option in dev.hryshyn.remanence.ui.locale.AppLocale.options) {
-            composeRule.onNodeWithTag("language_option_${option.name.lowercase()}")
+            composeRule.onNodeWithTag("access_language")
                 .performScrollTo().assertIsDisplayed().performClick()
+            composeRule.onNodeWithTag("language_option_${option.name.lowercase()}")
+                .assertIsDisplayed().performClick()
             assertEquals(option, selected)
         }
         composeRule.onNodeWithTag("create_action").performScrollTo().assertIsDisplayed()
@@ -173,9 +179,13 @@ class HomeScreenTest {
         composeRule.setContent {
             HoldTheme { HomeScreen(BackendHealthUiState.AVAILABLE, publicEntry = true) }
         }
+        // The popup menu holds every choice once opened; all four
+        // options render without scrolling the page itself.
+        composeRule.onNodeWithTag("access_language")
+            .performScrollTo().assertIsDisplayed().performClick()
         for (option in dev.hryshyn.remanence.ui.locale.AppLocale.options) {
             composeRule.onNodeWithTag("language_option_${option.name.lowercase()}")
-                .performScrollTo().assertIsDisplayed()
+                .assertIsDisplayed()
         }
     }
 

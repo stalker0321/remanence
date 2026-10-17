@@ -270,6 +270,23 @@ shows the handle, not the keyset. Nothing is uploaded.
 The Firefox smoke did not submit the form. Dotted handles are allowed in the
 API path. A `.` or `..` path segment is still refused.
 
+## C4 front still
+
+After confirmation, Create uses the same camera port as scan. One still is
+kept with that recipient's user id, key bundle, and directory version. A
+camera that resolves after cancel is stopped. Closing the camera, locking
+the keys, or choosing another recipient zeroes the bytes. The bytes are not
+posted. The still is not a SIFT fingerprint, and the page does not draw a
+second copy of it.
+
+## C4 note
+
+The note field counts UTF-8 bytes with `TextEncoder`, not characters.
+`note_max_utf8_bytes` in `protocol/fixtures/limits-v1.json` is 1000. A note
+of 500 `я` fits. One more byte does not. The over-limit text stays in the
+field and `accepted()` returns null. An empty note is accepted as no note.
+Lock and sign-out clear the field. It is not written to localStorage.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

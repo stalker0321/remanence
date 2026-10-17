@@ -287,6 +287,15 @@ of 500 `я` fits. One more byte does not. The over-limit text stays in the
 field and `accepted()` returns null. An empty note is accepted as no note.
 Lock and sign-out clear the field. It is not written to localStorage.
 
+## C4 photos
+
+The create draft accepts a file only when it is at most
+`normalized_photo_max_plaintext_bytes` (8388608) and starts with the JPEG
+marker. The list holds at most five. Three to five can be accepted. Remove
+and reorder do not upload anything. Lock zeroes the draft bytes. Preview
+object URLs are revoked on remove, lock, and unmount; the blob copy behind an
+object URL cannot be zeroed. The long edge is not measured and is not resized.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

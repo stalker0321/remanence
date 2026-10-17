@@ -78,8 +78,15 @@ async function validateIdentity(plain, encAnchor, signAnchor) {
     right = new Uint8Array(await crypto.subtle.deriveBits({name:'X25519', public:expected}, ephemeral.privateKey, 256));
     check(same(left, right));
   } finally {left?.fill(0); right?.fill(0);}
+  // Copies survive the package wipe in the caller. They are for the in-memory
+  // key owner only; openRecovery still wipes them before returning.
+  return {
+    signing, encryption,
+    signingKeyId: sign.id, encryptionKeyId: enc.id,
+    signingSeed: new Uint8Array(s.get(2)), encryptionSeed: new Uint8Array(e.get(3)),
+  };
 }
-export async function openRecovery(reply, secret, useCode = false) {
+export async function openIdentity(reply, secret, useCode = false) {
   check(secret instanceof Uint8Array && secret.length === 32);
   const r = reply.record;
   check(r.version === VERSION && r.generation === 1);
@@ -104,9 +111,14 @@ export async function openRecovery(reply, secret, useCode = false) {
     check(ark.length === 32);
     const root = await crypto.subtle.importKey('raw', ark, 'AES-GCM', false, ['decrypt']);
     plain = new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM', iv:pack.subarray(0,12), additionalData:utf8(ctx + '\npackage')}, root, pack.subarray(12)));
-    await validateIdentity(plain, unb64(reply.encryption_public_keyset), unb64(reply.signing_public_keyset));
-    return {status:'PASS', identityValidated:true, identityInstalled:false, plaintextBuffersCleared:true};
+    const opened = await validateIdentity(plain, unb64(reply.encryption_public_keyset), unb64(reply.signing_public_keyset));
+    return {accountId: r.account_id, bundleId: r.bundle_id, ...opened};
   } finally {ark?.fill(0); plain?.fill(0);}
+}
+export async function openRecovery(reply, secret, useCode = false) {
+  const opened = await openIdentity(reply, secret, useCode);
+  opened.signingSeed.fill(0); opened.encryptionSeed.fill(0);
+  return {status:'PASS', identityValidated:true, identityInstalled:false, plaintextBuffersCleared:true};
 }
 export function publicCredential(c) {
   const r = c.response; const response = {clientDataJSON:b64(r.clientDataJSON)};

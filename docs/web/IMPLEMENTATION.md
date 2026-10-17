@@ -85,6 +85,33 @@ Product:
 6. W5 fixture journey and negative UI states.
 7. W6 new-user and sender path only after the receiver path holds.
 
+## W1 crypto adapter
+
+`web/src/protocol` builds artifact AAD and recipient-envelope info with the
+same domain prefixes and protobuf fields as `CryptoContextEncoder`.
+`web/src/crypto` parses a single TINK keyset only.
+
+- HPKE open uses `@hpke/core` 1.9.0 (MIT), suite
+  DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 / AES-256-GCM.
+  The library's private-key import is extractable because its decap derives
+  the public key through a JWK export. The UI capability does not return that
+  key. Seed copies are wiped after import. This is not Android Keystore.
+- Artifact decrypt is AES-256-GCM under the 5-byte TINK prefix, 12-byte IV,
+  and the artifact AAD. RAW, CRUNCHY, LEGACY, a mismatched key id, and an
+  unknown type URL fail before a fallback.
+- Publish signatures are the 69-byte TINK Ed25519 form. The signed input is
+  `postmark/publish/v1` concatenated with the statement bytes, with no extra
+  0x00 separator.
+- `openRecovery()` in the browser probe still returns only the diagnostic and
+  wipes the seeds. `openIdentity()` is the in-memory entry the key owner uses.
+  The owner also requires `UUID.nameUUIDFromBytes(encryption public keyset)`
+  to equal the bundle id, which is what Android restore checks.
+
+The committed golden vectors for the envelope, the publish signature, and the
+context bytes are the interop gate. There is no committed Android ciphertext
+for a capsule artifact, and the Kotlin recovery fixture is produced only into
+`build/`. Those two are covered by a JS producer and are labeled as such.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

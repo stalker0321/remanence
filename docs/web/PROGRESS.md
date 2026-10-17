@@ -3,10 +3,10 @@
 Base: `5a6e7fd65f7be752daa1c933134df7918dde33ee`
 Branch: `work/t213-remanence-web-20261017`
 Worktree: `/home/vodkolyan/projects/Remanence-web-t213-20261017`
-Last good commit: `af51b89389a2bb3a400f3c084756c622175e056d` records W2 `3172229aedab5c7a6f4645a4f1f47b7476c1ea58`. W3 is the next commit.
+Last good commit: `0b53d4881f15331c34e050b6b6eeed62b64af719` (W3).
 
-Current milestone: W3 signed incoming fetch and local scan boundary, checks green, commit in progress
-Next exact action: commit W3. Recognition parity remains blocked without a SIFT build.
+Current milestone: W3 committed. Recognition parity remains blocked without a SIFT build.
+Next exact action: render one frozen plan from an existing fixture, without generating a new collage.
 
 ## Implemented
 
@@ -14,7 +14,7 @@ Next exact action: commit W3. Recognition parity remains blocked without a SIFT 
 - W1 `85b81b96487b96a524bb0f501c2467d95f855227`: artifact AAD, recipient-envelope info, TINK HPKE open, TINK AES-GCM artifact decrypt, TINK Ed25519 publish sign/verify, memory key owner.
 - Probe `openRecovery()` still returns the diagnostic and wipes seeds. `openIdentity()` feeds the key owner.
 - W2 `3172229aedab5c7a6f4645a4f1f47b7476c1ea58`: nonce-bound `POST /v1/auth/google/options` and `/verify`. Server status chooses the route. `NEEDS_HANDLE`, link-required, and upgrade-required do not sign in and do not call `/register`. Signed-in restore uses `/v1/recovery/status` and, only for `STORED`, setup options, one passkey get, setup verify, and `GET /v1/recovery/record`. PRF is not sent. `NOT_STARTED` and `PENDING` do not create a passkey. Keys sit in `MemoryKeys` and drop on lock or sign-out.
-- W3: one incoming page, sender key bundle, publish signature, and signed blob bindings. Download checks length and SHA-256. The camera still stays in memory. Recognition fails closed. A grant admits postcard-matched and does not decrypt.
+- W3 `0b53d4881f15331c34e050b6b6eeed62b64af719`: one incoming page, sender key bundle, publish signature, and signed blob bindings. Download checks length and SHA-256. The camera still stays in memory. Recognition fails closed. A grant admits postcard-matched and does not decrypt.
 - Node 22.22.1 on `msi-workstation` at `/home/msi-workstation/remanence-web-t213-20261017/tools/node`.
 
 ## Actual verification
@@ -43,6 +43,6 @@ VM `msi-workstation`, Node v22.22.1, source synced from this worktree before the
 
 ## Next 3 independent tasks
 
-1. Commit W3.
-2. A frozen-plan renderer behind an explicit fixture grant, without generating a new collage.
-3. Keep recognition parity as its own gate. Do not treat the unavailable engine as a scan.
+1. Render one frozen plan from an existing fixture, behind an explicit fixture grant, without generating a new collage.
+2. Keep recognition parity as its own gate. Do not treat the unavailable engine as a scan.
+3. Negative UI for logout during an in-flight incoming fetch.

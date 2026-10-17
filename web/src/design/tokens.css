@@ -89,6 +89,34 @@ button:focus-visible, a:focus-visible {
   margin-top: 1rem;
 }
 
+.handle-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+
+.handle-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.handle-form input {
+  font: inherit;
+  color: inherit;
+  min-height: var(--touch);
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--ink);
+  border-radius: 0.8rem;
+  background: var(--paper);
+}
+
+.handle-form input:focus-visible {
+  outline: 2px solid var(--lilac-deep);
+  outline-offset: 3px;
+}
+
 .primary { background: var(--lilac); }
 
 video.preview {

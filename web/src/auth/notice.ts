@@ -26,6 +26,12 @@ export function explainFailure(error: unknown): MessageKey {
       return 'googleCancelled'
     case 'GOOGLE_CLIENT_UNAVAILABLE':
       return 'googleUnavailable'
+    case 'HANDLE_INVALID':
+      return 'handleInvalid'
+    case 'HANDLE_TAKEN':
+      return 'handleTaken'
+    case 'REGISTRATION_REJECTED':
+      return 'registrationFailed'
     case 'PASSKEY_CANCELLED':
       return 'passkeyCancelled'
     case 'PRF_UNAVAILABLE':

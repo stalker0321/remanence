@@ -181,6 +181,8 @@ const painted = await run(`
     hpke: document.documentElement.dataset.hpke,
     journey: document.documentElement.dataset.journey,
     revoked: document.documentElement.dataset.revoked,
+    identity: document.documentElement.dataset.identity,
+    identityWiped: document.documentElement.dataset.identityWiped,
     locale: document.getElementById('locale')?.textContent,
     received: {
       note: document.getElementById('received')?.dataset.note ?? '',
@@ -220,8 +222,8 @@ await call('DELETE', '')
 driver.kill()
 product.close()
 harness.close()
-const summary = { browser, shots: report.shots, hpke: painted.hpke, journey: painted.journey, revoked: painted.revoked, received: painted.received, plain: painted.plain, cover: { result: painted.cover.result, painted: painted.cover.painted, artwork: painted.cover.artwork, bytes: painted.cover.bytes }, overflow: painted.overflow, productErrors: report.product.desktop.boot, harnessBoot: painted.boot, productResources: report.product.desktop.resources, harnessResources: painted.resources }
-if (painted.hpke !== 'open' || painted.journey !== 'presentation-admitted' || painted.revoked !== 'yes' || painted.received.note !== 'hello' || painted.received.style !== 'press' || painted.received.painted !== 'yes') {
+const summary = { browser, shots: report.shots, hpke: painted.hpke, journey: painted.journey, revoked: painted.revoked, identity: painted.identity, identityWiped: painted.identityWiped, received: painted.received, plain: painted.plain, cover: { result: painted.cover.result, painted: painted.cover.painted, artwork: painted.cover.artwork, bytes: painted.cover.bytes }, overflow: painted.overflow, productErrors: report.product.desktop.boot, harnessBoot: painted.boot, productResources: report.product.desktop.resources, harnessResources: painted.resources }
+if (painted.hpke !== 'open' || painted.journey !== 'presentation-admitted' || painted.revoked !== 'yes' || painted.identity !== 'matched' || painted.identityWiped !== 'yes' || painted.received.note !== 'hello' || painted.received.style !== 'press' || painted.received.painted !== 'yes') {
   console.log(JSON.stringify(summary, null, 2))
   throw new Error('harness assertions failed')
 }

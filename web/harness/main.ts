@@ -4,6 +4,7 @@ import { prepare } from '../src/collage/prepare'
 import '../src/design/tokens.css'
 import './harness.css'
 import { MemoryKeys } from '../src/auth/memoryKeys'
+import { generateLocalIdentity } from '../src/crypto/identity'
 import { PresentationMemory } from '../src/collage/memory'
 import { receivePostcard } from '../src/scan/receive'
 import { SessionStore } from '../src/session/session'
@@ -142,4 +143,8 @@ receivedCanvas.dataset.style = received.scene.styleId
 root.dataset.journey = journey.getSnapshot().phase
 journey.signOut()
 root.dataset.revoked = journeyMemory.getSnapshot() === null ? 'yes' : 'no'
+const local = await generateLocalIdentity()
+root.dataset.identity = local.bound() && local.publicBundle().protocol_version === 1 ? 'matched' : 'mismatch'
+local.wipe()
+root.dataset.identityWiped = local.wiped ? 'yes' : 'no'
 root.dataset.harness = 'ready'

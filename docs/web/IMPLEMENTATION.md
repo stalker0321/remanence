@@ -197,6 +197,49 @@ AES-GCM producer. Firefox 155 painted that admitted sheet and then saw the
 object URLs drop on sign-out. That producer is not Android output, and the
 camera in that page is not a device.
 
+## C3 recognition boundary
+
+No browser SIFT build is on this VPS or on `msi-workstation`. `emcc` is absent.
+The VM tools directory contains Node only. Desktop OpenCV 4.10 is installed as
+`libopencv-features2d410` and `/usr/share/java/opencv4/opencv-4100.jar`. That
+jar is the JNI library the Android unit tests compile against. The app artifact
+depends on `org.opencv:opencv:4.12.0`. Neither is a WASM module the page can
+call.
+
+The official builder is OpenCV `4.12.0` `platforms/js/build_js.py`. It enables
+`features2d` and refuses to configure unless `EMSDK` or `EMSCRIPTEN` points at
+an activated Emscripten SDK. That SDK is not present. Installing it and
+compiling OpenCV is the large toolchain this task does not download by default.
+`unavailableRecognition` stays the production engine.
+
+The missing operation is `SIFT.create(0, 3, 0.018, 12.0, 1.6)` plus the existing
+6×6 / 45 / 1,500 selection and the matcher’s one RootSIFT step. The smallest
+follow-up is a VM-local Emscripten pin named by that OpenCV release, one
+`features2d` wasm build, and a descriptor comparison against a frozen extractor
+fixture. Thresholds stay where they are. A 4.10 desktop jar is not that build.
+
+## C4 registration ticket
+
+`continueWithGoogle` still does not call `/register`. A `NEEDS_HANDLE` body
+with a 43-character registration token is held in `RegistrationDraft`, which
+is memory in the page and is not stored. The returned outcome does not carry
+the token. `EXISTING_ACCOUNT_REQUIRES_LINK`, a signed-in account, and a second
+Google ceremony wipe that draft, including any identity it already created.
+
+The handle form is shown only while that ticket is held and the phase is
+`signed-out`. Cancel wipes the draft. Reload drops it because nothing was
+written down. `registerNewAccount` folds the handle the way the server does,
+generates one X25519/Ed25519 identity on the first submit, and posts
+`/v1/auth/google/register`. A 409 `REGISTRATION_CONFLICT` keeps the ticket and
+the same keysets. Success signs in only when the echoed bundle id and handle
+match, then drops the ticket and keeps the identity for a later enrollment.
+An authenticated session cannot call register. Enrollment, PRF, and the
+recovery record are not in this slice. Production send stays off.
+
+Firefox 155 generated one of those identities in the harness, checked the
+bundle id against the encryption keyset, and then wiped the seed copies.
+WebCrypto key objects themselves cannot be zeroed.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

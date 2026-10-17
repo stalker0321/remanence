@@ -4,6 +4,7 @@ import { fieldBytes, fieldNumber, readMessage } from '../protocol/proto'
 
 const AES_URL = 'type.googleapis.com/google.crypto.tink.AesGcmKey'
 const HPKE_PRIVATE_URL = 'type.googleapis.com/google.crypto.tink.HpkePrivateKey'
+const HPKE_PUBLIC_URL = 'type.googleapis.com/google.crypto.tink.HpkePublicKey'
 const ED25519_PRIVATE_URL = 'type.googleapis.com/google.crypto.tink.Ed25519PrivateKey'
 const ED25519_PUBLIC_URL = 'type.googleapis.com/google.crypto.tink.Ed25519PublicKey'
 
@@ -51,6 +52,19 @@ export function parseEd25519PrivateKeyset(bytes: Uint8Array): PrivateScalar {
     throw new ProtocolError('INVALID_KEY')
   }
   return { keyId, scalar }
+}
+
+export function parseHpkePublicKeyset(bytes: Uint8Array): { keyId: number; raw: Uint8Array } {
+  const { keyId, value } = oneKey(bytes, HPKE_PUBLIC_URL, 3)
+  const pub = readMessage(value, [1, 2, 3])
+  if (fieldNumber(pub, 1, 0) !== 0) throw new ProtocolError('UNKNOWN_VERSION')
+  const params = readMessage(fieldBytes(pub, 2), [1, 2, 3])
+  if (fieldNumber(params, 1) !== 1 || fieldNumber(params, 2) !== 1 || fieldNumber(params, 3) !== 2) {
+    throw new ProtocolError('UNSUPPORTED_HPKE')
+  }
+  const raw = fieldBytes(pub, 3)
+  if (raw.length !== 32) throw new ProtocolError('INVALID_KEY')
+  return { keyId, raw }
 }
 
 export function parseEd25519PublicKeyset(bytes: Uint8Array): { keyId: number; raw: Uint8Array } {

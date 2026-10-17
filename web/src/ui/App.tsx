@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { explainFailure, explainGoogle, explainRestore } from '../auth/notice'
 import { browserGoogleIdentity } from '../auth/googleBrowser'
 import { continueWithGoogle, type GoogleIdentityPort } from '../auth/google'
+import { RegistrationDraft, registerNewAccount } from '../auth/register'
 import { apiOrigin, fetchTransport, type ApiTransport, type ByteTransport } from '../auth/http'
 import { MemoryKeys } from '../auth/memoryKeys'
 import { browserPasskey, type PasskeyPort } from '../auth/passkey'
@@ -44,6 +45,7 @@ export function App({
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const held = useSyncExternalStore(memory.subscribe, memory.getSnapshot)
+  const draft = useRef(new RegistrationDraft())
   const [route, setRoute] = useState<RouteName>(() => parseRoute(window.location.hash))
   const [notice, setNotice] = useState<MessageKey>('errorRegion')
   const t = (key: MessageKey) => translate(view.language, key)
@@ -103,6 +105,7 @@ export function App({
           transport={transport}
           google={google}
           passkeys={passkeys}
+          draft={draft.current}
           t={t}
           onNotice={setNotice}
         />
@@ -312,6 +315,7 @@ function Account({
   transport,
   google,
   passkeys,
+  draft,
   t,
   onNotice,
 }: {
@@ -320,11 +324,14 @@ function Account({
   transport: ApiTransport
   google: GoogleIdentityPort
   passkeys: PasskeyPort
+  draft: RegistrationDraft
   t: (key: MessageKey) => string
   onNotice: (notice: MessageKey) => void
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [busy, setBusy] = useState(false)
+  const [choosing, setChoosing] = useState(() => draft.hasTicket())
+  const [handle, setHandle] = useState('')
   const busyRef = useRef(false)
   const abort = useRef<AbortController | null>(null)
   const signedIn = view.phase !== 'signed-out'
@@ -364,7 +371,11 @@ function Account({
             className="primary"
             disabled={busy}
             onClick={() => {
-              void run((signal) => continueWithGoogle(store, transport, google, signal).then(explainGoogle))
+              void run(async (signal) => {
+                const outcome = await continueWithGoogle(store, transport, google, signal, draft)
+                setChoosing(draft.hasTicket())
+                return explainGoogle(outcome)
+              })
             }}
           >
             {t('continueGoogle')}
@@ -393,7 +404,9 @@ function Account({
               abort.current?.abort()
               busyRef.current = false
               setBusy(false)
+              draft.wipe()
               store.signOut()
+              setChoosing(false)
               onNotice('errorRegion')
             }}
           >
@@ -402,6 +415,50 @@ function Account({
         ) : null}
         <a href={href('home')}>{t('back')}</a>
       </div>
+      {choosing && !signedIn ? (
+        <form
+          className="handle-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void run(async (signal) => {
+              await registerNewAccount(store, transport, draft, handle, signal)
+              setChoosing(false)
+              return null
+            })
+          }}
+        >
+          <p>{t('chooseHandle')}</p>
+          <p>{t('registrationUnsaved')}</p>
+          <label>
+            {t('handleLabel')}
+            <input
+              value={handle}
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              maxLength={32}
+              onChange={(event) => setHandle(event.target.value)}
+            />
+          </label>
+          <div className="actions">
+            <button type="submit" className="primary" disabled={busy}>{t('createAccount')}</button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                abort.current?.abort()
+                draft.wipe()
+                setChoosing(false)
+                setHandle('')
+                onNotice('errorRegion')
+              }}
+            >
+              {t('cancelRegistration')}
+            </button>
+          </div>
+        </form>
+      ) : null}
     </section>
   )
 }

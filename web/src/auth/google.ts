@@ -1,6 +1,7 @@
 import type { SessionStore } from '../session/session'
 import { AuthError } from './errors'
 import type { ApiTransport } from './http'
+import type { RegistrationDraft } from './register'
 
 export interface GoogleIdentityPort {
   requestIdToken(clientId: string, nonce: string, signal?: AbortSignal): Promise<string>
@@ -24,6 +25,7 @@ export async function continueWithGoogle(
   transport: ApiTransport,
   identity: GoogleIdentityPort,
   signal?: AbortSignal,
+  draft?: RegistrationDraft,
 ): Promise<GoogleOutcome> {
   if (session.getSnapshot().phase !== 'signed-out') throw new AuthError('ILLEGAL_PHASE')
   const options = await transport.request({
@@ -47,7 +49,17 @@ export async function continueWithGoogle(
     signal,
   })
   if (signal?.aborted) throw new AuthError('CANCELLED')
-  return applyVerify(session, verified.status, verified.body)
+  const outcome = applyVerify(session, verified.status, verified.body)
+  if (outcome.kind === 'needs-handle') {
+    if (draft) {
+      const ticket = readTicket(verified.body)
+      if (!ticket) throw new AuthError('GOOGLE_REJECTED')
+      draft.replace(ticket.flow, ticket.token)
+    }
+  } else {
+    draft?.wipe()
+  }
+  return outcome
 }
 
 function applyVerify(session: SessionStore, status: number, body: unknown): GoogleOutcome {
@@ -60,7 +72,14 @@ function applyVerify(session: SessionStore, status: number, body: unknown): Goog
     return { kind: 'client-upgrade-required' }
   }
   if (status === 200 && root?.status === 'NEEDS_HANDLE') return { kind: 'needs-handle' }
-  if (status !== 200 || root?.status !== 'SIGNED_IN') throw new AuthError('GOOGLE_REJECTED')
+  if (!acceptSignedIn(session, status, body)) throw new AuthError('GOOGLE_REJECTED')
+  return { kind: 'signed-in' }
+}
+
+/** Signs in only a server `SIGNED_IN` login. Returns false for every other body. */
+export function acceptSignedIn(session: SessionStore, status: number, body: unknown): boolean {
+  const root = record(body)
+  if (status !== 200 || root?.status !== 'SIGNED_IN') return false
   const login = record(root.login)
   const user = record(login?.user)
   const bundle = record(login?.active_key_bundle)
@@ -87,8 +106,16 @@ function applyVerify(session: SessionStore, status: number, body: unknown): Goog
     accessExpiresAt: login.access_expires_at,
     refreshExpiresAt: login.refresh_expires_at,
   })
-  if (session.getSnapshot().phase !== 'authenticated') throw new AuthError('GOOGLE_REJECTED')
-  return { kind: 'signed-in' }
+  return session.getSnapshot().phase === 'authenticated'
+}
+
+function readTicket(body: unknown): { flow: string; token: string } | null {
+  const root = record(body)
+  const flow = root?.flow
+  const token = root?.registration_token
+  if (typeof flow !== 'string' || !UUID.test(flow)) return null
+  if (typeof token !== 'string' || !NONCE.test(token)) return null
+  return { flow, token }
 }
 
 function readChallenge(body: unknown): { flow: string; nonce: string; clientId: string } | null {

@@ -23,6 +23,7 @@ export interface IncomingCapsule {
   senderKeyBundleId: string
   recipientKeyBundleId: string
   envelopeCiphertext: Uint8Array
+  statementSha256: Uint8Array
   blobs: IncomingBlob[]
 }
 
@@ -201,6 +202,7 @@ function publishItem(item: DraftItem): IncomingCapsule {
     senderKeyBundleId: item.senderKeyBundleId,
     recipientKeyBundleId: item.recipientKeyBundleId,
     envelopeCiphertext: decode(item.envelope, 1, limits.recipientEnvelopeCiphertext),
+    statementSha256: decode(item.statementSha256, 32),
     blobs: item.blobs,
   }
 }

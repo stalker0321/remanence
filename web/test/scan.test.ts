@@ -36,6 +36,7 @@ function catalog(): IncomingCatalog {
         senderKeyBundleId: '30313233-3435-3637-3839-3a3b3c3d3e3f',
         recipientKeyBundleId: BUNDLE,
         envelopeCiphertext: new Uint8Array([1]),
+        statementSha256: new Uint8Array(32),
         blobs: [],
       },
     ],

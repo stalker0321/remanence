@@ -1,0 +1,1289 @@
+[
+  {
+    "id": "press",
+    "version": "style-study-1",
+    "grammar": 5,
+    "palette": {
+      "paper": "#f2f3b0",
+      "ink": "#191b19",
+      "sound": "#191b19",
+      "soundInk": "#f2f3b0",
+      "surface": "#f2f3b0",
+      "edge": "#191b19"
+    },
+    "brand": {
+      "font": "StudySans",
+      "size": 59,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySans",
+      "size": 20,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": -0.065,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "blue-letter",
+    "version": "style-study-1",
+    "grammar": 5,
+    "palette": {
+      "paper": "#1525a0",
+      "ink": "#f9edd8",
+      "sound": "#f9edd8",
+      "soundInk": "#1525a0",
+      "surface": "#1525a0",
+      "edge": "#f9edd8"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 67,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 20,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 26,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.045,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "poster",
+    "version": "style-study-1",
+    "grammar": 5,
+    "palette": {
+      "paper": "#f4c4c2",
+      "ink": "#521719",
+      "sound": "#b82025",
+      "soundInk": "#fff6de",
+      "surface": "#f4c4c2",
+      "edge": "#521719"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 78,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 17,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 24,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": -0.01,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "signal",
+    "version": "style-study-1",
+    "grammar": 6,
+    "palette": {
+      "paper": "#f34e33",
+      "ink": "#291d19",
+      "sound": "#291d19",
+      "soundInk": "#ffd794",
+      "surface": "#f34e33",
+      "edge": "#291d19"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 22,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 18,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 24,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "night-air",
+    "version": "style-study-1",
+    "grammar": 6,
+    "palette": {
+      "paper": "#d6cce9",
+      "ink": "#342343",
+      "sound": "#342343",
+      "soundInk": "#f4e8c7",
+      "surface": "#d6cce9",
+      "edge": "#342343"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 20,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "Gothic",
+      "size": 18,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "Gothic",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 23,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.025,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "plum",
+    "version": "style-study-1",
+    "grammar": 11,
+    "palette": {
+      "paper": "#5d2441",
+      "ink": "#fff1cf",
+      "sound": "#efe1b3",
+      "soundInk": "#54203b",
+      "surface": "#5d2441",
+      "edge": "#fff1cf"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 48,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 18,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 25,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": -0.045,
+    "surfaceMode": "soft"
+  },
+  {
+    "id": "construction",
+    "version": "style-study-1",
+    "grammar": 11,
+    "palette": {
+      "paper": "#f4ecd9",
+      "ink": "#292820",
+      "sound": "#b62421",
+      "soundInk": "#fff4d8",
+      "surface": "#f4ecd9",
+      "edge": "#292820"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 53,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 24,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0,
+    "surfaceMode": "edge"
+  },
+  {
+    "id": "pool",
+    "version": "style-study-1",
+    "grammar": 11,
+    "palette": {
+      "paper": "#b9d4d2",
+      "ink": "#17383b",
+      "sound": "#17383b",
+      "soundInk": "#d5ef73",
+      "surface": "#b9d4d2",
+      "edge": "#17383b"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 45,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "Gothic",
+      "size": 17,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "Gothic",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Gothic",
+      "size": 19,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": -0.065,
+    "surfaceMode": "soft"
+  },
+  {
+    "id": "proof",
+    "version": "style-study-1",
+    "grammar": 18,
+    "palette": {
+      "paper": "#333633",
+      "ink": "#202621",
+      "sound": "#e3e5df",
+      "soundInk": "#202621",
+      "surface": "#f8f7ef",
+      "edge": "#c4c8bf"
+    },
+    "brand": {
+      "font": "StudyMono",
+      "size": 17,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySans",
+      "size": 18,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": 0,
+    "surfaceMode": "edge"
+  },
+  {
+    "id": "ochre",
+    "version": "style-study-1",
+    "grammar": 18,
+    "palette": {
+      "paper": "#bd6b35",
+      "ink": "#5a321e",
+      "sound": "#ead3a1",
+      "soundInk": "#5a321e",
+      "surface": "#fff0cd",
+      "edge": "#e7b879"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 19,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 25,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 20,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": 0,
+    "surfaceMode": "raised"
+  },
+  {
+    "id": "nocturne",
+    "version": "style-study-1",
+    "grammar": 27,
+    "palette": {
+      "paper": "#1f2424",
+      "ink": "#f5e17d",
+      "sound": "#f5e17d",
+      "soundInk": "#1f2424",
+      "surface": "#1f2424",
+      "edge": "#f5e17d"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 25,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 18,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 24,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.01,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "porcelain",
+    "version": "style-study-1",
+    "grammar": 27,
+    "palette": {
+      "paper": "#dce6ec",
+      "ink": "#173b76",
+      "sound": "#173b76",
+      "soundInk": "#f1f0df",
+      "surface": "#dce6ec",
+      "edge": "#173b76"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 21,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "Gothic",
+      "size": 18,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 26,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.03,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "telemetry",
+    "version": "pilot-styles-1",
+    "grammar": 12,
+    "palette": {
+      "paper": "#102e35",
+      "ink": "#a4ece2",
+      "sound": "#a4ece2",
+      "soundInk": "#102e35",
+      "surface": "#102e35",
+      "edge": "#a4ece2"
+    },
+    "brand": {
+      "font": "StudyMono",
+      "size": 19,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 20,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudyMono",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": 0,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "folio",
+    "version": "pilot-styles-1",
+    "grammar": 12,
+    "palette": {
+      "paper": "#f4eee4",
+      "ink": "#683521",
+      "sound": "#d0aa80",
+      "soundInk": "#432416",
+      "surface": "#f4eee4",
+      "edge": "#683521"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 23,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 19,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 19,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.015,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "espresso",
+    "version": "pilot-styles-1",
+    "grammar": 17,
+    "palette": {
+      "paper": "#352521",
+      "ink": "#faf1dd",
+      "sound": "#cf9d72",
+      "soundInk": "#352521",
+      "surface": "#352521",
+      "edge": "#faf1dd"
+    },
+    "brand": {
+      "font": "StudySans",
+      "size": 55,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySans",
+      "size": 20,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": -0.065,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "aubergine",
+    "version": "pilot-styles-1",
+    "grammar": 17,
+    "palette": {
+      "paper": "#302637",
+      "ink": "#f1d2dc",
+      "sound": "#f1d2dc",
+      "soundInk": "#302637",
+      "surface": "#302637",
+      "edge": "#f1d2dc"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 58,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 18,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": -0.055,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "lacquer",
+    "version": "pilot-styles-1",
+    "grammar": 17,
+    "palette": {
+      "paper": "#f5f2e9",
+      "ink": "#b32b24",
+      "sound": "#b32b24",
+      "soundInk": "#fff4e0",
+      "surface": "#f5f2e9",
+      "edge": "#b32b24"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 54,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Gothic",
+      "size": 20,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": -0.065,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "evergreen",
+    "version": "pilot-styles-1",
+    "grammar": 20,
+    "palette": {
+      "paper": "#173e34",
+      "ink": "#f5d7bc",
+      "sound": "#f5d7bc",
+      "soundInk": "#173e34",
+      "surface": "#173e34",
+      "edge": "#f5d7bc"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 18,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": 0,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "studio",
+    "version": "pilot-styles-1",
+    "grammar": 20,
+    "palette": {
+      "paper": "#f3edb8",
+      "ink": "#34265f",
+      "sound": "#34265f",
+      "soundInk": "#f3edb8",
+      "surface": "#f3edb8",
+      "edge": "#34265f"
+    },
+    "brand": {
+      "font": "StudyMono",
+      "size": 20,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "Gothic",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Gothic",
+      "size": 23,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": -0.02,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "ink-letter",
+    "version": "pilot-styles-1",
+    "grammar": 21,
+    "palette": {
+      "paper": "#273037",
+      "ink": "#f7eedb",
+      "sound": "#f7eedb",
+      "soundInk": "#273037",
+      "surface": "#273037",
+      "edge": "#f7eedb"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 18,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 32,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 27,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.02,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "correspondence",
+    "version": "pilot-styles-1",
+    "grammar": 21,
+    "palette": {
+      "paper": "#eee4d9",
+      "ink": "#783f32",
+      "sound": "#783f32",
+      "soundInk": "#fff2df",
+      "surface": "#eee4d9",
+      "edge": "#783f32"
+    },
+    "brand": {
+      "font": "StudyMono",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "Gothic",
+      "size": 29,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 25,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySans",
+      "size": 20,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": -0.025,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "apricot",
+    "version": "pilot-styles-1",
+    "grammar": 22,
+    "palette": {
+      "paper": "#eecba1",
+      "ink": "#542c39",
+      "sound": "#542c39",
+      "soundInk": "#f6dfbf",
+      "surface": "#eecba1",
+      "edge": "#542c39"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 35,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 25,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.035,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "mineral",
+    "version": "pilot-styles-1",
+    "grammar": 22,
+    "palette": {
+      "paper": "#d2d9c7",
+      "ink": "#254b4d",
+      "sound": "#254b4d",
+      "soundInk": "#f1edca",
+      "surface": "#d2d9c7",
+      "edge": "#254b4d"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 20,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "Gothic",
+      "size": 32,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Gothic",
+      "size": 21,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": -0.035,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "brass",
+    "version": "pilot-styles-1",
+    "grammar": 22,
+    "palette": {
+      "paper": "#323b42",
+      "ink": "#edcc8d",
+      "sound": "#edcc8d",
+      "soundInk": "#323b42",
+      "surface": "#323b42",
+      "edge": "#edcc8d"
+    },
+    "brand": {
+      "font": "StudyMono",
+      "size": 18,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "Narrow",
+      "size": 38,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 24,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.005,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "glacier",
+    "version": "pilot-styles-1",
+    "grammar": 23,
+    "palette": {
+      "paper": "#bfe7eb",
+      "ink": "#3d2a29",
+      "sound": "#3d2a29",
+      "soundInk": "#bfe7eb",
+      "surface": "#bfe7eb",
+      "edge": "#3d2a29"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 25,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 17,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 23,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.005,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "ultraviolet",
+    "version": "pilot-styles-1",
+    "grammar": 23,
+    "palette": {
+      "paper": "#f0eee8",
+      "ink": "#4a29a0",
+      "sound": "#4a29a0",
+      "soundInk": "#f5f0df",
+      "surface": "#f0eee8",
+      "edge": "#4a29a0"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 23,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "Gothic",
+      "size": 18,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "Gothic",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Gothic",
+      "size": 20,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": -0.035,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "orchid",
+    "version": "pilot-styles-1",
+    "grammar": 24,
+    "palette": {
+      "paper": "#18392f",
+      "ink": "#f5e8cf",
+      "sound": "#e6a6da",
+      "soundInk": "#29332c",
+      "surface": "#18392f",
+      "edge": "#f5e8cf"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 36,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 18,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 25,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "ember",
+    "version": "pilot-styles-1",
+    "grammar": 24,
+    "palette": {
+      "paper": "#39293d",
+      "ink": "#f6e0c5",
+      "sound": "#efae72",
+      "soundInk": "#39293d",
+      "surface": "#39293d",
+      "edge": "#f6e0c5"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 32,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Gothic",
+      "size": 22,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": -0.045,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "darkroom",
+    "version": "pilot-styles-1",
+    "grammar": 25,
+    "palette": {
+      "paper": "#193c3b",
+      "ink": "#e6eadf",
+      "sound": "#e6eadf",
+      "soundInk": "#193c3b",
+      "surface": "#faf8ef",
+      "edge": "#d2d5c8"
+    },
+    "brand": {
+      "font": "StudyMono",
+      "size": 20,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySans",
+      "size": 19,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": 0,
+    "surfaceMode": "print"
+  },
+  {
+    "id": "rose-stock",
+    "version": "pilot-styles-1",
+    "grammar": 25,
+    "palette": {
+      "paper": "#d6aab1",
+      "ink": "#502d44",
+      "sound": "#502d44",
+      "soundInk": "#f4e4d4",
+      "surface": "#f6e4da",
+      "edge": "#b9899a"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 20,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 25,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.02,
+    "surfaceMode": "print"
+  },
+  {
+    "id": "registration",
+    "version": "pilot-styles-1",
+    "grammar": 25,
+    "palette": {
+      "paper": "#deded5",
+      "ink": "#202c27",
+      "sound": "#b4d775",
+      "soundInk": "#263522",
+      "surface": "#eff0e5",
+      "edge": "#202c27"
+    },
+    "brand": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySans",
+      "size": 20,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": -0.04,
+    "surfaceMode": "edge"
+  },
+  {
+    "id": "saffron",
+    "version": "pilot-styles-1",
+    "grammar": 26,
+    "palette": {
+      "paper": "#e6bb4b",
+      "ink": "#23384c",
+      "sound": "#23384c",
+      "soundInk": "#f6d77b",
+      "surface": "#e6bb4b",
+      "edge": "#23384c"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 26,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 18,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 23,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.005,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "blue-hour",
+    "version": "pilot-styles-1",
+    "grammar": 26,
+    "palette": {
+      "paper": "#465b70",
+      "ink": "#edf0df",
+      "sound": "#cbdcde",
+      "soundInk": "#293f52",
+      "surface": "#465b70",
+      "edge": "#edf0df"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 25,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 20,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 25,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.02,
+    "surfaceMode": "flat"
+  }
+]

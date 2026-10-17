@@ -1,0 +1,26 @@
+/* Loaded after the product tokens so the fixture page keeps its own contrast. */
+html,
+body {
+  margin: 0;
+  background: #1c1a17;
+  color: #f4f2ec;
+  font: 18px Georgia, serif;
+}
+
+button {
+  min-height: 48px;
+  margin: 0 8px 12px;
+  padding: 0 16px;
+  background: #f4f2ec;
+  color: #1c1a17;
+  border: 0;
+  border-radius: 999px;
+}
+
+.row { display: flex; gap: 12px; align-items: flex-start; padding: 12px; }
+canvas { width: min(32vw, 280px); height: auto; background: #111; }
+
+@media (max-width: 500px) {
+  .row { display: block; }
+  canvas { width: calc(100vw - 24px); }
+}

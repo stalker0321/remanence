@@ -10,6 +10,8 @@ import { languages, type Language, type MessageKey } from '../i18n/catalog'
 import { phaseKey, translate } from '../i18n/translate'
 import { writeLanguage, type PreferencePort } from '../preferences/language'
 import { href, parseRoute, type RouteName } from '../router/route'
+import { CollageStage } from '../collage/stage'
+import type { PresentationMemory } from '../collage/memory'
 import { browserCamera, type CameraPort, type CameraSession } from '../scan/camera'
 import { ScanError } from '../scan/errors'
 import { SessionStore } from '../session/session'
@@ -18,6 +20,7 @@ export function App({
   store,
   preferences,
   keys,
+  memory,
   transport = fetchTransport(apiOrigin()),
   google = browserGoogleIdentity(document),
   passkeys = browserPasskey(),
@@ -26,17 +29,20 @@ export function App({
   store: SessionStore
   preferences: PreferencePort
   keys: MemoryKeys
+  memory: PresentationMemory
   transport?: ApiTransport
   google?: GoogleIdentityPort
   passkeys?: PasskeyPort
   camera?: CameraPort
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
+  const held = useSyncExternalStore(memory.subscribe, memory.getSnapshot)
   const [route, setRoute] = useState<RouteName>(() => parseRoute(window.location.hash))
   const [notice, setNotice] = useState<MessageKey>('errorRegion')
   const t = (key: MessageKey) => translate(view.language, key)
 
   useEffect(() => {
+    document.documentElement.dataset.remanenceBoot = 'ready'
     const onHash = () => setRoute(parseRoute(window.location.hash))
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
@@ -69,6 +75,9 @@ export function App({
       {route === 'home' ? <Home t={t} /> : null}
       {route === 'scan' ? <Scan t={t} camera={camera} onNotice={setNotice} /> : null}
       {route === 'create' ? <Waiting t={t} title="homeMakeTitle" body="makeWaiting" /> : null}
+      {view.phase === 'presentation-admitted' && held ? (
+        <CollageStage held={held} t={t} onClose={() => store.lock()} />
+      ) : null}
       {route === 'account' ? (
         <Account
           store={store}
@@ -123,20 +132,30 @@ function Scan({
   const session = useRef<CameraSession | null>(null)
   const heldBytes = useRef<Uint8Array | null>(null)
   const busy = useRef(false)
+  const openAbort = useRef<AbortController | null>(null)
   const [live, setLive] = useState(false)
   const [held, setHeld] = useState(false)
 
   useEffect(() => () => {
+    openAbort.current?.abort()
     session.current?.stop()
     session.current = null
     heldBytes.current = null
+    host.current?.replaceChildren()
   }, [])
 
   async function open() {
     if (busy.current) return
     busy.current = true
+    openAbort.current?.abort()
+    const controller = new AbortController()
+    openAbort.current = controller
     try {
-      const next = await camera.open()
+      const next = await camera.open(controller.signal)
+      if (controller.signal.aborted) {
+        next.stop()
+        return
+      }
       session.current?.stop()
       session.current = next
       heldBytes.current = null
@@ -146,9 +165,10 @@ function Scan({
       setHeld(false)
       onNotice('errorRegion')
     } catch (error) {
+      if (controller.signal.aborted) return
       onNotice(error instanceof ScanError && error.code === 'CAMERA_DENIED' ? 'cameraDenied' : 'cameraUnavailable')
     } finally {
-      busy.current = false
+      if (openAbort.current === controller) busy.current = false
     }
   }
 

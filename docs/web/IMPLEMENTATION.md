@@ -24,7 +24,7 @@ Modules, as they land:
 | Key owner | `web/src/crypto` | In-memory unlock. Next. |
 | Transport | `web/src/transport` | Existing HTTP contracts. Next. |
 | Recognition | `web/src/recognition` | SIFT/RootSIFT parity, or an isolated blocker. |
-| Presentation | `web/src/presentation` | Frozen collage plan only. |
+| Presentation | `web/src/collage` | Frozen GENEX/BEXPR prepare and canvas paint. |
 
 ## Contracts already in BASE
 
@@ -149,6 +149,31 @@ recognition port fails closed with `RECOGNITION_UNAVAILABLE`. A grant exists
 only after an engine reports one capsule, and admitting it only moves the
 phase to postcard-matched. It does not decrypt or render. No browser SIFT
 library was downloaded.
+
+## C1 frozen render
+
+`web/src/collage` checks GENEX03 and GENEX04 against the Android test bytes in
+`web/test/fixtures/expression-goldens.json`, then prepares a scene only for
+contract V3 or V4. Codec goldens that use a fake style digest are rejected.
+An older magic throws `UNSUPPORTED` and nothing is drawn. Masks and
+`contentRect` are rejected. A missing or mismatched cover degrades to text.
+A verified V3 thumbnail replaces the music band. Print-plane shadow stays on
+the scene and is not stroked. The canvas is 360×640. CSS scales that bitmap.
+Export is `canvas.toBlob` of that bitmap.
+
+`openGrantedPostcard` runs only in `postcard-matched`, with the matching
+memory keys and a grant. It opens the envelope, checks `statementSha256`,
+decrypts content and JPEG blobs, and prepares the scene. It does not admit.
+`showGrantedPostcard` holds object URLs and then admits. Lock and sign-out
+revoke those URLs and zero the retained byte copies. Bytes inside the blob
+created by `createObjectURL` cannot be zeroed. Closing the sheet calls
+`lock()`, so the keys lock with the sheet. Closing the photo viewer does not.
+
+The product build has no fixture route. `web/harness` is a second Vite root
+and is absent from `vite build` of `index.html`. Its ciphertext and paintings
+are synthetic. Firefox 155 loaded the production bundle and completed an
+`@hpke/core` seal/open in the harness. The Node `crypto` fallback chunk was
+not requested because the browser has `globalThis.crypto`.
 
 ## Known gaps at the start of W0
 

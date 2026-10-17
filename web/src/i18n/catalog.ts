@@ -45,6 +45,11 @@ export const messageKeys = [
   'cameraHeld',
   'cameraDenied',
   'cameraUnavailable',
+  'closeSheet',
+  'photoViewer',
+  'previousPhoto',
+  'nextPhoto',
+  'exportComposition',
 ] as const
 
 export type MessageKey = (typeof messageKeys)[number]
@@ -93,6 +98,11 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     cameraHeld: 'the picture stays on this device. a memory is not open.',
     cameraDenied: 'the camera permission was dismissed.',
     cameraUnavailable: 'this browser cannot use the camera.',
+    closeSheet: 'close',
+    photoViewer: 'original photo',
+    previousPhoto: 'previous',
+    nextPhoto: 'next',
+    exportComposition: 'save the sheet',
   },
   ru: {
     homeOpenTitle: 'вам пришла открытка?',
@@ -137,6 +147,11 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     cameraHeld: 'снимок остаётся на этом устройстве. воспоминание не открыто.',
     cameraDenied: 'доступ к камере закрыт.',
     cameraUnavailable: 'этот браузер не может использовать камеру.',
+    closeSheet: 'закрыть',
+    photoViewer: 'исходное фото',
+    previousPhoto: 'предыдущее',
+    nextPhoto: 'следующее',
+    exportComposition: 'сохранить лист',
   },
   uk: {
     homeOpenTitle: 'вам надійшла листівка?',
@@ -181,5 +196,10 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     cameraHeld: 'знімок лишається на цьому пристрої. спогад не відкрито.',
     cameraDenied: 'доступ до камери закрито.',
     cameraUnavailable: 'цей браузер не може використати камеру.',
+    closeSheet: 'закрити',
+    photoViewer: 'вихідне фото',
+    previousPhoto: 'попереднє',
+    nextPhoto: 'наступне',
+    exportComposition: 'зберегти аркуш',
   },
 }

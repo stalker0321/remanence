@@ -154,6 +154,7 @@ describe('incoming ciphertext', () => {
       senderKeyBundleId: SENDER_BUNDLE,
       recipientKeyBundleId: RECIPIENT_BUNDLE,
       envelopeCiphertext: new Uint8Array([1]),
+      statementSha256: new Uint8Array(32),
       blobs: [
         {
           blobId: '00000000-0000-0000-0000-0000000000c3',

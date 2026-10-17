@@ -23,6 +23,7 @@ import { receivePostcard } from '../scan/receive'
 import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
 import { canvasTextMeasurer } from '../collage/measure'
 import { FrontHold } from '../create/front'
+import { NOTE_MAX_UTF8_BYTES, type NoteDraft } from '../create/note'
 import { RecipientDraft, lookupRecipient, type RecipientSnapshot } from '../create/recipient'
 import { SessionStore } from '../session/session'
 
@@ -37,6 +38,7 @@ export function App({
   passkeys = browserPasskey(),
   camera = browserCamera(document),
   recipient,
+  note,
 }: {
   store: SessionStore
   preferences: PreferencePort
@@ -48,6 +50,7 @@ export function App({
   passkeys?: PasskeyPort
   camera?: CameraPort
   recipient: RecipientDraft
+  note: NoteDraft
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const held = useSyncExternalStore(memory.subscribe, memory.getSnapshot)
@@ -101,7 +104,7 @@ export function App({
         />
       ) : null}
       {route === 'create' ? (
-        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} onNotice={setNotice} />
+        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} note={note} onNotice={setNotice} />
       ) : null}
       {view.phase === 'presentation-admitted' && held ? (
         <CollageStage held={held} t={t} onClose={() => store.lock()} />
@@ -303,6 +306,7 @@ function Create({
   transport,
   recipient,
   camera,
+  note,
   onNotice,
 }: {
   t: (key: MessageKey) => string
@@ -310,6 +314,7 @@ function Create({
   transport: ApiTransport
   recipient: RecipientDraft
   camera: CameraPort
+  note: NoteDraft
   onNotice: (notice: MessageKey) => void
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
@@ -496,6 +501,19 @@ function Create({
         <>
           <div ref={host} />
           {pictured ? <p>{t('frontHeld')}</p> : null}
+          <label className="handle-form">
+            {t('noteLabel')}
+            <textarea
+              value={note.text()}
+              rows={4}
+              onChange={(event) => {
+                note.edit(event.target.value)
+                setStamp((value) => value + 1)
+              }}
+            />
+          </label>
+          <p>{note.bytes()} / {NOTE_MAX_UTF8_BYTES}</p>
+          {note.fits() ? null : <p>{t('noteTooLong')}</p>}
           <div className="actions">
             {live ? (
               <>

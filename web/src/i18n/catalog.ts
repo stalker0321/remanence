@@ -81,6 +81,8 @@ export const messageKeys = [
   'recipientRejected',
   'selfRejected',
   'frontHeld',
+  'noteLabel',
+  'noteTooLong',
 ] as const
 
 export type MessageKey = (typeof messageKeys)[number]
@@ -165,6 +167,8 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     recipientRejected: 'that directory reply could not be used.',
     selfRejected: 'this account could not be used as the recipient.',
     frontHeld: 'this picture stays on this device for this person. it is not sent, and it is not a fingerprint.',
+    noteLabel: 'a note',
+    noteTooLong: 'this note is over 1000 UTF-8 bytes. it stays here to edit, and it is not part of the card.',
   },
   ru: {
     homeOpenTitle: 'вам пришла открытка?',
@@ -245,6 +249,8 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     recipientRejected: 'этот ответ каталога нельзя использовать.',
     selfRejected: 'этот аккаунт нельзя выбрать получателем.',
     frontHeld: 'этот снимок остаётся на устройстве для этого человека. он не отправлен, и это не отпечаток.',
+    noteLabel: 'заметка',
+    noteTooLong: 'в этой заметке больше 1000 байт UTF-8. текст остаётся для правки и в открытку не входит.',
   },
   uk: {
     homeOpenTitle: 'вам надійшла листівка?',
@@ -325,5 +331,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     recipientRejected: 'цю відповідь каталогу не можна використати.',
     selfRejected: 'цей акаунт не можна обрати одержувачем.',
     frontHeld: 'цей знімок лишається на пристрої для цієї людини. його не надіслано, і це не відбиток.',
+    noteLabel: 'нотатка',
+    noteTooLong: 'у цій нотатці більше 1000 байтів UTF-8. текст лишається для правки і до листівки не входить.',
   },
 }

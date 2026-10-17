@@ -102,7 +102,8 @@ button:focus-visible, a:focus-visible {
   gap: 0.35rem;
 }
 
-.handle-form input {
+.handle-form input,
+.handle-form textarea {
   font: inherit;
   color: inherit;
   min-height: var(--touch);
@@ -112,7 +113,13 @@ button:focus-visible, a:focus-visible {
   background: var(--paper);
 }
 
-.handle-form input:focus-visible {
+.handle-form textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.handle-form input:focus-visible,
+.handle-form textarea:focus-visible {
   outline: 2px solid var(--lilac-deep);
   outline-offset: 3px;
 }

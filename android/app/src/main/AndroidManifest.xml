@@ -38,17 +38,22 @@
                 android:name="autoStoreLocales"
                 android:value="true" />
         </service>
-        <!-- T204: MainActivity handles locale|layoutDirection itself (the
-             official Compose pattern) while KEEPING AppCompatDelegate storage:
-             setApplicationLocales applies without destroying the Activity or
-             its window, so language switches recompose in place with no blank
-             gap. No other config is intercepted: rotation and the rest still
-             recreate normally. -->
+        <!-- T204 + first-switch evidence: MainActivity handles
+             locale|layoutDirection|screenLayout itself (the official
+             Compose pattern) while KEEPING AppCompatDelegate storage.
+             The observed cold-process first System→explicit relaunch
+             mask is exactly 0x2104 = LOCALE|SCREEN_LAYOUT|
+             LAYOUT_DIRECTION, so screenLayout is handled too:
+             setApplicationLocales applies without destroying the
+             Activity or its window, and language switches recompose
+             in place with no blank gap. No other config is
+             intercepted: rotation and the rest still recreate
+             normally. -->
         <activity
             android:name="dev.hryshyn.remanence.MainActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize"
-            android:configChanges="locale|layoutDirection">
+            android:configChanges="locale|layoutDirection|screenLayout">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

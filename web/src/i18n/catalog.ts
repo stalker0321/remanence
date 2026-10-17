@@ -98,6 +98,8 @@ export const messageKeys = [
   'musicUnavailable',
   'musicNone',
   'musicNotSent',
+  'settingsTitle',
+  'settingsBody',
 ] as const
 
 export type MessageKey = (typeof messageKeys)[number]
@@ -199,6 +201,8 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     musicUnavailable: 'music search is not available right now.',
     musicNone: 'nothing matched that search.',
     musicNotSent: 'the chosen song stays on this device for this visit. nothing is sent, and no catalog is downloaded.',
+    settingsTitle: 'settings',
+    settingsBody: 'language stays on this page. opening settings does not sign in, unlock keys, or open a postcard.',
   },
   ru: {
     homeOpenTitle: 'вам пришла открытка?',
@@ -296,6 +300,8 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     musicUnavailable: 'поиск музыки сейчас недоступен.',
     musicNone: 'ничего не нашлось.',
     musicNotSent: 'выбранная песня остаётся на этом устройстве на время визита. ничего не отправлено, и каталог не скачивается.',
+    settingsTitle: 'настройки',
+    settingsBody: 'язык остаётся на этой странице. открытие настроек не выполняет вход, не открывает ключи и не открывает открытку.',
   },
   uk: {
     homeOpenTitle: 'вам надійшла листівка?',
@@ -393,5 +399,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     musicUnavailable: 'пошук музики зараз недоступний.',
     musicNone: 'нічого не знайшлося.',
     musicNotSent: 'вибрана пісня лишається на цьому пристрої на час візиту. нічого не надіслано, і каталог не завантажується.',
+    settingsTitle: 'налаштування',
+    settingsBody: 'мова лишається на цій сторінці. відкриття налаштувань не входить в акаунт, не відкриває ключі і не відкриває листівку.',
   },
 }

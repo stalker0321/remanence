@@ -116,6 +116,7 @@ export function App({
       {view.phase === 'presentation-admitted' && held ? (
         <CollageStage held={held} t={t} onClose={() => store.lock()} />
       ) : null}
+      {route === 'settings' ? <Settings t={t} /> : null}
       {route === 'account' ? (
         <Account
           store={store}
@@ -153,8 +154,22 @@ function Home({ t }: { t: (key: MessageKey) => string }) {
       </section>
       <div className="actions">
         <a href={href('account')}>{t('account')}</a>
+        <a href={href('settings')}>{t('settingsTitle')}</a>
       </div>
     </>
+  )
+}
+
+function Settings({ t }: { t: (key: MessageKey) => string }) {
+  return (
+    <section className="card">
+      <h1>{t('settingsTitle')}</h1>
+      <p>{t('settingsBody')}</p>
+      <div className="actions">
+        <a href={href('account')}>{t('account')}</a>
+        <a href={href('home')}>{t('back')}</a>
+      </div>
+    </section>
   )
 }
 

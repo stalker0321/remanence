@@ -19,6 +19,12 @@ function listen() {
         res.end()
         return
       }
+      const status = /^\/v1\/status\/(\d{3})$/.exec(req.url ?? '')
+      if (status) {
+        res.writeHead(Number(status[1]), { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ code: 'STATUS' }))
+        return
+      }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
       res.end(JSON.stringify({ ok: true }))
     })
@@ -125,5 +131,30 @@ describe('api transport', () => {
     } finally {
       await server.close()
     }
+  })
+
+  it('returns problem statuses and fails a closed port without echoing the token', async () => {
+    const server = await listen()
+    try {
+      const transport = fetchTransport(server.origin)
+      for (const status of [401, 403, 409, 426, 429]) {
+        const result = await transport.request({ path: `/v1/status/${status}`, method: 'GET', token: 'access-token-value' })
+        expect(result).toEqual({ status, body: { code: 'STATUS' } })
+        expect(JSON.stringify(result)).not.toContain('access-token')
+      }
+      expect(server.seen().url).toBe('/v1/status/429')
+      expect(server.seen().headers.authorization).toBe('Bearer access-token-value')
+      expect(server.seen().url).not.toContain('access-token')
+    } finally {
+      await server.close()
+    }
+    const closed = await listen()
+    const origin = closed.origin
+    await closed.close()
+    await expect(fetchTransport(origin).request({
+      path: '/v1/recovery/status',
+      method: 'GET',
+      token: 'access-token-value',
+    })).rejects.toMatchObject({ code: 'TRANSPORT_FAILED' })
   })
 })

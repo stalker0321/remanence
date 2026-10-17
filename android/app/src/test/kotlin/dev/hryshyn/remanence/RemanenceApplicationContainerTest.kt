@@ -627,10 +627,29 @@ class RemanenceApplicationContainerTest {
             )
             assertTrue(sentinel.readBytes().contentEquals(sentinelBytes))
 
+            // Authenticated B vs request A: B owns resolvable keys for its
+            // own bundle AND holds a live published B session, so admission
+            // reaches the owner comparison instead of exiting with no
+            // authenticated owner. (The mismatch step above keeps the
+            // missing/mismatched-key NO_AUTHENTICATED_OWNER case
+            // meaningful on its own.)
+            val preparedB = appContainer.registrationIdentityAdapter.prepareProvisional("container-acceptance-flow-b")
+            assertTrue(
+                appContainer.ownerIdentityStores.adoptStaged(preparedB.keyBundleId, ownerB.toRestString()),
+            )
             appContainer.currentAccountStore.record(
                 ownerB.toRestString(),
                 "bob",
-                prepared.keyBundleId,
+                preparedB.keyBundleId,
+            )
+            assertTrue(
+                appContainer.sessionRefreshCoordinator.publishBoundSession(
+                    lease = appContainer.sessionRefreshCoordinator.acquireAccountLease(),
+                    expectedOwner = ownerB,
+                    accessToken = "access-b",
+                    refreshToken = "refresh-b",
+                    currentAccountOwner = ownerB,
+                ),
             )
             val switched = appContainer.incomingControlIndexAcceptanceCoordinator.accept(
                 IncomingControlIndexAcceptanceRequest(ownerA, capsule, sentinel),

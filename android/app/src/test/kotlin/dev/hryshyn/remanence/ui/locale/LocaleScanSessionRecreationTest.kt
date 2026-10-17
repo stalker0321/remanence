@@ -2,11 +2,14 @@ package dev.hryshyn.remanence.ui.locale
 
 import android.app.Activity
 import android.app.Application
+import android.os.Build
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.fetchSemanticsNodes
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -33,6 +36,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
+import kotlin.coroutines.cancellation.CancellationException
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -44,6 +48,7 @@ import org.junit.Test
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLocaleManager
 
@@ -189,9 +194,59 @@ class LocaleScanSessionRecreationTest {
     }
 
     private fun selectRussian() {
+        awaitPublicHome()
         composeRule.onNodeWithTag("access_language").performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("language_option_russian").performClick()
+        composeRule.waitForIdle()
+    }
+
+    /**
+     * The production bootstrap resolves asynchronously on real
+     * dispatchers: the first idle frames still show the resolving
+     * surface (LanguageSwitchRow, no popup trigger). Wait for the
+     * ACTUAL signed-out public home — popup trigger plus scan action
+     * present — bounded, so a slow first resolve is never mistaken for
+     * a missing trigger. A timeout names the unsettled surface
+     * honestly. No sleeps, no forced auth state.
+     */
+    private fun awaitPublicHome() {
+        try {
+            composeRule.waitUntil(10_000) {
+                composeRule.onAllNodesWithTag("access_language").fetchSemanticsNodes().isNotEmpty() &&
+                    composeRule.onAllNodesWithTag("scan_action").fetchSemanticsNodes().isNotEmpty()
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            throw AssertionError("signed-out public home never settled")
+        }
+        composeRule.waitForIdle()
+    }
+
+    /**
+     * API 33+ framework-delivery emulation (test-only, never production).
+     * AppLocaleController.select persists via AppCompat, which on 33+
+     * forwards to framework LocaleManager. Pinned Robolectric 4.16.1
+     * `ShadowLocaleManager.setApplicationLocales` is a bare Map.put
+     * (bytecode-verified: no resource application, no dispatch), so the
+     * configuration change the framework performs on device never
+     * happens here. This mirrors exactly that missing half AFTER the
+     * real production selection path ran: apply RU process-wide through
+     * the framework ResourcesManager seam, then dispatch the
+     * configuration change the manifest-handled activity would receive
+     * — no restart, no context wrappers, no production edits. What this
+     * proves: the activity + Compose react to the delivered
+     * configuration with persisted RU and zero recreations. What it
+     * does NOT prove: the framework delivery itself (unshadowed by
+     * definition) or physical device behavior.
+     */
+    private fun emulateFrameworkLocaleDelivery33Plus() {
+        if (Build.VERSION.SDK_INT < 33) return
+        composeRule.runOnIdle {
+            RuntimeEnvironment.setQualifiers("+ru")
+            composeRule.activity.onConfigurationChanged(composeRule.activity.resources.configuration)
+        }
         composeRule.waitForIdle()
     }
 
@@ -245,6 +300,12 @@ class LocaleScanSessionRecreationTest {
         assertTrue(created.isEmpty())
         assertEquals(7L, vm.initializedEpoch.value)
         assertEquals(ScanTerminalState.Idle, vm.terminal.value)
+        // 33+: resources only follow the framework delivery the shadow
+        // omits — emulate it, then the same surface renders Russian with
+        // still zero recreations.
+        emulateFrameworkLocaleDelivery33Plus()
+        assertTrue(destroyed.isEmpty())
+        assertTrue(created.isEmpty())
         composeRule.onNodeWithTag("access_language").assertTextEquals("язык")
     }
 }

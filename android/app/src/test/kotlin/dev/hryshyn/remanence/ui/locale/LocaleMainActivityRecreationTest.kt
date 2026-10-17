@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.locale
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.ui.test.assertIsDisplayed
@@ -42,6 +43,7 @@ import org.junit.Test
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLocaleManager
 
@@ -177,6 +179,32 @@ class LocaleMainActivityRecreationTest {
     private fun selectRussian() {
         openLanguageMenu()
         composeRule.onNodeWithTag("language_option_russian").performClick()
+        composeRule.waitForIdle()
+    }
+
+    /**
+     * API 33+ framework-delivery emulation (test-only, never production).
+     * AppLocaleController.select persists via AppCompat, which on 33+
+     * forwards to framework LocaleManager. Pinned Robolectric 4.16.1
+     * `ShadowLocaleManager.setApplicationLocales` is a bare Map.put
+     * (bytecode-verified: no resource application, no dispatch), so the
+     * configuration change the framework performs on device never
+     * happens here. This mirrors exactly that missing half AFTER the
+     * real production selection path ran: apply RU process-wide through
+     * the framework ResourcesManager seam, then dispatch the
+     * configuration change the manifest-handled activity would receive
+     * — no restart, no context wrappers, no production edits. What this
+     * proves: the activity + Compose react to the delivered
+     * configuration with persisted RU and zero recreations. What it
+     * does NOT prove: the framework delivery itself (unshadowed by
+     * definition) or physical device behavior.
+     */
+    private fun emulateFrameworkLocaleDelivery33Plus() {
+        if (Build.VERSION.SDK_INT < 33) return
+        composeRule.runOnIdle {
+            RuntimeEnvironment.setQualifiers("+ru")
+            composeRule.activity.onConfigurationChanged(composeRule.activity.resources.configuration)
+        }
         composeRule.waitForIdle()
     }
 
@@ -419,6 +447,12 @@ class LocaleMainActivityRecreationTest {
         selectRussian()
 
         assertEquals(AppLocale.RUSSIAN, AppLocaleRepository().load())
+        assertTrue(destroyed.isEmpty())
+        assertTrue(created.isEmpty())
+        // 33+: resources only follow the framework delivery the shadow
+        // omits — emulate it, then the same surface renders Russian with
+        // still zero recreations.
+        emulateFrameworkLocaleDelivery33Plus()
         assertTrue(destroyed.isEmpty())
         assertTrue(created.isEmpty())
         composeRule.onNodeWithTag("access_language").assertTextEquals("язык")

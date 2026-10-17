@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { MemoryKeys } from './auth/memoryKeys'
 import { readLanguage, type PreferencePort } from './preferences/language'
 import { SessionStore } from './session/session'
 import { App } from './ui/App'
@@ -13,12 +14,15 @@ const preferences: PreferencePort = {
 
 const language = readLanguage(preferences)
 document.documentElement.lang = language
+const store = new SessionStore(language)
+const keys = new MemoryKeys()
+keys.attach(store)
 
 const root = document.getElementById('root')
 if (!root) throw new Error('ROOT_MISSING')
 
 createRoot(root).render(
   <StrictMode>
-    <App store={new SessionStore(language)} preferences={preferences} />
+    <App store={store} preferences={preferences} keys={keys} />
   </StrictMode>,
 )

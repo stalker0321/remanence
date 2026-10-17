@@ -112,6 +112,28 @@ context bytes are the interop gate. There is no committed Android ciphertext
 for a capsule artifact, and the Kotlin recovery fixture is produced only into
 `build/`. Those two are covered by a JS producer and are labeled as such.
 
+## W2 account entry
+
+Google continues with one `POST /v1/auth/google/options` and one
+`POST /v1/auth/google/verify`. The ID token nonce is the server nonce. The
+client does not read the token's email and does not call `/register`.
+`SIGNED_IN` stores the server account and leaves the phase at authenticated.
+`NEEDS_HANDLE`, `EXISTING_ACCOUNT_REQUIRES_LINK`, and `CLIENT_UPGRADE_REQUIRED`
+leave the session signed out.
+
+The browser loads `https://accounts.google.com/gsi/client` only after the
+person chooses continue. That script is the Google Identity Services boundary.
+A real JavaScript origin for this page was not configured, so the button is
+not a completed Google sign-in.
+
+Signed-in restore reads `/v1/recovery/status` and, only for `STORED`, calls
+`/v1/recovery/setup/options`, a passkey get, `/setup/verify`, and
+`GET /v1/recovery/record`. It does not call anonymous `/login` or
+`/register`. The PRF stays in the unlock call. `NOT_STARTED` and `PENDING`
+do not create a passkey. `PENDING` is the saved-credential continuation and
+does not unlock. Cancel, missing PRF, and a browser without WebAuthn are
+different results. Keys live in `MemoryKeys` and drop on lock or sign-out.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

@@ -22,6 +22,7 @@ import { explainScan } from '../scan/notice'
 import { receivePostcard } from '../scan/receive'
 import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
 import { canvasTextMeasurer } from '../collage/measure'
+import { FrontHold } from '../create/front'
 import { RecipientDraft, lookupRecipient, type RecipientSnapshot } from '../create/recipient'
 import { SessionStore } from '../session/session'
 
@@ -100,7 +101,7 @@ export function App({
         />
       ) : null}
       {route === 'create' ? (
-        <Create t={t} store={store} transport={transport} recipient={recipient} onNotice={setNotice} />
+        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} onNotice={setNotice} />
       ) : null}
       {view.phase === 'presentation-admitted' && held ? (
         <CollageStage held={held} t={t} onClose={() => store.lock()} />
@@ -301,25 +302,100 @@ function Create({
   store,
   transport,
   recipient,
+  camera,
   onNotice,
 }: {
   t: (key: MessageKey) => string
   store: SessionStore
   transport: ApiTransport
   recipient: RecipientDraft
+  camera: CameraPort
   onNotice: (notice: MessageKey) => void
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [handle, setHandle] = useState('')
   const [busy, setBusy] = useState(false)
   const [stamp, setStamp] = useState(0)
+  const [live, setLive] = useState(false)
+  const [pictured, setPictured] = useState(false)
   const abort = useRef<AbortController | null>(null)
+  const front = useRef(new FrontHold())
+  const host = useRef<HTMLDivElement>(null)
   const open = view.phase !== 'signed-out' && view.phase !== 'authenticated' && view.accountId !== null
   const pending = open ? recipient.pending() : null
   const confirmed = open ? recipient.confirmed() : null
+  const bound = confirmed ? `${confirmed.userId}:${confirmed.keyBundleId}:${confirmed.directoryVersion}` : ''
   void stamp
 
-  useEffect(() => () => abort.current?.abort(), [])
+  useEffect(() => () => {
+    abort.current?.abort()
+    front.current.close()
+  }, [])
+
+  useEffect(() => {
+    if (bound) return
+    front.current.close()
+    host.current?.replaceChildren()
+    setLive(false)
+    setPictured(false)
+  }, [bound])
+
+  function closeCamera() {
+    abort.current?.abort()
+    front.current.close()
+    host.current?.replaceChildren()
+    setLive(false)
+    setPictured(false)
+  }
+
+  function changeRecipient() {
+    closeCamera()
+    recipient.restart()
+    setStamp((value) => value + 1)
+    onNotice('errorRegion')
+  }
+
+  async function openCamera() {
+    if (busy || !confirmed) return
+    abort.current?.abort()
+    const controller = new AbortController()
+    abort.current = controller
+    setBusy(true)
+    try {
+      const session = await front.current.open(camera, controller.signal)
+      if (controller.signal.aborted) return
+      session.preview.className = 'preview'
+      host.current?.replaceChildren(session.preview)
+      setLive(true)
+      setPictured(false)
+      onNotice('errorRegion')
+    } catch (error) {
+      if (controller.signal.aborted || (error instanceof ScanError && error.code === 'CANCELLED')) return
+      onNotice(error instanceof ScanError && error.code === 'CAMERA_DENIED' ? 'cameraDenied' : 'cameraUnavailable')
+    } finally {
+      if (abort.current === controller) setBusy(false)
+    }
+  }
+
+  async function takeFront() {
+    const snapshot = recipient.confirmed()
+    if (!snapshot || busy) return
+    setBusy(true)
+    try {
+      await front.current.take(snapshot)
+      if (recipient.confirmed() !== snapshot) {
+        front.current.close()
+        return
+      }
+      setPictured(true)
+      onNotice('frontHeld')
+    } catch (error) {
+      if (error instanceof ScanError && error.code === 'CANCELLED') return
+      onNotice('cameraUnavailable')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function lookup(mode: 'named' | 'self') {
     if (busy || !open || view.accountId === null) return
@@ -417,19 +493,22 @@ function Create({
         </div>
       ) : null}
       {confirmed ? (
-        <div className="actions">
-          <button
-            type="button"
-            onClick={() => {
-              recipient.restart()
-              setStamp((value) => value + 1)
-              onNotice('errorRegion')
-            }}
-          >
-            {t('recipientChange')}
-          </button>
-          <a href={href('home')}>{t('back')}</a>
-        </div>
+        <>
+          <div ref={host} />
+          {pictured ? <p>{t('frontHeld')}</p> : null}
+          <div className="actions">
+            {live ? (
+              <>
+                <button type="button" className="primary" disabled={busy} onClick={() => { void takeFront() }}>{t('takePicture')}</button>
+                <button type="button" disabled={busy} onClick={closeCamera}>{t('closeCamera')}</button>
+              </>
+            ) : (
+              <button type="button" className="primary" disabled={busy} onClick={() => { void openCamera() }}>{t('useCamera')}</button>
+            )}
+            <button type="button" disabled={busy} onClick={changeRecipient}>{t('recipientChange')}</button>
+            <a href={href('home')}>{t('back')}</a>
+          </div>
+        </>
       ) : (
         <div className="actions">
           <a href={href('home')}>{t('back')}</a>

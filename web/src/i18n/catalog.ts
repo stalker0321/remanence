@@ -80,6 +80,7 @@ export const messageKeys = [
   'recipientHeld',
   'recipientRejected',
   'selfRejected',
+  'frontHeld',
 ] as const
 
 export type MessageKey = (typeof messageKeys)[number]
@@ -163,6 +164,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     recipientHeld: 'this person is set for this visit. nothing is sent, and the picture side is not captured yet.',
     recipientRejected: 'that directory reply could not be used.',
     selfRejected: 'this account could not be used as the recipient.',
+    frontHeld: 'this picture stays on this device for this person. it is not sent, and it is not a fingerprint.',
   },
   ru: {
     homeOpenTitle: 'вам пришла открытка?',
@@ -242,6 +244,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     recipientHeld: 'этот человек выбран на этот визит. ничего не отправлено, и лицевая сторона ещё не снята.',
     recipientRejected: 'этот ответ каталога нельзя использовать.',
     selfRejected: 'этот аккаунт нельзя выбрать получателем.',
+    frontHeld: 'этот снимок остаётся на устройстве для этого человека. он не отправлен, и это не отпечаток.',
   },
   uk: {
     homeOpenTitle: 'вам надійшла листівка?',
@@ -321,5 +324,6 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     recipientHeld: 'цю людину вибрано на цей візит. нічого не надіслано, і лицьовий бік ще не знято.',
     recipientRejected: 'цю відповідь каталогу не можна використати.',
     selfRejected: 'цей акаунт не можна обрати одержувачем.',
+    frontHeld: 'цей знімок лишається на пристрої для цієї людини. його не надіслано, і це не відбиток.',
   },
 }

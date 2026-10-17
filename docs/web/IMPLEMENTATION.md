@@ -240,6 +240,23 @@ Firefox 155 generated one of those identities in the harness, checked the
 bundle id against the encryption keyset, and then wiped the seed copies.
 WebCrypto key objects themselves cannot be zeroed.
 
+## C4 enrollment
+
+`enrollHeldIdentity` runs the existing ceremony on the identity already held
+after registration. `NOT_STARTED` creates one discoverable credential, verifies
+it, then setup, PRF, and one `POST /v1/recovery/record`. `PENDING` continues
+that credential and does not create another. `STORED` skips create and the
+POST, reads the record, and returns restored. A draft whose bundle does not
+match the signed-in account throws `IDENTITY_ABSENT` before any request.
+
+The package is RPK1, AES-GCM, and WebCrypto HKDF, then `openIdentity` checks
+both the PRF and the recovery code before the record is returned. The code is
+32 random bytes, shown once in the account view, and cleared on sign-out. It
+is not written to localStorage or the clipboard. If the POST succeeds and the
+readback throws, the code is wiped and is not shown. The next open uses the
+stored record through PRF. This record is a JS producer. It is not an Android
+`AccountRecoveryCrypto` export. The browser smoke did not click Save passkey.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

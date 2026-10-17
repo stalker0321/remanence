@@ -22,7 +22,7 @@ class ImmediateRequestModeTest {
     fun ordinaryGetUsesDiscoveryByDefault() {
         val request = getCredentialRequest("{}", immediate = false)
 
-        assertFalse(request.preferImmediatelyAvailableCredentials())
+        assertFalse(request.preferImmediatelyAvailableCredentials)
         assertEquals(1, request.credentialOptions.size)
     }
 
@@ -30,7 +30,7 @@ class ImmediateRequestModeTest {
     fun freshVerificationGetRequestsImmediatelyAvailableCredentials() {
         val request = getCredentialRequest("{}", immediate = true)
 
-        assertTrue(request.preferImmediatelyAvailableCredentials())
+        assertTrue(request.preferImmediatelyAvailableCredentials)
         assertEquals(1, request.credentialOptions.size)
     }
 }

@@ -219,8 +219,7 @@ class SessionBootstrapTest {
             binder = { owner, bundle ->
                 bindings += owner to bundle
                 stores.claimLegacyIfMatching(owner, bundle)
-                stores.resolve(owner, bundle)
-                    is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
+                stores.resolve(owner, bundle) is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
             },
         )
         val active = online.bootstrap.bootstrap() as SessionState.Active
@@ -279,8 +278,7 @@ class SessionBootstrapTest {
             refresherOutcome = SessionRefreshOutcome.Unreachable,
             binder = { owner, bundle ->
                 stores.claimLegacyIfMatching(owner, bundle)
-                stores.resolve(owner, bundle)
-                    is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
+                stores.resolve(owner, bundle) is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
             },
         )
         val state = offline.bootstrap.bootstrap() as SessionState.OfflineActive
@@ -332,8 +330,7 @@ class SessionBootstrapTest {
             summary = PersistedAccountSummary(ownerB, "other", derived),
             binder = { owner, bundle ->
                 stores.claimLegacyIfMatching(owner, bundle)
-                stores.resolve(owner, bundle)
-                    is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
+                stores.resolve(owner, bundle) is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
             },
         )
         assertEquals(SessionState.RecoveryRequired, conflicted.bootstrap.bootstrap())

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { MemoryKeys } from './auth/memoryKeys'
 import { PresentationMemory } from './collage/memory'
 import { NoteDraft } from './create/note'
+import { PhotoDraft } from './create/photos'
 import { RecipientDraft } from './create/recipient'
 import { readLanguage, type PreferencePort } from './preferences/language'
 import { SessionStore } from './session/session'
@@ -26,12 +27,14 @@ const recipient = new RecipientDraft()
 recipient.attach(store)
 const note = new NoteDraft()
 note.attach(store)
+const photos = new PhotoDraft()
+photos.attach(store)
 
 const root = document.getElementById('root')
 if (!root) throw new Error('ROOT_MISSING')
 
 createRoot(root).render(
   <StrictMode>
-    <App store={store} preferences={preferences} keys={keys} memory={memory} recipient={recipient} note={note} />
+    <App store={store} preferences={preferences} keys={keys} memory={memory} recipient={recipient} note={note} photos={photos} />
   </StrictMode>,
 )

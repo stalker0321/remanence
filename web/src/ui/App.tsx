@@ -24,6 +24,8 @@ import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
 import { canvasTextMeasurer } from '../collage/measure'
 import { FrontHold } from '../create/front'
 import { NOTE_MAX_UTF8_BYTES, type NoteDraft } from '../create/note'
+import { PHOTO_COUNT_MAX, type PhotoDraft } from '../create/photos'
+import { arrayBuffer } from '../protocol/bytes'
 import { RecipientDraft, lookupRecipient, type RecipientSnapshot } from '../create/recipient'
 import { SessionStore } from '../session/session'
 
@@ -39,6 +41,7 @@ export function App({
   camera = browserCamera(document),
   recipient,
   note,
+  photos,
 }: {
   store: SessionStore
   preferences: PreferencePort
@@ -51,6 +54,7 @@ export function App({
   camera?: CameraPort
   recipient: RecipientDraft
   note: NoteDraft
+  photos: PhotoDraft
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const held = useSyncExternalStore(memory.subscribe, memory.getSnapshot)
@@ -104,7 +108,7 @@ export function App({
         />
       ) : null}
       {route === 'create' ? (
-        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} note={note} onNotice={setNotice} />
+        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} note={note} photos={photos} onNotice={setNotice} />
       ) : null}
       {view.phase === 'presentation-admitted' && held ? (
         <CollageStage held={held} t={t} onClose={() => store.lock()} />
@@ -307,6 +311,7 @@ function Create({
   recipient,
   camera,
   note,
+  photos,
   onNotice,
 }: {
   t: (key: MessageKey) => string
@@ -315,6 +320,7 @@ function Create({
   recipient: RecipientDraft
   camera: CameraPort
   note: NoteDraft
+  photos: PhotoDraft
   onNotice: (notice: MessageKey) => void
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
@@ -326,15 +332,35 @@ function Create({
   const abort = useRef<AbortController | null>(null)
   const front = useRef(new FrontHold())
   const host = useRef<HTMLDivElement>(null)
+  const urls = useRef(new Map<string, string>())
   const open = view.phase !== 'signed-out' && view.phase !== 'authenticated' && view.accountId !== null
   const pending = open ? recipient.pending() : null
   const confirmed = open ? recipient.confirmed() : null
   const bound = confirmed ? `${confirmed.userId}:${confirmed.keyBundleId}:${confirmed.directoryVersion}` : ''
   void stamp
 
+  function forgetPhotos() {
+    for (const url of urls.current.values()) URL.revokeObjectURL(url)
+    urls.current.clear()
+  }
+
+  function rememberPhotos() {
+    const live = new Set(photos.photos().map((photo) => photo.id))
+    for (const [id, url] of urls.current) {
+      if (live.has(id)) continue
+      URL.revokeObjectURL(url)
+      urls.current.delete(id)
+    }
+    for (const photo of photos.photos()) {
+      if (urls.current.has(photo.id)) continue
+      urls.current.set(photo.id, URL.createObjectURL(new Blob([arrayBuffer(photo.bytes)], { type: 'image/jpeg' })))
+    }
+  }
+
   useEffect(() => () => {
     abort.current?.abort()
     front.current.close()
+    forgetPhotos()
   }, [])
 
   useEffect(() => {
@@ -344,6 +370,16 @@ function Create({
     setLive(false)
     setPictured(false)
   }, [bound])
+
+  useEffect(() => {
+    if (!open) {
+      forgetPhotos()
+      return
+    }
+    const before = urls.current.size
+    rememberPhotos()
+    if (urls.current.size !== before) setStamp((value) => value + 1)
+  }, [open])
 
   function closeCamera() {
     abort.current?.abort()
@@ -400,6 +436,20 @@ function Create({
     } finally {
       setBusy(false)
     }
+  }
+
+  async function addPhotos(list: FileList | null) {
+    if (!list || !confirmed) return
+    let refused = false
+    for (const file of list) {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      const reason = photos.add(bytes)
+      bytes.fill(0)
+      if (reason) refused = true
+    }
+    rememberPhotos()
+    setStamp((value) => value + 1)
+    onNotice(refused ? 'photoRejected' : 'errorRegion')
   }
 
   async function lookup(mode: 'named' | 'self') {
@@ -514,6 +564,36 @@ function Create({
           </label>
           <p>{note.bytes()} / {NOTE_MAX_UTF8_BYTES}</p>
           {note.fits() ? null : <p>{t('noteTooLong')}</p>}
+          <div className="photo-draft">
+            <label>
+              {t('addPhotos')}
+              <input
+                type="file"
+                accept="image/jpeg,.jpg,.jpeg"
+                multiple
+                onChange={(event) => {
+                  const list = event.target.files
+                  event.target.value = ''
+                  void addPhotos(list)
+                }}
+              />
+            </label>
+            <ul>
+              {photos.photos().map((photo, index) => (
+                <li key={photo.id}>
+                  <img src={urls.current.get(photo.id)} alt="" />
+                  <div className="actions">
+                    <button type="button" disabled={index === 0} onClick={() => { photos.move(photo.id, -1); setStamp((value) => value + 1) }}>{t('photoEarlier')}</button>
+                    <button type="button" disabled={index === photos.photos().length - 1} onClick={() => { photos.move(photo.id, 1); setStamp((value) => value + 1) }}>{t('photoLater')}</button>
+                    <button type="button" onClick={() => { photos.remove(photo.id); rememberPhotos(); setStamp((value) => value + 1) }}>{t('removePhoto')}</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <p>{photos.photos().length} / {PHOTO_COUNT_MAX}</p>
+            <p>{t('photoCount')}</p>
+            <p>{t('photoNotNormalized')}</p>
+          </div>
           <div className="actions">
             {live ? (
               <>

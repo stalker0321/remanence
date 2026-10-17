@@ -133,6 +133,32 @@ button:focus-visible, a:focus-visible {
 
 .primary { background: var(--lilac); }
 
+.photo-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.photo-draft ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0;
+}
+
+.photo-draft li { list-style: none; }
+
+.photo-draft img {
+  display: block;
+  width: 100%;
+  max-height: 12rem;
+  object-fit: contain;
+  border-radius: 0.8rem;
+  background: var(--ink);
+}
+
 video.preview {
   display: block;
   width: 100%;

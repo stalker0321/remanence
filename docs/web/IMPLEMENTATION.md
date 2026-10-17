@@ -318,6 +318,16 @@ keys, or open a postcard. Firefox, still signed out, opened `#/create`,
 query was not rendered. localStorage gained no key other than the language
 preference. A route does not change the session phase.
 
+## Clean install
+
+`npm ci --ignore-scripts` in a new VM directory installed 48 packages from
+`web/package-lock.json` and reported no vulnerabilities. Typecheck, vitest,
+and the production build need the repo root beside that directory:
+`server/src/remanence/recovery/web/crypto.mjs`, `crypto.d.mts`, and
+`protocol/fixtures`. A copy of `web/` alone cannot resolve those imports.
+The resulting bundle names matched the settings build. The VM's existing
+`node_modules` was not replaced.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

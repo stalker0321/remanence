@@ -25,6 +25,7 @@ Next exact action: run `npm ci` in a clean VM temp directory and record the resu
 - C4 photos `d7178d9e51c01c0d86fea7bf6903154bc74887e1`: the draft holds 3 to 5 JPEGs under `normalized_photo_max_plaintext_bytes`. A sixth file, a non-JPEG, and an oversized file are refused. Remove and reorder stay local. Lock zeroes the bytes. The long edge is not measured.
 - C4 music `ffcf64edd5879e8b9c2804599f6f17c22d553868`: `GET /music/v1/search` with `q`, `limit=10`, and `offset=0`. A blank query and a query over 100 code points do not call the network. A bad page, a 401, and a 422 are refused. A 429 and a 503 stay unavailable and are not an empty page. One selected hit survives a late page. Lock and sign-out drop it. Cover bytes are not fetched. The recording id is kept on the hit and is not shown.
 - Settings `e2c65392e32e7f50c0a12aae5075ab683c16c55d`: `#/settings` is a page. A locked `#/create`, `#/scan`, and `#/settings` stay signed out. An unknown hash returns home. A `?access=secret` hash is not rendered and is not stored. The route does not admit a postcard.
+- Clean install on the VM: `npm ci --ignore-scripts` in `/home/msi-workstation/t213-a05/web` added 48 packages and reported 0 vulnerabilities. `node_modules` is 112 MB. With the sibling crypto module, its declaration, and `protocol/fixtures`, typecheck exited 0, vitest reported 24 files and 74 tests, and the production build was `index-7ZKAT5tJ.js` (405378 bytes) and `index-CovRG_mx.css` (4601 bytes). The existing VM install was not replaced. `web/` by itself cannot see those siblings.
 - C1 `a86fab4d4647b8d24703842b98bb10c0c36a9808`: GENEX03/GENEX04 and BEXPR02 bytes match the Android goldens. `prepare` rejects those codec goldens and paints a bundled press sheet. Unsupported expression magic is refused and not drawn. A verified v3 cover replaces the music band. A missing cover stays text. Overflow rejects the whole sheet. The product shows a sheet only after `presentation-admitted`. The fixture page is a separate Vite root.
 - Node 22.22.1 on `msi-workstation` at `/home/msi-workstation/remanence-web-t213-20261017/tools/node`.
 
@@ -53,11 +54,11 @@ VM `msi-workstation`, Node v22.22.1, source synced from this worktree before the
 - A real WebAuthn create or get, a virtual authenticator, or a physical passkey. Enrollment used a scripted credential port. The save-passkey button was not clicked in Firefox.
 - The recipient form, the front camera button, the note field, the photo picker, and the music field were not clicked in Firefox. Lookup and music tests use a scripted transport. No live directory or catalog call was made. The front still was not taken by a physical camera. Photo bytes in the test are synthetic JPEG headers, not decoded images. Music cover bytes were not fetched. A MusicBrainz dump was not downloaded.
 - Recognition parity against the frozen SIFT contract.
-- `npm ci` from a clean directory (install used the existing VM `node_modules`).
+- `npm ci` inside `web/` alone. The clean directory at `/home/msi-workstation/t213-a05` typechecks only when `server/src/remanence/recovery/web/crypto.mjs`, `crypto.d.mts`, and `protocol/fixtures` sit beside `web/`.
 - Kotlin recovery interop file and any ciphertext produced by Tink on Android beyond the three committed fixtures.
 
 ## Next 3 independent tasks
 
-1. Run `npm ci` in a clean VM temp directory and record the result. Do not replace the existing VM install.
-2. One frozen composition for an implemented family, still with production send off.
+1. One frozen composition for an implemented family, still with production send off.
+2. A caller-facing map for HTTP 403, 409, and 426 where a real endpoint emits them.
 3. A browser SIFT build still needs a VM-local Emscripten pin and an OpenCV 4.12 `features2d` wasm. Thresholds stay put.

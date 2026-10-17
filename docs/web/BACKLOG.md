@@ -10,7 +10,7 @@ A mocked call is not a live integration. Production send stays off.
 - A02 VERIFIED. Commit `e2c65392e32e7f50c0a12aae5075ab683c16c55d`. Firefox 155.0.1 opened locked `#/create`, `#/scan`, and `#/settings` without signing in or admitting a postcard. An unknown hash returned home. `#/create?access=secret` did not render or store the query. Boundary: a late in-flight lookup after leaving the page is aborted in code and covered by the recipient and music unit tests, not by a Firefox click.
 - A03 IMPLEMENTED. `SessionStore` phases and generation fencing on lookup, music, receive, and enrollment. Lock and sign-out drop the create drafts in unit tests. Next: one browser check of that teardown.
 - A04 IMPLEMENTED. Profile header, bounded reads, dotted handle, refusal of `..` and percent-encoded parent segments, and one music query on `/music/v1/search`. Statuses 401, 403, 409, 426, and 429 are returned to the caller. A closed port is `TRANSPORT_FAILED`. The access token stays in Authorization and out of the error text. Next: a caller-facing map for 403, 409, and 426 where a real endpoint emits them.
-- A05 TODO. `npm ci` in a clean VM temp directory is not run. The existing `node_modules` was reused. Next: run `npm ci` there without replacing the VM install.
+- A05 VERIFIED. `npm ci --ignore-scripts` in `/home/msi-workstation/t213-a05/web` added 48 packages, 0 vulnerabilities, 112 MB. Typecheck, 74 tests, and the production build then matched `index-7ZKAT5tJ.js`. Boundary: `web/` does not typecheck without the repo `crypto.mjs`, `crypto.d.mts`, and `protocol/fixtures`. The existing install was left in place. No commit; this was a clean directory on the VM.
 
 ## B
 

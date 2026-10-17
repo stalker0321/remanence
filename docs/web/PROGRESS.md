@@ -3,10 +3,10 @@
 Base: `5a6e7fd65f7be752daa1c933134df7918dde33ee`
 Branch: `work/t213-remanence-web-20261017`
 Worktree: `/home/vodkolyan/projects/Remanence-web-t213-20261017`
-Last good commit: `85b81b96487b96a524bb0f501c2467d95f855227` (W1). W2 is the next commit on this branch.
+Last good commit: `3172229aedab5c7a6f4645a4f1f47b7476c1ea58` (W2).
 
-Current milestone: W2 Google verify and signed-in passkey restore, checks green, commit in progress
-Next exact action: commit W2, then W3 owner-scoped fetch and the recognition adapter boundary
+Current milestone: W2 committed. Next is W3 owner-scoped fetch and the recognition boundary.
+Next exact action: fetch encrypted owner manifests with the existing limits, without a scan grant and without uploading a raw picture
 
 ## Implemented
 
@@ -40,6 +40,6 @@ VM `msi-workstation`, Node v22.22.1, source synced from this worktree before the
 
 ## Next 3 independent tasks
 
-1. Commit W2.
-2. W3: owner-scoped encrypted manifest fetch with the existing limits, and a camera adapter that does not upload the raw scan.
-3. Recognition parity: identify whether a browser SIFT build can match the frozen contract; if the toolchain blocks it, record the mismatch and keep the adapter separate from decrypt.
+1. W3: owner-scoped encrypted manifest fetch with the existing limits, and a camera adapter that does not upload the raw scan.
+2. Recognition parity: identify whether a browser SIFT build can match the frozen contract; if the toolchain blocks it, record the mismatch and keep the adapter separate from decrypt.
+3. Keep the picker from granting decrypt or render.

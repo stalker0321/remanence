@@ -61,9 +61,15 @@ class MainActivityLocaleConfigContractTest {
         // Ordinary recreation triggers stay unhandled: no blanket.
         assertEquals(0, declared and ActivityInfo.CONFIG_ORIENTATION)
         assertEquals(0, declared and ActivityInfo.CONFIG_SCREEN_SIZE)
+        // Framework PackageManager parsing supplies implicit MCC|MNC
+        // defaults (PackageParser.getActivityConfigChanges ORs them
+        // in; the built APK's raw manifest mask is exactly 0x2104 per
+        // aapt2). Normalize ONLY those two proven defaults before the
+        // no-blanket equality — nothing else is relaxed.
+        val implicitDefaults = ActivityInfo.CONFIG_MCC or ActivityInfo.CONFIG_MNC
         assertEquals(
             "no config blanket beyond the locale triple",
-            observedFirstSwitchMask,
+            observedFirstSwitchMask or implicitDefaults,
             declared,
         )
     }

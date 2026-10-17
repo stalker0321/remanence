@@ -3,10 +3,10 @@
 Base: `5a6e7fd65f7be752daa1c933134df7918dde33ee`
 Branch: `work/t213-remanence-web-20261017`
 Worktree: `/home/vodkolyan/projects/Remanence-web-t213-20261017`
-Last good commit: `d7178d9e51c01c0d86fea7bf6903154bc74887e1` (C4 photos).
+Last good commit: `ffcf64edd5879e8b9c2804599f6f17c22d553868` (C4 music search).
 
-Current milestone: a confirmed recipient, one local front still, a note inside 1000 UTF-8 bytes, and up to five local JPEGs stay in memory for this visit. The still is not a fingerprint. The photos are not resized. Recognition stays fail-closed. Production send stays off.
-Next exact action: search music on the existing endpoint and keep one selected track on this draft. Do not download a dump, and do not send.
+Current milestone: a confirmed recipient, one local front still, a note inside 1000 UTF-8 bytes, up to five local JPEGs, and one selected music hit stay in memory for this visit. The still is not a fingerprint. The photos are not resized. The music hit is the first search page only. Recognition stays fail-closed. Production send stays off.
+Next exact action: add the settings hash and check locked deep links in Firefox. A route must not sign in, unlock keys, or admit a postcard.
 
 ## Implemented
 
@@ -23,6 +23,7 @@ Next exact action: search music on the existing endpoint and keep one selected t
 - C4 front `662b9197ca21091727f9125c45ce156ab65c2ae2`: one camera still is bound to that snapshot. Cancel, close, lock, and a different recipient zero the bytes and stop the tracks. It is not uploaded and it is not a fingerprint.
 - C4 note `915fad474887f2a61d3fbce822834cfe4d207775`: the note is counted in UTF-8 bytes against `note_max_utf8_bytes` (1000). Over-limit text stays editable and is not accepted. Lock clears it.
 - C4 photos `d7178d9e51c01c0d86fea7bf6903154bc74887e1`: the draft holds 3 to 5 JPEGs under `normalized_photo_max_plaintext_bytes`. A sixth file, a non-JPEG, and an oversized file are refused. Remove and reorder stay local. Lock zeroes the bytes. The long edge is not measured.
+- C4 music `ffcf64edd5879e8b9c2804599f6f17c22d553868`: `GET /music/v1/search` with `q`, `limit=10`, and `offset=0`. A blank query and a query over 100 code points do not call the network. A bad page, a 401, and a 422 are refused. A 429 and a 503 stay unavailable and are not an empty page. One selected hit survives a late page. Lock and sign-out drop it. Cover bytes are not fetched. The recording id is kept on the hit and is not shown.
 - C1 `a86fab4d4647b8d24703842b98bb10c0c36a9808`: GENEX03/GENEX04 and BEXPR02 bytes match the Android goldens. `prepare` rejects those codec goldens and paints a bundled press sheet. Unsupported expression magic is refused and not drawn. A verified v3 cover replaces the music band. A missing cover stays text. Overflow rejects the whole sheet. The product shows a sheet only after `presentation-admitted`. The fixture page is a separate Vite root.
 - Node 22.22.1 on `msi-workstation` at `/home/msi-workstation/remanence-web-t213-20261017/tools/node`.
 
@@ -30,9 +31,9 @@ Next exact action: search music on the existing endpoint and keep one selected t
 
 VM `msi-workstation`, Node v22.22.1, source synced from this worktree before the W3 commit. W2's earlier run was 12 files and 31 tests.
 
-- `npm test` (vitest 5.0.5): 23 files, 69 tests, 0 failed. Includes the earlier fixtures, the receive negatives, one JS-produced press sheet, registration, enrollment, recipient lookup, the front still, the note byte limit, and the photo draft. That sheet is not Android ciphertext. The registration identity and the recovery record are JS WebCrypto producers.
+- `npm test` (vitest 5.0.5): 24 files, 73 tests, 0 failed. Includes the earlier fixtures, the receive negatives, one JS-produced press sheet, registration, enrollment, recipient lookup, the front still, the note byte limit, the photo draft, and the music search page. That sheet is not Android ciphertext. The registration identity and the recovery record are JS WebCrypto producers. The music page is a scripted transport, not a live catalog.
 - `npm run typecheck` (`tsc --noEmit`, TypeScript 7.0.2): exit 0.
-- `npm run build` (vite 8.3.4): exit 0. JS `index-iS5yXDXY.js` is 396.51 KB, gzip 116.77 KB. CSS `index-Ca4dS666.css` is 4.37 KB. The product page did not request the external `crypto` stub. The production bundle does not contain the fixture producer.
+- `npm run build` (vite 8.3.4): exit 0. JS `index-DyRX6lAI.js` is 404.22 KB, gzip 118.58 KB. CSS `index-CovRG_mx.css` is 4.60 KB. The product page did not request the external `crypto` stub. The production bundle does not contain the fixture producer.
 - Firefox 155.0.1 on the same VM, driven by the snap geckodriver against the real Firefox binary `/snap/firefox/current/usr/lib/firefox/firefox`. Static servers had no CSP. Command: `node web/scripts/firefox-smoke.mjs <web-dir> <out-dir>`.
 - Production `dist/` at 1280×800 (en, ru, uk) and 390×844 (uk): `dataset.remanenceBoot=ready`, boot errors empty, no failed resources, no Google script, no fixture string in the bundle.
 - Harness at 1280×900 and 390×2400: HPKE seal/open returned `open`. Plain, cover, and blank overflow sheets painted as before. A fourth sheet was decrypted from the JS producer, admitted, painted with note `hello`, then the object URLs were revoked on sign-out. The same page generated one local identity, saw its bundle id match the encryption keyset (`matched`), and wiped the seed copies. The recognition engine and the ciphertext in that page are synthetic. A real camera, a real Google account, and a real passkey were not used. Screenshots are in `tasks/T213/screenshots/` outside this repo.
@@ -49,13 +50,13 @@ VM `msi-workstation`, Node v22.22.1, source synced from this worktree before the
 
 - A camera capture, or a click through Google Identity Services. The production shell was rendered in Firefox.
 - A real WebAuthn create or get, a virtual authenticator, or a physical passkey. Enrollment used a scripted credential port. The save-passkey button was not clicked in Firefox.
-- The recipient form, the front camera button, the note field, and the photo picker were not clicked in Firefox. Lookup tests use a scripted transport. No live directory call was made. The front still was not taken by a physical camera. Photo bytes in the test are synthetic JPEG headers, not decoded images.
+- The recipient form, the front camera button, the note field, the photo picker, and the music field were not clicked in Firefox. Lookup and music tests use a scripted transport. No live directory or catalog call was made. The front still was not taken by a physical camera. Photo bytes in the test are synthetic JPEG headers, not decoded images. Music cover bytes were not fetched. A MusicBrainz dump was not downloaded.
 - Recognition parity against the frozen SIFT contract.
 - `npm ci` from a clean directory (install used the existing VM `node_modules`).
 - Kotlin recovery interop file and any ciphertext produced by Tink on Android beyond the three committed fixtures.
 
 ## Next 3 independent tasks
 
-1. Search music on the existing endpoint and keep one selected track on this draft. Do not download a dump, and do not send.
+1. Add the settings hash and check locked deep links in Firefox. A route must not sign in or admit a postcard.
 2. One frozen composition for an implemented family, still with production send off.
 3. A browser SIFT build still needs a VM-local Emscripten pin and an OpenCV 4.12 `features2d` wasm. Thresholds stay put.

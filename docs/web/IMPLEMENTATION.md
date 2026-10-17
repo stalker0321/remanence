@@ -296,6 +296,20 @@ and reorder do not upload anything. Lock zeroes the draft bytes. Preview
 object URLs are revoked on remove, lock, and unmount; the blob copy behind an
 object URL cannot be zeroed. The long edge is not measured and is not resized.
 
+## C4 music
+
+Search uses the existing `GET /music/v1/search`. The client sends only `q`,
+`limit=10`, and `offset=0` after the path check. A blank query does not call
+the network. More than 100 Unicode code points is refused before a request.
+The page must be exactly `results`, `total`, and `offset`. An extra field, a
+non-canonical recording id, a duplicate id, or a page longer than 10 is
+refused. HTTP 429 and 503 are unavailable, including a 503 body that looks
+like an empty page. One selected hit stays for the visit. A late ticket
+cannot replace it. Lock and sign-out drop the hit. The title line is the
+title, the artists, and the version. The recording id is not shown. Cover
+bytes are not requested. Nothing is sent. The query is not written to
+localStorage. JS strings in the field cannot be zeroed; lock clears the field.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

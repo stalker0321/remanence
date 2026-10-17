@@ -39,6 +39,12 @@ export const messageKeys = [
   'authFailed',
   'googleUnavailable',
   'googleCancelled',
+  'useCamera',
+  'takePicture',
+  'closeCamera',
+  'cameraHeld',
+  'cameraDenied',
+  'cameraUnavailable',
 ] as const
 
 export type MessageKey = (typeof messageKeys)[number]
@@ -81,6 +87,12 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     authFailed: 'sign-in did not finish.',
     googleUnavailable: 'Google sign-in is not available from this page.',
     googleCancelled: 'the Google prompt was dismissed.',
+    useCamera: 'use the camera',
+    takePicture: 'take the picture',
+    closeCamera: 'close the camera',
+    cameraHeld: 'the picture stays on this device. a memory is not open.',
+    cameraDenied: 'the camera permission was dismissed.',
+    cameraUnavailable: 'this browser cannot use the camera.',
   },
   ru: {
     homeOpenTitle: 'вам пришла открытка?',
@@ -119,6 +131,12 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     authFailed: 'вход не завершился.',
     googleUnavailable: 'вход через Google с этой страницы недоступен.',
     googleCancelled: 'окно Google закрыто.',
+    useCamera: 'открыть камеру',
+    takePicture: 'сделать снимок',
+    closeCamera: 'закрыть камеру',
+    cameraHeld: 'снимок остаётся на этом устройстве. воспоминание не открыто.',
+    cameraDenied: 'доступ к камере закрыт.',
+    cameraUnavailable: 'этот браузер не может использовать камеру.',
   },
   uk: {
     homeOpenTitle: 'вам надійшла листівка?',
@@ -157,5 +175,11 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     authFailed: 'вхід не завершився.',
     googleUnavailable: 'вхід через Google з цієї сторінки недоступний.',
     googleCancelled: 'вікно Google закрито.',
+    useCamera: 'відкрити камеру',
+    takePicture: 'зробити знімок',
+    closeCamera: 'закрити камеру',
+    cameraHeld: 'знімок лишається на цьому пристрої. спогад не відкрито.',
+    cameraDenied: 'доступ до камери закрито.',
+    cameraUnavailable: 'цей браузер не може використати камеру.',
   },
 }

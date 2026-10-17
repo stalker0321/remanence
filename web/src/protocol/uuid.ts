@@ -20,8 +20,12 @@ const MD5_S = [
   6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
 ]
 
+export function isCanonicalUuid(value: string): boolean {
+  return CANONICAL.test(value)
+}
+
 export function uuidToBytes(value: string): Uint8Array {
-  if (!CANONICAL.test(value)) throw new ProtocolError('INVALID_UUID')
+  if (!isCanonicalUuid(value)) throw new ProtocolError('INVALID_UUID')
   const hex = value.replaceAll('-', '')
   const out = new Uint8Array(16)
   for (let i = 0; i < 16; i++) out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)

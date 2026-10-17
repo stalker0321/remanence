@@ -10,6 +10,8 @@ import { languages, type Language, type MessageKey } from '../i18n/catalog'
 import { phaseKey, translate } from '../i18n/translate'
 import { writeLanguage, type PreferencePort } from '../preferences/language'
 import { href, parseRoute, type RouteName } from '../router/route'
+import { browserCamera, type CameraPort, type CameraSession } from '../scan/camera'
+import { ScanError } from '../scan/errors'
 import { SessionStore } from '../session/session'
 
 export function App({
@@ -19,6 +21,7 @@ export function App({
   transport = fetchTransport(apiOrigin()),
   google = browserGoogleIdentity(document),
   passkeys = browserPasskey(),
+  camera = browserCamera(document),
 }: {
   store: SessionStore
   preferences: PreferencePort
@@ -26,6 +29,7 @@ export function App({
   transport?: ApiTransport
   google?: GoogleIdentityPort
   passkeys?: PasskeyPort
+  camera?: CameraPort
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [route, setRoute] = useState<RouteName>(() => parseRoute(window.location.hash))
@@ -63,7 +67,7 @@ export function App({
         </nav>
       </div>
       {route === 'home' ? <Home t={t} /> : null}
-      {route === 'scan' ? <Waiting t={t} title="scanTitle" body="scanWaiting" /> : null}
+      {route === 'scan' ? <Scan t={t} camera={camera} onNotice={setNotice} /> : null}
       {route === 'create' ? <Waiting t={t} title="homeMakeTitle" body="makeWaiting" /> : null}
       {route === 'account' ? (
         <Account
@@ -103,6 +107,94 @@ function Home({ t }: { t: (key: MessageKey) => string }) {
         <a href={href('account')}>{t('account')}</a>
       </div>
     </>
+  )
+}
+
+function Scan({
+  t,
+  camera,
+  onNotice,
+}: {
+  t: (key: MessageKey) => string
+  camera: CameraPort
+  onNotice: (notice: MessageKey) => void
+}) {
+  const host = useRef<HTMLDivElement>(null)
+  const session = useRef<CameraSession | null>(null)
+  const heldBytes = useRef<Uint8Array | null>(null)
+  const busy = useRef(false)
+  const [live, setLive] = useState(false)
+  const [held, setHeld] = useState(false)
+
+  useEffect(() => () => {
+    session.current?.stop()
+    session.current = null
+    heldBytes.current = null
+  }, [])
+
+  async function open() {
+    if (busy.current) return
+    busy.current = true
+    try {
+      const next = await camera.open()
+      session.current?.stop()
+      session.current = next
+      heldBytes.current = null
+      next.preview.className = 'preview'
+      host.current?.replaceChildren(next.preview)
+      setLive(true)
+      setHeld(false)
+      onNotice('errorRegion')
+    } catch (error) {
+      onNotice(error instanceof ScanError && error.code === 'CAMERA_DENIED' ? 'cameraDenied' : 'cameraUnavailable')
+    } finally {
+      busy.current = false
+    }
+  }
+
+  async function take() {
+    if (busy.current) return
+    busy.current = true
+    try {
+      const picture = await session.current?.capture()
+      if (!picture) return
+      heldBytes.current = picture.bytes
+      setHeld(true)
+      onNotice('cameraHeld')
+    } catch {
+      onNotice('cameraUnavailable')
+    } finally {
+      busy.current = false
+    }
+  }
+
+  function close() {
+    session.current?.stop()
+    session.current = null
+    heldBytes.current = null
+    host.current?.replaceChildren()
+    setLive(false)
+    setHeld(false)
+  }
+
+  return (
+    <section className="card">
+      <h1>{t('scanTitle')}</h1>
+      <p>{t('scanWaiting')}</p>
+      <div ref={host} />
+      {held ? <p>{t('cameraHeld')}</p> : null}
+      <div className="actions">
+        {live ? (
+          <>
+            <button type="button" className="primary" onClick={() => { void take() }}>{t('takePicture')}</button>
+            <button type="button" onClick={close}>{t('closeCamera')}</button>
+          </>
+        ) : (
+          <button type="button" className="primary" onClick={() => { void open() }}>{t('useCamera')}</button>
+        )}
+        <a href={href('home')}>{t('back')}</a>
+      </div>
+    </section>
   )
 }
 

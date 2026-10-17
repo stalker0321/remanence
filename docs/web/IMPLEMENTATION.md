@@ -134,6 +134,22 @@ do not create a passkey. `PENDING` is the saved-credential continuation and
 does not unlock. Cancel, missing PRF, and a browser without WebAuthn are
 different results. Keys live in `MemoryKeys` and drop on lock or sign-out.
 
+## W3 sync and scan boundary
+
+`fetchIncoming` reads one `GET /v1/capsules/incoming` page and the sender
+`GET /v1/directory/key-bundles/{id}` record. It checks the publish signature,
+the statement hash, and that the signed statement names the same account,
+bundles, and blob bindings as the page. Ciphertext stays ciphertext. The
+session phase does not change. `downloadCiphertext` checks the body length
+and SHA-256 against that binding.
+
+The scan screen can open a camera and keep a JPEG still in memory. It does
+not upload that still. There is no SIFT/RootSIFT build in this client. The
+recognition port fails closed with `RECOGNITION_UNAVAILABLE`. A grant exists
+only after an engine reports one capsule, and admitting it only moves the
+phase to postcard-matched. It does not decrypt or render. No browser SIFT
+library was downloaded.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

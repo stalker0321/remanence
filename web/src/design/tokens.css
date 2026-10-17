@@ -91,6 +91,14 @@ button:focus-visible, a:focus-visible {
 
 .primary { background: var(--lilac); }
 
+video.preview {
+  display: block;
+  width: 100%;
+  margin-top: 1rem;
+  border-radius: 1.25rem;
+  background: var(--ink);
+}
+
 .quiet {
   background: transparent;
   border-color: transparent;

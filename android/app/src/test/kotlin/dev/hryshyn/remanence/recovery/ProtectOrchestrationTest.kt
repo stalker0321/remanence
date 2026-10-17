@@ -36,11 +36,15 @@ class ProtectOrchestrationTest {
      * Genuinely canonical deterministic credential IDs.
      * `Crypto.context` requires canonical base64url (decode→re-encode
      * equality), which synthetic literals fail — the fixture bug
-     * behind the JVM failures, not a production defect.
+     * behind the JVM failures, not a production defect. Companion
+     * scope (not instance): the nested Fixture reads the default ID,
+     * and instance properties are unresolved there.
      */
-    private val credId1 = AccountRecoveryCrypto.encode(ByteArray(32) { (it + 1).toByte() })
-    private val credId2 = AccountRecoveryCrypto.encode(ByteArray(32) { (it + 101).toByte() })
-    private val credIdX = AccountRecoveryCrypto.encode(ByteArray(32) { (it + 201).toByte() })
+    private companion object {
+        val credId1 = AccountRecoveryCrypto.encode(ByteArray(32) { (it + 1).toByte() })
+        val credId2 = AccountRecoveryCrypto.encode(ByteArray(32) { (it + 101).toByte() })
+        val credIdX = AccountRecoveryCrypto.encode(ByteArray(32) { (it + 201).toByte() })
+    }
 
     private class Fixture(
         val owner: String,

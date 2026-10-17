@@ -3,7 +3,7 @@
 Base: `5a6e7fd65f7be752daa1c933134df7918dde33ee`
 Branch: `work/t213-remanence-web-20261017`
 Worktree: `/home/vodkolyan/projects/Remanence-web-t213-20261017`
-Last good commit: `8100712482fc8ad330bf80e0e66e0de5198e19e0` (C2).
+Last good commit: `69e42184b60647e1812a94ebc6bee45f4f7808ac` (C4 registration).
 
 Current milestone: a new account can be registered from the server ticket. Recognition stays fail-closed. Enrollment is still open.
 Next exact action: enroll that same identity with the existing passkey ceremony and read it back. Do not mint a second key.
@@ -17,7 +17,7 @@ Next exact action: enroll that same identity with the existing passkey ceremony 
 - W3 `0b53d4881f15331c34e050b6b6eeed62b64af719`: one incoming page, sender key bundle, publish signature, and signed blob bindings. Download checks length and SHA-256. The camera still stays in memory. Recognition fails closed. A grant admits postcard-matched and does not decrypt.
 - C2 `8100712482fc8ad330bf80e0e66e0de5198e19e0`: `receivePostcard` checks the incoming list, one local still, and the grant before decrypt. An empty list, a missing body, a late sign-out, and a cancel do not admit a sheet. The production match button uses `unavailableRecognition`. A camera that resolves after cancel has its tracks stopped.
 - C3: no browser SIFT build is available. Desktop OpenCV 4.10 JNI and the OpenCV 4.12 app AAR are not a WASM worker. Emscripten is not installed. `unavailableRecognition` stays.
-- C4 registration: a `NEEDS_HANDLE` ticket stays in memory. One local HPKE/Ed25519 identity is posted to the existing register endpoint. A taken handle retries the same keysets. An existing account or a link conflict wipes the draft and does not register.
+- C4 registration `69e42184b60647e1812a94ebc6bee45f4f7808ac`: a `NEEDS_HANDLE` ticket stays in memory. One local HPKE/Ed25519 identity is posted to the existing register endpoint. A taken handle retries the same keysets. An existing account or a link conflict wipes the draft and does not register.
 - C1 `a86fab4d4647b8d24703842b98bb10c0c36a9808`: GENEX03/GENEX04 and BEXPR02 bytes match the Android goldens. `prepare` rejects those codec goldens and paints a bundled press sheet. Unsupported expression magic is refused and not drawn. A verified v3 cover replaces the music band. A missing cover stays text. Overflow rejects the whole sheet. The product shows a sheet only after `presentation-admitted`. The fixture page is a separate Vite root.
 - Node 22.22.1 on `msi-workstation` at `/home/msi-workstation/remanence-web-t213-20261017/tools/node`.
 

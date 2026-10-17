@@ -257,6 +257,19 @@ readback throws, the code is wiped and is not shown. The next open uses the
 stored record through PRF. This record is a JS producer. It is not an Android
 `AccountRecoveryCrypto` export. The browser smoke did not click Save passkey.
 
+## C4 recipient
+
+Create asks `GET /v1/directory/handles/{handle}` only while the keys are unlocked.
+The handle is folded before the request. The reply must name that same handle,
+the same user on the summary and the key bundle, the active suite, and no extra
+fields. Confirmation copies that snapshot into `RecipientDraft`. For myself
+looks up the signed-in handle and keeps the snapshot only when the user id
+matches. A second lookup, a restart, a lock, or a sign-out drops it. The page
+shows the handle, not the keyset. Nothing is uploaded.
+
+The Firefox smoke did not submit the form. Dotted handles are allowed in the
+API path. A `.` or `..` path segment is still refused.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

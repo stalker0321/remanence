@@ -3,10 +3,10 @@
 Base: `5a6e7fd65f7be752daa1c933134df7918dde33ee`
 Branch: `work/t213-remanence-web-20261017`
 Worktree: `/home/vodkolyan/projects/Remanence-web-t213-20261017`
-Last good commit: `dee92c898273485e17e48462dd616ee6fe1bcf1a` (C4 enrollment).
+Last good commit: `740d7902e88e67f3416901aa409cf0f6606d10ec` (C4 recipient lookup).
 
-Current milestone: the registration identity enrolls through the existing passkey ceremony and reads back. A stored record does not mint another key. Recognition stays fail-closed. Production send stays off.
-Next exact action: start Create as a memory draft: recipient lookup, for myself, note, and a frozen composition for an implemented family. Do not send until a real publish seal is connected.
+Current milestone: a confirmed recipient comes from the directory and stays in memory for this visit. A stored recovery record still does not mint another key. Recognition stays fail-closed. Production send stays off.
+Next exact action: hold one front still for that confirmed recipient. Do not upload it, and do not treat it as a fingerprint.
 
 ## Implemented
 
@@ -19,6 +19,7 @@ Next exact action: start Create as a memory draft: recipient lookup, for myself,
 - C3: no browser SIFT build is available. Desktop OpenCV 4.10 JNI and the OpenCV 4.12 app AAR are not a WASM worker. Emscripten is not installed. `unavailableRecognition` stays.
 - C4 registration `69e42184b60647e1812a94ebc6bee45f4f7808ac`: a `NEEDS_HANDLE` ticket stays in memory. One local HPKE/Ed25519 identity is posted to the existing register endpoint. A taken handle retries the same keysets. An existing account or a link conflict wipes the draft and does not register.
 - C4 enrollment `dee92c898273485e17e48462dd616ee6fe1bcf1a`: that same identity is sealed into the existing recovery record after one passkey create, setup, and `POST /v1/recovery/record`. Readback unlocks the keys. `STORED` reads the record and does not create a credential or a package. A missing identity does not generate a replacement and does not call the network. The one-time code is shown in the page and is not stored. The record is a JS producer.
+- C4 recipient `740d7902e88e67f3416901aa409cf0f6606d10ec`: `GET /v1/directory/handles/{handle}` returns one snapshot. Confirmation freezes it. For myself requires the signed-in user id. A late reply, a lock, and a sign-out drop it. Nothing is sent.
 - C1 `a86fab4d4647b8d24703842b98bb10c0c36a9808`: GENEX03/GENEX04 and BEXPR02 bytes match the Android goldens. `prepare` rejects those codec goldens and paints a bundled press sheet. Unsupported expression magic is refused and not drawn. A verified v3 cover replaces the music band. A missing cover stays text. Overflow rejects the whole sheet. The product shows a sheet only after `presentation-admitted`. The fixture page is a separate Vite root.
 - Node 22.22.1 on `msi-workstation` at `/home/msi-workstation/remanence-web-t213-20261017/tools/node`.
 
@@ -26,9 +27,9 @@ Next exact action: start Create as a memory draft: recipient lookup, for myself,
 
 VM `msi-workstation`, Node v22.22.1, source synced from this worktree before the W3 commit. W2's earlier run was 12 files and 31 tests.
 
-- `npm test` (vitest 5.0.5): 19 files, 58 tests, 0 failed. Includes the earlier fixtures, the receive negatives, one JS-produced press sheet, the registration ticket cases, and three enrollment cases. That sheet is not Android ciphertext. The registration identity and the recovery record are JS WebCrypto producers.
+- `npm test` (vitest 5.0.5): 20 files, 63 tests, 0 failed. Includes the earlier fixtures, the receive negatives, one JS-produced press sheet, the registration ticket cases, three enrollment cases, and the recipient lookup cases. That sheet is not Android ciphertext. The registration identity and the recovery record are JS WebCrypto producers.
 - `npm run typecheck` (`tsc --noEmit`, TypeScript 7.0.2): exit 0.
-- `npm run build` (vite 8.3.4): exit 0. JS `index-DlMw7yTn.js` is 381.08 KB, gzip 112.70 KB. CSS `index-CFIEwwHQ.css` is 3.95 KB. The product page did not request the external `crypto` stub. The production bundle does not contain the fixture producer.
+- `npm run build` (vite 8.3.4): exit 0. JS `index-Dq82lhTg.js` is 388.83 KB, gzip 114.72 KB. CSS `index-CFIEwwHQ.css` is 3.95 KB. The product page did not request the external `crypto` stub. The production bundle does not contain the fixture producer.
 - Firefox 155.0.1 on the same VM, driven by the snap geckodriver against the real Firefox binary `/snap/firefox/current/usr/lib/firefox/firefox`. Static servers had no CSP. Command: `node web/scripts/firefox-smoke.mjs <web-dir> <out-dir>`.
 - Production `dist/` at 1280×800 (en, ru, uk) and 390×844 (uk): `dataset.remanenceBoot=ready`, boot errors empty, no failed resources, no Google script, no fixture string in the bundle.
 - Harness at 1280×900 and 390×2400: HPKE seal/open returned `open`. Plain, cover, and blank overflow sheets painted as before. A fourth sheet was decrypted from the JS producer, admitted, painted with note `hello`, then the object URLs were revoked on sign-out. The same page generated one local identity, saw its bundle id match the encryption keyset (`matched`), and wiped the seed copies. The recognition engine and the ciphertext in that page are synthetic. A real camera, a real Google account, and a real passkey were not used. Screenshots are in `tasks/T213/screenshots/` outside this repo.
@@ -45,12 +46,13 @@ VM `msi-workstation`, Node v22.22.1, source synced from this worktree before the
 
 - A camera capture, or a click through Google Identity Services. The production shell was rendered in Firefox.
 - A real WebAuthn create or get, a virtual authenticator, or a physical passkey. Enrollment used a scripted credential port. The save-passkey button was not clicked in Firefox.
+- The recipient form was not clicked in Firefox. Lookup tests use a scripted transport. No live directory call was made.
 - Recognition parity against the frozen SIFT contract.
 - `npm ci` from a clean directory (install used the existing VM `node_modules`).
 - Kotlin recovery interop file and any ciphertext produced by Tink on Android beyond the three committed fixtures.
 
 ## Next 3 independent tasks
 
-1. Create a memory draft: recipient lookup, for myself, note, and one frozen composition. Production send stays off.
-2. Connect that draft to the existing publish seal on an isolated test backend before any production send.
+1. Hold one front still for the confirmed recipient. Do not upload it, and do not call it a fingerprint.
+2. Note, photos, and one frozen composition stay in the same memory draft. Production send stays off.
 3. A browser SIFT build still needs a VM-local Emscripten pin and an OpenCV 4.12 `features2d` wasm. Thresholds stay put.

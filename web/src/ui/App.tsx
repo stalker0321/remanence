@@ -22,6 +22,7 @@ import { explainScan } from '../scan/notice'
 import { receivePostcard } from '../scan/receive'
 import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
 import { canvasTextMeasurer } from '../collage/measure'
+import { RecipientDraft, lookupRecipient, type RecipientSnapshot } from '../create/recipient'
 import { SessionStore } from '../session/session'
 
 export function App({
@@ -34,6 +35,7 @@ export function App({
   google = browserGoogleIdentity(document),
   passkeys = browserPasskey(),
   camera = browserCamera(document),
+  recipient,
 }: {
   store: SessionStore
   preferences: PreferencePort
@@ -44,6 +46,7 @@ export function App({
   google?: GoogleIdentityPort
   passkeys?: PasskeyPort
   camera?: CameraPort
+  recipient: RecipientDraft
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const held = useSyncExternalStore(memory.subscribe, memory.getSnapshot)
@@ -96,7 +99,9 @@ export function App({
           engine={engine}
         />
       ) : null}
-      {route === 'create' ? <Waiting t={t} title="homeMakeTitle" body="makeWaiting" /> : null}
+      {route === 'create' ? (
+        <Create t={t} store={store} transport={transport} recipient={recipient} onNotice={setNotice} />
+      ) : null}
       {view.phase === 'presentation-admitted' && held ? (
         <CollageStage held={held} t={t} onClose={() => store.lock()} />
       ) : null}
@@ -291,23 +296,164 @@ function Scan({
   )
 }
 
-function Waiting({
+function Create({
   t,
-  title,
-  body,
+  store,
+  transport,
+  recipient,
+  onNotice,
 }: {
   t: (key: MessageKey) => string
-  title: MessageKey
-  body: MessageKey
+  store: SessionStore
+  transport: ApiTransport
+  recipient: RecipientDraft
+  onNotice: (notice: MessageKey) => void
 }) {
+  const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
+  const [handle, setHandle] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [stamp, setStamp] = useState(0)
+  const abort = useRef<AbortController | null>(null)
+  const open = view.phase !== 'signed-out' && view.phase !== 'authenticated' && view.accountId !== null
+  const pending = open ? recipient.pending() : null
+  const confirmed = open ? recipient.confirmed() : null
+  void stamp
+
+  useEffect(() => () => abort.current?.abort(), [])
+
+  async function lookup(mode: 'named' | 'self') {
+    if (busy || !open || view.accountId === null) return
+    abort.current?.abort()
+    const controller = new AbortController()
+    abort.current = controller
+    const ticket = recipient.nextTicket(view.accountId)
+    setBusy(true)
+    setStamp((value) => value + 1)
+    try {
+      const outcome = await lookupRecipient(store, transport, handle, controller.signal, mode)
+      if (controller.signal.aborted) return
+      if (outcome.kind === 'not-found') {
+        onNotice('recipientNotFound')
+        return
+      }
+      if (!recipient.offer(ticket, view.accountId, outcome.snapshot)) return
+      onNotice('errorRegion')
+    } catch (error) {
+      if (!controller.signal.aborted) onNotice(explainFailure(error))
+    } finally {
+      if (abort.current === controller) setBusy(false)
+      setStamp((value) => value + 1)
+    }
+  }
+
+  if (!open) {
+    return (
+      <section className="card">
+        <h1>{t('homeMakeTitle')}</h1>
+        <p>{t('createLocked')}</p>
+        <div className="actions">
+          <a className="button" href={href('account')}>{t('account')}</a>
+          <a href={href('home')}>{t('back')}</a>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="card">
-      <h1>{t(title)}</h1>
-      <p>{t(body)}</p>
-      <div className="actions">
-        <a href={href('home')}>{t('back')}</a>
-      </div>
+      <h1>{t('homeMakeTitle')}</h1>
+      {confirmed ? <RecipientLine t={t} snapshot={confirmed} held /> : null}
+      {pending && !confirmed ? <RecipientLine t={t} snapshot={pending} held={false} /> : null}
+      {!confirmed ? (
+        <form
+          className="handle-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void lookup('named')
+          }}
+        >
+          <label>
+            {t('handleLabel')}
+            <input
+              value={handle}
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              maxLength={32}
+              onChange={(event) => setHandle(event.target.value)}
+            />
+          </label>
+          <div className="actions">
+            <button type="submit" className="primary" disabled={busy || handle.trim().length === 0}>{t('lookupRecipient')}</button>
+            <button type="button" disabled={busy || view.handle === null} onClick={() => { void lookup('self') }}>{t('forMyself')}</button>
+          </div>
+        </form>
+      ) : null}
+      {pending && !confirmed ? (
+        <div className="actions">
+          <button
+            type="button"
+            className="primary"
+            onClick={() => {
+              recipient.confirm()
+              setStamp((value) => value + 1)
+              onNotice('errorRegion')
+            }}
+          >
+            {t('recipientConfirm')}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              abort.current?.abort()
+              recipient.restart()
+              setStamp((value) => value + 1)
+              onNotice('errorRegion')
+            }}
+          >
+            {t('recipientChange')}
+          </button>
+        </div>
+      ) : null}
+      {confirmed ? (
+        <div className="actions">
+          <button
+            type="button"
+            onClick={() => {
+              recipient.restart()
+              setStamp((value) => value + 1)
+              onNotice('errorRegion')
+            }}
+          >
+            {t('recipientChange')}
+          </button>
+          <a href={href('home')}>{t('back')}</a>
+        </div>
+      ) : (
+        <div className="actions">
+          <a href={href('home')}>{t('back')}</a>
+        </div>
+      )}
     </section>
+  )
+}
+
+function RecipientLine({
+  t,
+  snapshot,
+  held,
+}: {
+  t: (key: MessageKey) => string
+  snapshot: RecipientSnapshot
+  held: boolean
+}) {
+  return (
+    <p>
+      @{snapshot.handle}
+      {snapshot.self ? ` · ${t('forMyself')}` : ''}
+      {held ? ` ${t('recipientHeld')}` : ''}
+    </p>
   )
 }
 

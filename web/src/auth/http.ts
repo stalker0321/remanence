@@ -115,9 +115,21 @@ function checkOrigin(origin: string): string {
 }
 
 function endpoint(origin: string, path: string): string {
-  if (!/^\/v1\/[a-z0-9/_-]+$/.test(path)) throw new AuthError('TRANSPORT_FAILED')
+  if (!safeApiPath(path)) throw new AuthError('TRANSPORT_FAILED')
   if (origin === '') return path
   return new URL(path.slice(1), origin).toString()
+}
+
+/** Dots are legal in a handle. A `.` or `..` segment is not a handle. */
+function safeApiPath(path: string): boolean {
+  if (!path.startsWith('/v1/')) return false
+  const parts = path.split('/')
+  if (parts.length < 3 || parts[0] !== '' || parts[1] !== 'v1') return false
+  for (const part of parts.slice(2)) {
+    if (part === '' || part === '.' || part === '..') return false
+    if (!/^[a-z0-9_.-]+$/.test(part)) return false
+  }
+  return true
 }
 
 async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {

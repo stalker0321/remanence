@@ -29,6 +29,7 @@ function listen() {
       resolve({
         origin: `http://127.0.0.1:${address.port}`,
         close: () => new Promise((done) => server.close(done)),
+        count: () => requests.length,
         seen: () => {
           const last = requests.at(-1)
           if (!last) throw new Error('no request')
@@ -69,6 +70,24 @@ describe('api transport', () => {
       await expect(transport.request({ path: '/v1/auth/google/redirect', method: 'POST', body: {} })).rejects.toMatchObject({
         code: 'TRANSPORT_FAILED',
       })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('allows a dotted handle and refuses a parent segment', async () => {
+    const server = await listen()
+    try {
+      const transport = fetchTransport(server.origin)
+      await transport.request({ path: '/v1/directory/handles/a.b_c', method: 'GET' })
+      expect(server.seen().url).toBe('/v1/directory/handles/a.b_c')
+      await expect(transport.request({ path: '/v1/directory/handles/../secrets', method: 'GET' })).rejects.toMatchObject({
+        code: 'TRANSPORT_FAILED',
+      })
+      await expect(transport.request({ path: '/v1/directory/handles/%2e%2e', method: 'GET' })).rejects.toMatchObject({
+        code: 'TRANSPORT_FAILED',
+      })
+      expect(server.count()).toBe(1)
     } finally {
       await server.close()
     }

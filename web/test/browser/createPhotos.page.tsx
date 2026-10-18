@@ -211,6 +211,14 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 300))
 }
 
+async function untilInput(harness: Harness): Promise<void> {
+  const deadline = Date.now() + 5000
+  while (!harness.container.querySelector('.photo-draft input[type="file"]')) {
+    if (Date.now() > deadline) throw new Error('photo input missing')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
 async function main(): Promise<void> {
   try {
     const bytes = await gradientJpeg(96, 96)
@@ -218,7 +226,7 @@ async function main(): Promise<void> {
     // Positive control: no disruption — the pick lands, URL + DOM + notice.
     {
       const h = mountHarness()
-      await new Promise((resolve) => setTimeout(resolve, 0))
+      await untilInput(h)
       h.setGate(Promise.resolve())
       const urlsBefore = h.createdUrls.length
       h.pick(makeFile('ok.jpg', bytes))
@@ -240,7 +248,7 @@ async function main(): Promise<void> {
     // Unmount mid-decode: no draft photos, no late URLs/DOM/notice.
     {
       const h = mountHarness()
-      await new Promise((resolve) => setTimeout(resolve, 0))
+      await untilInput(h)
       let release!: () => void
       h.setGate(new Promise<void>((ok) => {
         release = ok
@@ -261,7 +269,7 @@ async function main(): Promise<void> {
     // Lock mid-decode: session incarnation moves on; output is dropped.
     {
       const h = mountHarness()
-      await new Promise((resolve) => setTimeout(resolve, 0))
+      await untilInput(h)
       let release!: () => void
       h.setGate(new Promise<void>((ok) => {
         release = ok
@@ -284,7 +292,7 @@ async function main(): Promise<void> {
     // fenced to is gone; output is dropped.
     {
       const h = mountHarness()
-      await new Promise((resolve) => setTimeout(resolve, 0))
+      await untilInput(h)
       let release!: () => void
       h.setGate(new Promise<void>((ok) => {
         release = ok

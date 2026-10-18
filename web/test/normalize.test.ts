@@ -285,7 +285,8 @@ describe('photo intake fencing and order', () => {
     const normalizer = new PhotoNormalizer(codec)
     const draft = new PhotoDraft()
     const intake = new PhotoIntake(normalizer, draft)
-    const fence = () => ({ owner: 'owner-a', generation: 1, confirmed: { id: 1 }, mounted: true })
+    const confirmed = { id: 1 }
+    const fence = () => ({ owner: 'owner-a', generation: 1, confirmed, mounted: true })
     const file = (name: string) => ({
       size: 64,
       arrayBuffer: async () => {
@@ -324,7 +325,8 @@ describe('photo intake fencing and order', () => {
     const normalizer = new PhotoNormalizer(codec)
     const draft = new PhotoDraft()
     const intake = new PhotoIntake(normalizer, draft)
-    const fence = () => ({ owner: 'owner-a', generation: 1, confirmed: { id: 1 }, mounted: true })
+    const confirmed = { id: 1 }
+    const fence = () => ({ owner: 'owner-a', generation: 1, confirmed, mounted: true })
     const outcome = await intake.addFiles(
       [
         { size: 64, arrayBuffer: async () => new ArrayBuffer(64) },
@@ -353,10 +355,11 @@ describe('photo intake fencing and order', () => {
       }),
       draft,
     )
+    const confirmed = { id: 1 }
     const outcome = await intake.addFiles([{ size: 64, arrayBuffer: async () => new ArrayBuffer(64) }], () => ({
       owner: 'owner-a',
       generation: 1,
-      confirmed: { id: 1 },
+      confirmed,
       mounted: true,
     }))
     expect(outcome).toEqual({ added: 1, refused: false, completed: true })

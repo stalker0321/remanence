@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { CollageError } from '../src/collage/errors'
-import { creatorScene, previewCandidates, previewSlot } from '../src/collage/creatorPreview'
+import { creatorScene, plannerFromTextMeasurer, previewCandidates, previewSlot } from '../src/collage/creatorPreview'
 import { grammar5Plans } from '../src/collage/planGrammar5'
 import reference from './g5-plans-reference.txt?raw'
 import { CROP_ASPECT_TOLERANCE } from '../src/collage/crop'
+import type { TextMeasurer } from '../src/collage/prepare'
 
 interface CaseSpec {
   id: string
@@ -163,6 +164,81 @@ describe('creator preview adapter', () => {
     for (const view of views) {
       expect('music' in view).toBe(false)
       for (const slot of view.slots) expect('music' in slot).toBe(false)
+    }
+  })
+
+  it('lays out a short note identically to the golden region with real metrics', () => {
+    const measurer: TextMeasurer = {
+      measure: () => ({ width: 200, height: 30, hasVisualOverflow: false }),
+    }
+    const views = previewCandidates(
+      { id: 'x', sender: 's', photos: photosFor([1, 1, 1]), note: 'Probe note text.' },
+      undefined,
+      plannerFromTextMeasurer(measurer, 640, 640),
+    )
+    expect(views.length).toBeGreaterThan(0)
+    for (const view of views) {
+      expect(view.note?.state).toBe('short')
+      expect(view.note?.region).toEqual({ x: 16, y: 573, width: 328, height: 30 })
+    }
+  })
+
+  it('grows the note region for multi-line notes and regularizes long ones', () => {
+    const threeLines: TextMeasurer = {
+      measure: (request) =>
+        request.size === 16
+          ? { width: 300, height: 20, hasVisualOverflow: false }
+          : { width: 320, height: 66, hasVisualOverflow: false },
+    }
+    const multi = previewCandidates(
+      { id: 'x', sender: 's', photos: photosFor([1, 1, 1]), note: 'one two three four five six' },
+      undefined,
+      plannerFromTextMeasurer(threeLines, 640, 640),
+    )
+    expect(multi[0].note?.state).toBe('short')
+    expect(multi[0].note?.region.height).toBe(66)
+    const long: TextMeasurer = {
+      measure: (request) =>
+        request.size === 16
+          ? { width: 300, height: 40, hasVisualOverflow: false }
+          : { width: 320, height: 300, hasVisualOverflow: false },
+    }
+    const regular = previewCandidates(
+      { id: 'x', sender: 's', photos: photosFor([1, 1, 1]), note: 'one two three four five six seven eight' },
+      undefined,
+      plannerFromTextMeasurer(long, 640, 640),
+    )
+    expect(regular[0].note?.state).toBe('regular')
+    expect(regular[0].note?.region.height).toBe(40)
+  })
+
+  it('keeps every candidate when stored pans stay in the frozen domain', () => {
+    const input = { id: 'x', sender: 's', photos: photosFor([1.5, 1, 0.6667]), note: 'Probe note text.' as string | null }
+    const plain = previewCandidates(input)
+    const drifted = new Map([
+      ['p0', { z: 1.25, xPercent: 12.5, yPercent: -12.5 }],
+      ['p1', { z: 1.05, xPercent: 2.5, yPercent: 0 }],
+      ['p2', { z: 1, xPercent: 50, yPercent: -50 }],
+    ])
+    const moved = previewCandidates(input, drifted)
+    expect(moved.map((view) => view.branch)).toEqual(plain.map((view) => view.branch))
+    for (const view of moved) {
+      expect(view.slots.length).toBe(3)
+      const sameBranch = plain.find((candidate) => candidate.branch === view.branch)
+      expect(sameBranch).toBeDefined()
+      // p2's z=1 pan clamps to identity, so its window matches the plain run.
+      expect(view.slots.find((slot) => slot.photoId === 'p2')?.sourcePx).toEqual(
+        sameBranch?.slots.find((slot) => slot.photoId === 'p2')?.sourcePx,
+      )
+    }
+  })
+
+  it('treats a z=1 pan and a zoom-out as safe no-ops, never empty input', () => {
+    const input = { id: 'x', sender: 's', photos: photosFor([1, 1, 1]), note: null as string | null }
+    const plain = previewCandidates(input)
+    for (const transform of [{ z: 1, xPercent: 60, yPercent: -60 }, { z: 0.2, xPercent: 0, yPercent: 0 }]) {
+      const views = previewCandidates(input, new Map([['p0', transform], ['p1', transform], ['p2', transform]]))
+      expect(views.map((view) => view.branch)).toEqual(plain.map((view) => view.branch))
     }
   })
 })

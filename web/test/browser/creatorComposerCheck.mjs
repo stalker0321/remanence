@@ -126,15 +126,20 @@ try {
         }
       })
       await page.goto(`http://127.0.0.1:4176/${route}`)
-      await page.waitForFunction(() => document.querySelector('#composer-status')?.textContent === 'done', { timeout: 60000 })
+      await page.waitForFunction(() => document.querySelector('#composer-status')?.textContent === 'capture-ready', undefined, { timeout: 60000 })
+      const shot = join(outDir, `creator-${run.lang}-${run.viewport}-chromium.png`)
+      await page.screenshot({ path: shot })
+      await page.evaluate(() => {
+        window.__creatorRelease = true
+      })
+      await page.waitForFunction(() => document.querySelector('#composer-status')?.textContent === 'done', undefined, { timeout: 60000 })
       const result = await page.evaluate(() => window.__creatorComposer)
       report.pages[`${run.lang}-${run.viewport}`] = { assertions: result.assertions, failures: result.failures }
       for (const item of result.assertions) {
         assert.equal(item.ok, true, `${run.lang}/${run.viewport} :: ${item.name} ${item.detail ?? ''}`)
       }
-      assert.ok(result.assertions.length >= 20, `${run.lang}/${run.viewport}: expected >=20 assertions, got ${result.assertions.length}`)
+      assert.ok(result.assertions.length >= 30, `${run.lang}/${run.viewport}: expected >=30 assertions, got ${result.assertions.length}`)
       assert.deepEqual(result.failures, [])
-      await page.screenshot({ path: join(outDir, `creator-${run.lang}-${run.viewport}-chromium.png`) })
       await page.close()
     }
   } finally {

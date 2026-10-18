@@ -5,6 +5,7 @@ import {
   clampEditorCrop,
   clampTransform,
   correctCrop,
+  correctEditorCrop,
   editorGesture,
   editorWindow,
   panDelta,
@@ -286,5 +287,62 @@ describe('geometry gates', () => {
       expect(stepped.window.width).toBeCloseTo(base.width / 1.1, 12)
       expect(stepped.window.height).toBeCloseTo(base.height / 1.1, 12)
     }
+  })
+})
+
+describe('composed editor domain (stored transform clamped first)', () => {
+  const slot = { width: 340, height: 248 }
+  const base = { x: 0, y: (1 - 248 / 340) / 2, width: 1, height: 248 / 340 }
+
+  it('treats a z=1 pan as a safe no-op instead of emptying candidates', () => {
+    const still = correctEditorCrop(base, slot, 1000, 1000, { z: 1, xPercent: 50, yPercent: -50 })
+    expect(still.accepted).toBe(true)
+    if (!still.accepted) return
+    expect(still.transform).toEqual({ z: 1, xPercent: 0, yPercent: 0 })
+    expect(still.window).toEqual(base)
+  })
+
+  it('clamps the zoom floor to 1 instead of widening the search', () => {
+    const zoomedOut = correctEditorCrop(base, slot, 1000, 1000, { z: 0.5, xPercent: 0, yPercent: 0 })
+    expect(zoomedOut.accepted).toBe(true)
+    if (!zoomedOut.accepted) return
+    expect(zoomedOut.transform.z).toBe(1)
+    expect(zoomedOut.window).toEqual(base)
+  })
+
+  it('keeps repeated pans and zoom-downs inside the allowed set', () => {
+    let transform = { z: 1, xPercent: 0, yPercent: 0 }
+    for (let i = 0; i < 20; i++) {
+      transform = { z: 1.05, xPercent: transform.xPercent + 2.5, yPercent: transform.yPercent - 2.5 }
+      const admitted = correctEditorCrop(base, slot, 1000, 1000, transform)
+      expect(admitted.accepted).toBe(true)
+    }
+    const zoomed = correctEditorCrop(base, slot, 1000, 1000, { z: 0.2, xPercent: 0, yPercent: 0 })
+    expect(zoomed.accepted).toBe(true)
+  })
+
+  it('rejects non-finite input before any clamping', () => {
+    expect(correctEditorCrop(base, slot, 1000, 1000, { z: NaN, xPercent: 0, yPercent: 0 })).toEqual({
+      accepted: false,
+      reason: 'NONFINITE_VALUE',
+    })
+  })
+
+  it('still enforces source, slot, base, and aspect gates', () => {
+    expect(correctEditorCrop(base, slot, 0, 1000, { z: 1, xPercent: 0, yPercent: 0 })).toEqual({
+      accepted: false,
+      reason: 'INVALID_SOURCE_DIMENSIONS',
+    })
+    expect(correctEditorCrop(base, { width: 0, height: 248 }, 1000, 1000, { z: 1, xPercent: 0, yPercent: 0 })).toEqual({
+      accepted: false,
+      reason: 'INVALID_SLOT',
+    })
+    expect(correctEditorCrop({ x: 0.6, y: 0, width: 0.5, height: 1 }, slot, 1000, 1000, { z: 1, xPercent: 0, yPercent: 0 })).toEqual({
+      accepted: false,
+      reason: 'BASE_CROP_OUT_OF_SOURCE',
+    })
+    expect(
+      correctEditorCrop({ x: 0, y: 0, width: 167 / 1000, height: 1 }, slot, 1000, 1000, { z: 1, xPercent: 0, yPercent: 0 }),
+    ).toEqual({ accepted: false, reason: 'FRAME_ASPECT_MISMATCH' })
   })
 })

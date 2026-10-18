@@ -4,6 +4,21 @@
  * editor (`CropEditorGeometry`) and the sealed `toCropWindow`
  * quantization, minus the analysis/classifier half.
  *
+ * Two domains, kept distinct on purpose (lead-adjudicated local
+ * control-domain choice — not universal Android editor parity):
+ *
+ * - `correctCrop` ports Android `correct` steps 1–8 verbatim, including
+ *   the frozen `|pan| <= (z-1)*50` gate and z=1 ⇒ pan 0.
+ * - `correctEditorCrop` composes the STORED manual-control domain used
+ *   by this creator: `clampTransform` first (frozen z∈[1,1.25] domain,
+ *   pan into `(z-1)*50`, z=1 ⇒ exactly 0, non-finite refused), then the
+ *   source-bounded editor clamp plus the structural checks (base in
+ *   source, 5e-3 frame aspect, derived window in [0,1]^2). The frozen pan
+ *   gate is enforced on the stored input, never re-run on the editor
+ *   output — matching Android's editor→quantize path, which does not
+ *   re-run the automatic classifier. A pan press at z=1 is therefore a
+ *   safe no-op and can never empty the candidate list.
+ *
  * The frame (slot cell) is fixed; only the source moves beneath it. UI
  * state is `translate(xPercent%, yPercent%) scale(z)` on the source
  * fragment inside the frame, with `z in [1, 1.25]` and
@@ -16,13 +31,6 @@
  * `max(w,h) = 1.0`, so the editor clamp reduces to `z in [1,1.25]`.
  * Never a full-source stretch, never fabricated face/importance
  * analysis, never an envelope-50 parity claim.
- *
- * `correctCrop` runs the geometry preconditions only (steps 1–8 of the
- * Android `correct`): finiteness, zoom domain, pan limit (rejected,
- * never silently re-clamped), source/slot validity, base in source,
- * frame aspect within `5e-3`, derived window in source. There is no
- * analysis/classifier step here — a local freeze is not protocol
- * admission, and missing analysis is not faked.
  */
 
 export interface CropTransform {
@@ -323,4 +331,65 @@ export function correctCrop(
     return reject({ accepted: false, reason: 'WINDOW_OUT_OF_SOURCE' })
   }
   return { accepted: true, window }
+}
+
+/**
+ * Stored manual-control correction for this creator: the stored UI
+ * transform is clamped into the frozen domain FIRST
+ * (`clampTransform`: z∈[1,1.25], pan into `(z−1)*50`, z=1 ⇒ exactly 0,
+ * non-finite refused), then the source-bounded editor clamp plus the
+ * structural checks (base in source, 5e-3 frame aspect, derived window
+ * in `[0,1]^2`). The frozen pan gate is NOT re-run on the editor
+ * output. Returns the admitted window together with the effective
+ * transform, so readout, stored state, and preview can never diverge.
+ */
+export function correctEditorCrop(
+  baseCrop: NormalizedCrop,
+  slot: CropSlot,
+  sourceWidth: number,
+  sourceHeight: number,
+  transform: CropTransform,
+): { accepted: true; window: NormalizedCrop; transform: CropTransform } | { accepted: false; reason: CropGeometryReject } {
+  const reject = (reason: CropGeometryReject): { accepted: false; reason: CropGeometryReject } => ({ accepted: false, reason })
+  if (!isFiniteCrop(baseCrop) || !isFiniteTransform(transform)) {
+    return reject('NONFINITE_VALUE')
+  }
+  const frozen = clampTransform(transform.z, transform.xPercent, transform.yPercent)
+  if (!frozen) return reject('NONFINITE_VALUE')
+  if (!Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight) || sourceWidth <= 0 || sourceHeight <= 0) {
+    return reject('INVALID_SOURCE_DIMENSIONS')
+  }
+  if (!Number.isFinite(slot.width) || !Number.isFinite(slot.height) || slot.width <= 0 || slot.height <= 0) {
+    return reject('INVALID_SLOT')
+  }
+  if (
+    baseCrop.width <= 0 ||
+    baseCrop.height <= 0 ||
+    baseCrop.x < -EPSILON ||
+    baseCrop.y < -EPSILON ||
+    baseCrop.x + baseCrop.width > 1 + EPSILON ||
+    baseCrop.y + baseCrop.height > 1 + EPSILON
+  ) {
+    return reject('BASE_CROP_OUT_OF_SOURCE')
+  }
+  const slotAspect = slot.width / slot.height
+  const cropAspect = (baseCrop.width * sourceWidth) / (baseCrop.height * sourceHeight)
+  if (Math.abs(cropAspect - slotAspect) / slotAspect > CROP_ASPECT_TOLERANCE) {
+    return reject('FRAME_ASPECT_MISMATCH')
+  }
+  const clamped = clampEditorCrop(baseCrop, frozen)
+  if (!clamped) return reject('BASE_CROP_OUT_OF_SOURCE')
+  const window = sourceWindow(baseCrop, clamped)
+  if (!window) return reject('NONFINITE_VALUE')
+  if (
+    window.width <= 0 ||
+    window.height <= 0 ||
+    window.x < -EPSILON ||
+    window.y < -EPSILON ||
+    window.x + window.width > 1 + EPSILON ||
+    window.y + window.height > 1 + EPSILON
+  ) {
+    return reject('WINDOW_OUT_OF_SOURCE')
+  }
+  return { accepted: true, window, transform: clamped }
 }

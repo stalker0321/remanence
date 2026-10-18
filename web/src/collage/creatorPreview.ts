@@ -1,17 +1,15 @@
 import { CollageError } from './errors'
 import {
   centerCoverBase,
-  clampEditorCrop,
-  correctCrop,
-  sourceWindow,
+  correctEditorCrop,
   toCropWindow,
   CROP_ASPECT_TOLERANCE,
   type CropTransform,
   type CropWindowInts,
 } from './crop'
 import type { PhotoShape, Rect } from './model'
-import { sourceRect } from './prepare'
-import { grammar5Plans, type Grammar5Input, type Grammar5Plan } from './planGrammar5'
+import { sourceRect, type TextMeasurer } from './prepare'
+import { grammar5Plans, type Grammar5Input, type Grammar5Measure, type Grammar5Plan } from './planGrammar5'
 import { markLine } from './model'
 import { opaqueColor, styleById } from './styles'
 import type { Scene } from './prepare'
@@ -42,6 +40,8 @@ export interface CreatorSlotView {
   sourcePx: Rect
   crop: CropWindowInts
   shape: PhotoShape
+  /** Effective transform after the composed domain clamps — what the window actually used. */
+  effective: CropTransform
 }
 
 export interface CreatorNoteView {
@@ -92,26 +92,29 @@ function uniquePhotos(photos: CreatorPhoto[]): Map<string, CreatorPhoto> {
 }
 
 /**
- * Aspect-preserving source window for one slot: center-cover base,
- * source-bounded manual transform, sealed quantization, then the
- * destination-vs-rounded-source aspect gate. Refuses instead of
- * stretching.
+ * Aspect-preserving source window for one slot: the stored UI transform
+ * is clamped into the frozen control domain FIRST, then the
+ * source-bounded editor clamp plus structural/aspect checks
+ * (`correctEditorCrop`). Refuses instead of stretching. Returns the
+ * effective transform alongside the slot so readout and preview agree.
  */
 export function previewSlot(
   tile: { photoId: string; rect: Rect; shape: string },
   photo: CreatorPhoto,
   transform: CropTransform | null,
-): CreatorSlotView {
+): CreatorSlotView & { effective: CropTransform } {
   if (tile.rect.width <= 0 || tile.rect.height <= 0) fail(`creator slot has a non-positive destination for ${tile.photoId}`)
   const base = centerCoverBase(photo.width, photo.height, tile.rect.width, tile.rect.height)
   if (!base) fail(`creator slot has impossible dimensions for ${tile.photoId}`)
-  const clamped = clampEditorCrop(base, transform ?? { z: 1, xPercent: 0, yPercent: 0 })
-  if (!clamped) fail(`creator crop is outside its source for ${tile.photoId}`)
-  const window = sourceWindow(base, clamped)
-  if (!window) fail(`creator crop inversion failed for ${tile.photoId}`)
-  const admitted = correctCrop(base, { width: tile.rect.width, height: tile.rect.height }, photo.width, photo.height, clamped)
+  const admitted = correctEditorCrop(
+    base,
+    { width: tile.rect.width, height: tile.rect.height },
+    photo.width,
+    photo.height,
+    transform ?? { z: 1, xPercent: 0, yPercent: 0 },
+  )
   if (!admitted.accepted) fail(`creator crop refused for ${tile.photoId}: ${admitted.reason}`)
-  const crop = toCropWindow(window)
+  const crop = toCropWindow(admitted.window)
   const source = sourceRect(crop, photo.width, photo.height)
   if (!source) fail(`creator crop window degenerates for ${tile.photoId}`)
   const destinationAspect = tile.rect.width / tile.rect.height
@@ -125,6 +128,7 @@ export function previewSlot(
     sourcePx: source,
     crop,
     shape: tile.shape as PhotoShape,
+    effective: admitted.transform,
   }
 }
 
@@ -133,6 +137,29 @@ export interface PreviewInput {
   sender: string
   photos: CreatorPhoto[]
   note: string | null
+}
+
+/**
+ * Adapts the injected browser `TextMeasurer` to the grammar-5 note
+ * contract. Line count is derived from the measured height at the
+ * requested line box (`round(height / line)`); the caller must pass a
+ * measurer whose height is a whole number of line boxes for wrapped
+ * text (the provided canvas measurer lays out whole lines).
+ */
+export function plannerFromTextMeasurer(measurer: TextMeasurer, maxWidth: number, maxHeight: number): Grammar5Measure {
+  return (text, width, size, line, font) => {
+    const measured = measurer.measure({
+      text,
+      family: font,
+      size,
+      weight: 400,
+      italic: false,
+      line,
+      maxWidth: Math.min(width, maxWidth),
+      maxHeight,
+    })
+    return { height: measured.height, lines: Math.max(1, Math.round(measured.height / line)) }
+  }
 }
 
 function planInput(input: PreviewInput): Grammar5Input {
@@ -148,14 +175,17 @@ function planInput(input: PreviewInput): Grammar5Input {
  * Complete deterministic enumeration: one ordered view per grammar-5
  * branch, slots in plan (authored) order. `transforms` is keyed by
  * photo content id so manual crops survive reorder and branch switches.
- * Throws the plan layer's typed refusal for unsupported input.
+ * `measure` overrides the T233 line-height stub with real note metrics;
+ * when omitted the stub keeps unit parity exact. Throws the plan
+ * layer's typed refusal for unsupported input.
  */
 export function previewCandidates(
   input: PreviewInput,
   transforms?: ReadonlyMap<string, CropTransform>,
+  measure?: Grammar5Measure,
 ): CreatorCandidateView[] {
   const byId = uniquePhotos(input.photos)
-  const plans = grammar5Plans(planInput(input))
+  const plans = grammar5Plans(planInput(input), undefined, measure)
   return plans.map((plan) => previewCandidate(plan, byId, transforms))
 }
 

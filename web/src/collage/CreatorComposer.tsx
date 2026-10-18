@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { panDelta, type CropTransform } from './crop'
+import { clampTransform, type CropTransform } from './crop'
 import {
   creatorScene,
+  plannerFromTextMeasurer,
   previewCandidates,
   type CreatorCandidateView,
 } from './creatorPreview'
-import { freezeSelection, type CreatorFreeze, type CreatorSlotFreeze } from '../create/creatorFreeze'
+import { freezeSelection, freezeValid, type CreatorFreeze, type CreatorSlotFreeze, type FreezeCurrent } from '../create/creatorFreeze'
 import { paintScene, type PaintImage } from './paint'
 import type { TextMeasurer } from './prepare'
 import { styleById } from './styles'
 import type { SessionStore } from '../session/session'
+import type { Grammar5Measure } from './planGrammar5'
 import './creatorComposer.css'
 
 export type CreatorLang = 'en' | 'ru' | 'uk'
@@ -35,11 +37,14 @@ export interface CreatorComposerProps {
   musicSelected: boolean
   styleId?: string
   recipient: CreatorComposerRecipient | null
+  /** Explicit sender handle (same owner). Falls back to the live session handle. */
+  senderHandle?: string
   ownerId: string
   session: SessionStore
   lang: CreatorLang
   measurer: TextMeasurer
-  onFreeze?: (frozen: CreatorFreeze) => void
+  /** Parent-visible freeze lifecycle: snapshot on freeze, null on every invalidation/teardown/unmount. */
+  onFrozenChange?: (frozen: CreatorFreeze | null) => void
 }
 
 interface Copy {
@@ -56,11 +61,14 @@ interface Copy {
   panRight: string
   reset: string
   freeze: string
+  preparing: string
   frozen: (branch: string) => string
   musicUnsupported: string
   noRecipient: string
+  noSender: string
   noteOverflow: string
   noteMissing: string
+  notReady: string
   locked: string
   empty: string
   preview: string
@@ -82,11 +90,14 @@ const copy: Record<CreatorLang, Copy> = {
     panRight: 'Move right',
     reset: 'Reset crop',
     freeze: 'Freeze selection',
+    preparing: 'Preparing preview…',
     frozen: (branch) => `Frozen ${branch} — edit to invalidate`,
     musicUnsupported: 'Music is not yet supported for this composition — Freeze is disabled.',
     noRecipient: 'Confirm a recipient to freeze.',
+    noSender: 'Confirm a sender to compose.',
     noteOverflow: 'Note does not fit its region — Freeze is disabled.',
     noteMissing: 'A sealed note region requires note text — Freeze is disabled.',
+    notReady: 'Preview is not ready yet — Freeze is disabled.',
     locked: 'Locked — preview cleared.',
     empty: 'Add 3–5 photos to compose.',
     preview: 'Candidate preview',
@@ -106,11 +117,14 @@ const copy: Record<CreatorLang, Copy> = {
     panRight: 'Вправо',
     reset: 'Сбросить кадрирование',
     freeze: 'Зафиксировать выбор',
+    preparing: 'Готовим предпросмотр…',
     frozen: (branch) => `Зафиксировано: ${branch} — изменение сбросит фиксацию`,
     musicUnsupported: 'Музыка пока не поддерживается в этой композиции — фиксация отключена.',
     noRecipient: 'Подтвердите получателя для фиксации.',
+    noSender: 'Подтвердите отправителя для композиции.',
     noteOverflow: 'Текст не помещается в область — фиксация отключена.',
     noteMissing: 'Для области заметки нужен текст — фиксация отключена.',
+    notReady: 'Предпросмотр ещё не готов — фиксация отключена.',
     locked: 'Заблокировано — предпросмотр очищен.',
     empty: 'Добавьте 3–5 фото для композиции.',
     preview: 'Предпросмотр варианта',
@@ -130,11 +144,14 @@ const copy: Record<CreatorLang, Copy> = {
     panRight: 'Вправо',
     reset: 'Скинути кадрування',
     freeze: 'Зафіксувати вибір',
+    preparing: 'Готуємо попередній перегляд…',
     frozen: (branch) => `Зафіксовано: ${branch} — зміна скине фіксацію`,
     musicUnsupported: 'Музика поки не підтримується в цій композиції — фіксація вимкнена.',
     noRecipient: 'Підтвердіть отримувача для фіксації.',
+    noSender: 'Підтвердіть відправника для композиції.',
     noteOverflow: 'Текст не вміщується в область — фіксація вимкнена.',
     noteMissing: 'Для області нотатки потрібен текст — фіксація вимкнена.',
+    notReady: 'Попередній перегляд ще не готовий — фіксація вимкнена.',
     locked: 'Заблоковано — попередній перегляд очищено.',
     empty: 'Додайте 3–5 фото для композиції.',
     preview: 'Попередній перегляд варіанта',
@@ -151,73 +168,138 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const [planIndex, setPlanIndex] = useState(0)
   const [activeSlot, setActiveSlot] = useState(0)
   const [transforms, setTransforms] = useState<Record<string, CropTransform>>({})
+  const [views, setViews] = useState<CreatorCandidateView[] | null>(null)
+  const [planError, setPlanError] = useState<string | null>(null)
   const [frozen, setFrozen] = useState<CreatorFreeze | null>(null)
   const [freezeError, setFreezeError] = useState<string | null>(null)
   const [paintError, setPaintError] = useState<string | null>(null)
   const [noteFits, setNoteFits] = useState(true)
+  const [readySig, setReadySig] = useState<string | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const epochRef = useRef(0)
-  const frozenSigRef = useRef<string | null>(null)
+  const frozenRef = useRef<CreatorFreeze | null>(null)
+  const onFrozenChangeRef = useRef(props.onFrozenChange)
+  onFrozenChangeRef.current = props.onFrozenChange
+  const notifyFrozen = (value: CreatorFreeze | null): void => {
+    onFrozenChangeRef.current?.(value)
+  }
 
   const locked = snap.phase === 'signed-out' || snap.phase === 'authenticated'
   const ownerMismatch = snap.accountId !== null && snap.accountId !== props.ownerId
   const tornDown = locked || ownerMismatch
 
-  const candidates: CreatorCandidateView[] | null = useMemo(() => {
-    try {
-      return previewCandidates(
-        {
-          id: 'creator',
-          sender: 'creator',
-          photos: props.photos.map((photo) => ({
-            contentId: photo.contentId,
-            width: photo.width,
-            height: photo.height,
-            contentHash: photo.contentHash,
-          })),
-          note: props.note,
-        },
-        new Map(Object.entries(transforms)),
-      )
-    } catch {
-      return null
+  const explicitSender = props.senderHandle !== undefined && props.senderHandle.trim() !== '' ? props.senderHandle.trim() : null
+  const sessionSender = snap.handle !== null && snap.handle.trim() !== '' ? snap.handle.trim() : null
+  const senderHandle = explicitSender ?? sessionSender
+
+  const photosKey = useMemo(
+    () => JSON.stringify(props.photos.map((photo) => [photo.contentId, photo.width, photo.height, photo.contentHash])),
+    [props.photos],
+  )
+  const transformsKey = useMemo(() => JSON.stringify(transforms), [transforms]);
+
+  // Plan with REAL note geometry: required bundled faces load first, then
+  // the injected measurer drives the grammar-5 row decision (short vs
+  // multi-line/regular) through the same T233 seam — never the stub.
+  useEffect(() => {
+    if (tornDown) return
+    const epoch = ++epochRef.current
+    setPlanError(null)
+    void (async () => {
+      try {
+        const style = styleById(styleId)
+        if (!style) throw new Error(`unknown style ${styleId}`)
+        await Promise.all([
+          document.fonts.load(`400 ${27}px StudySerif`),
+          document.fonts.load(`${style.note.weight} ${style.note.size}px ${style.note.font}`),
+          document.fonts.load('400 64px StudySerif'),
+          document.fonts.load('italic 400 20px StudySerif'),
+        ])
+        if (cancelledOrStale(epoch)) return
+        const planner: Grammar5Measure = plannerFromTextMeasurer(props.measurer, 640, 640)
+        const planned = previewCandidates(
+          {
+            id: 'creator',
+            sender: senderHandle ?? 'creator',
+            photos: props.photos.map((photo) => ({
+              contentId: photo.contentId,
+              width: photo.width,
+              height: photo.height,
+              contentHash: photo.contentHash,
+            })),
+            note: props.note,
+          },
+          new Map(Object.entries(transforms)),
+          planner,
+        )
+        if (cancelledOrStale(epoch)) return
+        setViews(planned)
+      } catch (error) {
+        if (cancelledOrStale(epoch)) return
+        setPlanError(error instanceof Error ? error.message : String(error))
+        setViews(null)
+      }
+    })()
+    function cancelledOrStale(run: number): boolean {
+      return run !== epochRef.current
     }
-  }, [props.photos, props.note, transforms])
+    return () => {
+      epochRef.current += 1
+    }
+  }, [photosKey, props.note, transformsKey, styleId, tornDown, senderHandle, props.measurer, props.photos, transforms])
 
-  const view = candidates !== null ? candidates[Math.min(planIndex, candidates.length - 1)] ?? null : null
+  const view = views !== null ? views[Math.min(planIndex, views.length - 1)] ?? null : null
 
-  const signature = useMemo(() => {
+  const currentFreeze: FreezeCurrent | null = useMemo(() => {
     if (view === null) return null
-    return JSON.stringify({
-      branch: view.branch,
-      style: styleId,
-      slots: view.slots.map((slot) => [slot.photoId, slot.sourcePx, slot.crop]),
-      note: props.note,
-      music: props.musicSelected,
+    return {
+      branchId: view.branch,
+      styleId,
+      styleVersion: styleById(styleId)?.version ?? '',
+      slots: view.slots.map((slot, index) => {
+        const meta = props.photos.find((photo) => photo.contentId === slot.photoId)
+        return {
+          contentId: slot.photoId,
+          ordinal: index,
+          contentHash: meta?.contentHash ?? '',
+          widthPx: meta?.width ?? 0,
+          heightPx: meta?.height ?? 0,
+          crop: { ...slot.crop },
+        }
+      }),
+      note: props.note && props.note.trim() !== '' ? props.note : null,
+      ownerId: props.ownerId,
+      sessionGeneration: snap.generation,
       recipient:
         props.recipient === null
           ? null
-          : [props.recipient.userId, props.recipient.keyBundleId, props.recipient.directoryVersion],
-      owner: props.ownerId,
-      generation: snap.generation,
-    })
-  }, [view, styleId, props.note, props.musicSelected, props.recipient, props.ownerId, snap.generation])
-
-  // Explicit invalidation: any listed input/context change drops the freeze.
-  useEffect(() => {
-    if (frozen !== null && signature !== frozenSigRef.current) {
-      frozenSigRef.current = null
-      setFrozen(null)
+          : {
+              userId: props.recipient.userId,
+              keyBundleId: props.recipient.keyBundleId,
+              directoryVersion: props.recipient.directoryVersion,
+            },
     }
-  }, [frozen, signature])
+  }, [view, styleId, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
+
+  const signature = useMemo(() => (currentFreeze === null ? null : JSON.stringify(currentFreeze)), [currentFreeze])
+
+  // Explicit parent-visible invalidation: the holder's snapshot becomes
+  // unusable on any listed input/context change (checked with the same
+  // gate the freeze tests use).
+  useEffect(() => {
+    if (frozen !== null && currentFreeze !== null && freezeValid(frozen, currentFreeze).ok === false) {
+      frozenRef.current = null
+      setFrozen(null)
+      notifyFrozen(null)
+    }
+  }, [frozen, currentFreeze])
 
   // Sensitive teardown on lock/owner change and on unmount: clear the
-  // canvas, drop the frozen snapshot, fence every async continuation.
+  // canvas, drop the frozen snapshot (parent notified), fence async.
   useEffect(() => {
     if (!tornDown) return
     epochRef.current += 1
-    frozenSigRef.current = null
-    setFrozen(null)
+    setReadySig(null)
     setFreezeError(null)
     const canvas = canvasRef.current
     const context = canvas?.getContext('2d')
@@ -226,19 +308,24 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       context.clearRect(0, 0, canvas.width, canvas.height)
       canvas.dataset['painted'] = 'cleared'
     }
+    if (frozenRef.current !== null) {
+      frozenRef.current = null
+      setFrozen(null)
+      notifyFrozen(null)
+    }
   }, [tornDown])
 
   useEffect(() => {
-    if (planIndex >= (candidates?.length ?? 1)) setPlanIndex(0)
-  }, [candidates, planIndex])
+    if (views !== null && planIndex >= views.length) setPlanIndex(0)
+  }, [views, planIndex])
 
   useEffect(() => {
-    if (activeSlot >= (view?.slots.length ?? 1)) setActiveSlot(0)
+    if (view !== null && activeSlot >= view.slots.length) setActiveSlot(0)
   }, [view, activeSlot])
 
-  // Preview paint: pure adapter → creator scene → real paintScene.
-  // Async font loads are fenced by the paint epoch; stale completions
-  // never touch DOM or canvas.
+  // Preview paint: real scene → real paint. Async font loads are fenced;
+  // stale completions never touch DOM or canvas. A completed paint for
+  // the current inputs arms the ready gate that Freeze requires.
   useEffect(() => {
     if (tornDown || view === null) return
     const epoch = ++epochRef.current
@@ -250,6 +337,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       try {
         const style = styleById(styleId)
         if (!style) throw new Error(`unknown style ${styleId}`)
+        if (senderHandle === null) throw new Error('no sender')
         const images = new Map<string, PaintImage>()
         for (const photo of props.photos) {
           images.set(photo.contentId, { source: photo.image, width: photo.width, height: photo.height })
@@ -257,11 +345,11 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         const scene = creatorScene({
           view,
           styleId,
-          senderHandle: props.recipient?.handle ?? 'creator',
+          senderHandle,
           noteText: props.note && props.note.trim() !== '' ? props.note : null,
           photos: new Map(props.photos.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
         })
-        if (cancelled || epochRef.current !== epoch) return
+        if (cancelled || epoch !== epochRef.current) return
         if (scene.note) {
           const measurement = props.measurer.measure({
             text: scene.note.text,
@@ -279,25 +367,25 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
             measurement.height >= 1 &&
             measurement.width <= scene.note.region.width &&
             measurement.height <= scene.note.region.height
-          if (cancelled || epochRef.current !== epoch) return
+          if (cancelled || epoch !== epochRef.current) return
           setNoteFits(fits)
           if (!fits) {
+            setReadySig(null)
+            context.setTransform(1, 0, 0, 1, 0, 0)
+            context.clearRect(0, 0, canvas.width, canvas.height)
             canvas.dataset['painted'] = 'refused-note'
             return
           }
         } else {
           setNoteFits(true)
         }
-        const faces = new Set<string>()
-        for (const mark of scene.provenance) faces.add(`${mark.weight} ${mark.size}px ${mark.family}`)
-        await Promise.all([...faces].map((face) => document.fonts.load(face)))
-        if (cancelled || epochRef.current !== epoch) return
         const painted = paintScene(context, scene, images, null)
-        if (cancelled || epochRef.current !== epoch) return
+        if (cancelled || epoch !== epochRef.current) return
         setPaintError(null)
         canvas.dataset['painted'] = painted ? 'ready' : 'refused'
+        if (signature !== null) setReadySig(signature)
       } catch (error) {
-        if (cancelled || epochRef.current !== epoch) return
+        if (cancelled || epoch !== epochRef.current) return
         setPaintError(error instanceof Error ? error.message : String(error))
         canvas.dataset['painted'] = 'refused'
       }
@@ -305,13 +393,18 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     return () => {
       cancelled = true
     }
-  }, [view, props.photos, props.note, props.measurer, props.recipient, styleId, tornDown])
+  }, [view, props.photos, props.note, props.measurer, styleId, tornDown, senderHandle, signature])
 
-  // Unmount: fence async work. Caller owns image sources; we only drop refs.
+  // Unmount: fence async work and release the parent snapshot.
   useEffect(() => {
     const epoch = epochRef
+    const notify = notifyFrozen
     return () => {
       epoch.current += 1
+      if (frozenRef.current !== null) {
+        frozenRef.current = null
+        notify(null)
+      }
     }
   }, [])
 
@@ -323,36 +416,53 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     )
   }
 
-  if (candidates === null || view === null) {
+  if (planError !== null) {
     return (
       <div className="creator-composer" data-testid="creator-composer">
         <p data-testid="creator-empty">{t.empty}</p>
-        {paintError !== null ? <p data-testid="creator-paint-error">{paintError}</p> : null}
+        <p data-testid="creator-paint-error">{planError}</p>
+      </div>
+    )
+  }
+
+  if (views === null || view === null) {
+    return (
+      <div className="creator-composer" data-testid="creator-composer">
+        <p data-testid="creator-preparing">{t.preparing}</p>
       </div>
     )
   }
 
   const activePhotoId = view.slots[activeSlot]?.photoId ?? null
-  const activeTransform = (activePhotoId !== null ? transforms[activePhotoId] : undefined) ?? IDENTITY_CROP
+  const activeTransform: CropTransform = view.slots[activeSlot]?.effective ?? IDENTITY_CROP
 
   const setActiveTransform = (next: CropTransform): void => {
     if (activePhotoId === null) return
-    const z = Math.min(1.25, Math.max(1, next.z))
-    const clamped = { z, xPercent: Math.min(60, Math.max(-60, next.xPercent)), yPercent: Math.min(60, Math.max(-60, next.yPercent)) }
-    setTransforms((prev) => ({ ...prev, [activePhotoId]: clamped }))
+    // Frozen control domain first: z∈[1,1.25], pan into (z−1)*50,
+    // z=1 ⇒ exactly 0. Readout, stored state, and preview agree.
+    const frozen = clampTransform(next.z, next.xPercent, next.yPercent) ?? IDENTITY_CROP
+    setTransforms((prev) => ({ ...prev, [activePhotoId]: frozen }))
   }
 
-  const freezeState = (() => {
-    if (props.musicSelected) return { disabled: true, reason: t.musicUnsupported } as const
-    if (props.recipient === null) return { disabled: true, reason: t.noRecipient } as const
-    if (view.note !== null && (props.note === null || props.note.trim() === '')) return { disabled: true, reason: t.noteMissing } as const
-    if (!noteFits) return { disabled: true, reason: t.noteOverflow } as const
-    return { disabled: false, reason: null } as const
+  const freezeBlocked: { disabled: boolean; reason: string | null } = (() => {
+    if (senderHandle === null) return { disabled: true, reason: t.noSender }
+    if (props.musicSelected) return { disabled: true, reason: t.musicUnsupported }
+    if (props.recipient === null) return { disabled: true, reason: t.noRecipient }
+    if (view.note !== null && (props.note === null || props.note.trim() === '')) return { disabled: true, reason: t.noteMissing }
+    if (!noteFits) return { disabled: true, reason: t.noteOverflow }
+    if (readySig === null || readySig !== signature) return { disabled: true, reason: t.notReady }
+    return { disabled: false, reason: null }
   })()
 
   const handleFreeze = (): void => {
-    if (freezeState.disabled || view === null) {
-      setFreezeError(freezeState.reason)
+    if (freezeBlocked.disabled || view === null) return
+    // Re-check live owner/session context at click time: never freeze
+    // from a stale render, and never emit a non-null callback torn down.
+    const live = props.session.getSnapshot()
+    const liveTornDown =
+      live.phase === 'signed-out' || live.phase === 'authenticated' || (live.accountId !== null && live.accountId !== props.ownerId)
+    if (liveTornDown) {
+      dropIfStale()
       return
     }
     const style = styleById(styleId)
@@ -377,7 +487,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       noteFits,
       musicSelected: props.musicSelected,
       ownerId: props.ownerId,
-      sessionGeneration: snap.generation,
+      sessionGeneration: live.generation,
       recipient:
         props.recipient === null
           ? null
@@ -390,13 +500,22 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     if (!result.ok) {
       setFreezeError(result.reason)
       setFrozen(null)
-      frozenSigRef.current = null
+      frozenRef.current = null
+      notifyFrozen(null)
       return
     }
     setFreezeError(null)
     setFrozen(result.frozen)
-    frozenSigRef.current = signature
-    props.onFreeze?.(result.frozen)
+    frozenRef.current = result.frozen
+    notifyFrozen(result.frozen)
+  }
+
+  function dropIfStale(): void {
+    if (frozenRef.current !== null) {
+      frozenRef.current = null
+      setFrozen(null)
+      notifyFrozen(null)
+    }
   }
 
   return (
@@ -405,13 +524,13 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         <button type="button" data-testid="creator-prev" aria-label={t.prev} disabled={planIndex === 0} onClick={() => setPlanIndex((i) => Math.max(0, i - 1))}>
           ‹
         </button>
-        <span data-testid="creator-count">{t.count(planIndex, candidates.length)}</span>
+        <span data-testid="creator-count">{t.count(planIndex, views.length)}</span>
         <button
           type="button"
           data-testid="creator-next"
           aria-label={t.next}
-          disabled={planIndex === candidates.length - 1}
-          onClick={() => setPlanIndex((i) => Math.min(candidates.length - 1, i + 1))}
+          disabled={planIndex === views.length - 1}
+          onClick={() => setPlanIndex((i) => Math.min(views.length - 1, i + 1))}
         >
           ›
         </button>
@@ -441,28 +560,16 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         <button type="button" data-testid="creator-zoom-in" aria-label={t.zoomIn} onClick={() => setActiveTransform({ ...activeTransform, z: activeTransform.z + 0.05 })}>
           +
         </button>
-        <button type="button" data-testid="creator-pan-left" aria-label={t.panLeft} onClick={() => {
-          const delta = panDelta('left')
-          setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent + delta.xPercent, yPercent: activeTransform.yPercent + delta.yPercent })
-        }}>
+        <button type="button" data-testid="creator-pan-left" aria-label={t.panLeft} onClick={() => setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent - 1, yPercent: activeTransform.yPercent })}>
           ←
         </button>
-        <button type="button" data-testid="creator-pan-right" aria-label={t.panRight} onClick={() => {
-          const delta = panDelta('right')
-          setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent + delta.xPercent, yPercent: activeTransform.yPercent + delta.yPercent })
-        }}>
+        <button type="button" data-testid="creator-pan-right" aria-label={t.panRight} onClick={() => setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent + 1, yPercent: activeTransform.yPercent })}>
           →
         </button>
-        <button type="button" data-testid="creator-pan-up" aria-label={t.panUp} onClick={() => {
-          const delta = panDelta('up')
-          setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent + delta.xPercent, yPercent: activeTransform.yPercent + delta.yPercent })
-        }}>
+        <button type="button" data-testid="creator-pan-up" aria-label={t.panUp} onClick={() => setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent, yPercent: activeTransform.yPercent - 1 })}>
           ↑
         </button>
-        <button type="button" data-testid="creator-pan-down" aria-label={t.panDown} onClick={() => {
-          const delta = panDelta('down')
-          setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent + delta.xPercent, yPercent: activeTransform.yPercent + delta.yPercent })
-        }}>
+        <button type="button" data-testid="creator-pan-down" aria-label={t.panDown} onClick={() => setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent, yPercent: activeTransform.yPercent + 1 })}>
           ↓
         </button>
         <button
@@ -481,8 +588,8 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         </button>
         <span data-testid="creator-transform-readout">{t.transform(activeTransform.z, activeTransform.xPercent, activeTransform.yPercent)}</span>
       </div>
-      {freezeState.reason !== null ? <p data-testid="creator-freeze-blocked">{freezeState.reason}</p> : null}
-      <button type="button" data-testid="creator-freeze" disabled={freezeState.disabled} onClick={handleFreeze}>
+      {freezeBlocked.reason !== null ? <p data-testid="creator-freeze-blocked">{freezeBlocked.reason}</p> : null}
+      <button type="button" data-testid="creator-freeze" disabled={freezeBlocked.disabled} onClick={handleFreeze}>
         {t.freeze}
       </button>
       {frozen !== null ? (

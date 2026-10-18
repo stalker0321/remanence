@@ -159,14 +159,7 @@ describe('capsule keyset generator', () => {
     }
   })
 
-  it('wipes every owned secret intermediate while the returned keyset stays usable', () => {
-    const wiped: Uint8Array[] = []
-    const realFill = Uint8Array.prototype.fill
-    vi.spyOn(Uint8Array.prototype, 'fill').mockImplementation((function (this: Uint8Array, value: number, start?: number, end?: number) {
-      if (value === 0) wiped.push(this)
-      return realFill.call(this, value, start, end)
-    }) as unknown as typeof Uint8Array.prototype.fill)
-
+  it('copies the raw key exactly once into the final keyset buffer (no secret wrapper temporaries)', () => {
     let rawCaptured: Uint8Array | null = null
     const realRandom = crypto.getRandomValues.bind(crypto) as (array: Uint8Array) => Uint8Array
     vi.spyOn(crypto, 'getRandomValues').mockImplementation(((array: Uint8Array) => {
@@ -175,35 +168,89 @@ describe('capsule keyset generator', () => {
       return out
     }) as unknown as typeof crypto.getRandomValues)
 
+    // Observe every copy of the raw secret BEFORE cleanup. By construction the
+    // only `set(rawKey, ...)` is the single copy into the final output buffer —
+    // there are no `protoBytes`/`concat` wrapper temporaries holding the key.
+    const copies: Array<{ target: Uint8Array; source: Uint8Array }> = []
+    const realSet = Uint8Array.prototype.set
+    vi.spyOn(Uint8Array.prototype, 'set').mockImplementation((function (this: Uint8Array, source: ArrayLike<number>, offset?: number) {
+      if (source instanceof Uint8Array && rawCaptured !== null && sameBytes(source, rawCaptured)) {
+        copies.push({ target: this, source })
+      }
+      return realSet.call(this, source, offset ?? 0)
+    }) as unknown as typeof Uint8Array.prototype.set)
+
     const keyset = generateCapsuleKeyset()
     const raw = rawCaptured as Uint8Array | null
     expect(raw).not.toBeNull()
-    expect(raw!.every((value) => value === 0)).toBe(true)
-    expect(wiped).toContain(raw)
-    expect(wiped.length).toBeGreaterThanOrEqual(4)
-    expect(wiped.every((buffer) => buffer.every((value) => value === 0))).toBe(true)
-    // Returned serialized keyset is NOT wiped, parses and remains usable.
+    expect(raw!.every((value) => value === 0)).toBe(true) // raw wiped in finally
+    expect(copies.length).toBe(1) // raw key copied exactly once
+    expect(copies[0]!.target).toBe(keyset) // ... straight into the returned final buffer
+    // Returned serialized keyset is NOT wiped and remains usable.
     expect(keyset.some((value) => value !== 0)).toBe(true)
     expect(parseAes256GcmKeyset(keyset).key.length).toBe(32)
     keyset.fill(0) // test-owned cleanup
   })
 
-  it('rethrows a CSPRNG failure after the raw key exists, wiping it (no fallback output)', () => {
-    let rawCaptured: Uint8Array | null = null
+  it('wipes the preallocated raw key when the very first CSPRNG call fills then throws', () => {
+    let supplied: Uint8Array | null = null
+    vi.spyOn(crypto, 'getRandomValues').mockImplementation(((array: Uint8Array) => {
+      supplied = array
+      array.fill(0x5a, 0, 8) // partial fill before failure
+      throw new Error('csprng-partial-fill')
+    }) as unknown as typeof crypto.getRandomValues)
+    expect(() => generateCapsuleKeyset()).toThrow('csprng-partial-fill')
+    const raw = supplied as Uint8Array | null
+    expect(raw).not.toBeNull()
+    expect(raw!.some((value) => value !== 0)).toBe(false) // finally wiped the tracked buffer
+  })
+
+  it('rethrows a key-id CSPRNG failure after the raw key exists, wiping both owned buffers', () => {
+    let rawSupplied: Uint8Array | null = null
+    let idSupplied: Uint8Array | null = null
     let calls = 0
     vi.spyOn(crypto, 'getRandomValues').mockImplementation(((array: Uint8Array) => {
       calls += 1
       if (array.length === 32) {
+        rawSupplied = array
         array.fill(0x5a)
-        rawCaptured = array
         return array
       }
-      throw new Error('csprng-failure')
+      if (array.length === 4) {
+        idSupplied = array
+        array.fill(0x11, 0, 2)
+        throw new Error('csprng-failure')
+      }
+      throw new Error(`unexpected RNG length ${array.length}`)
     }) as unknown as typeof crypto.getRandomValues)
     expect(() => generateCapsuleKeyset()).toThrow('csprng-failure')
     expect(calls).toBe(2)
-    const raw = rawCaptured as Uint8Array | null
+    expect((rawSupplied as unknown as Uint8Array).every((value) => value === 0)).toBe(true)
+    expect((idSupplied as unknown as Uint8Array).every((value) => value === 0)).toBe(true)
+  })
+
+  it('wipes the raw key and the partial output if the final output write fails', () => {
+    let rawSupplied: Uint8Array | null = null
+    const realRandom = crypto.getRandomValues.bind(crypto) as (array: Uint8Array) => Uint8Array
+    vi.spyOn(crypto, 'getRandomValues').mockImplementation(((array: Uint8Array) => {
+      const out = realRandom(array)
+      if (array.length === 32) rawSupplied = out
+      return out
+    }) as unknown as typeof crypto.getRandomValues)
+    let partial: Uint8Array | null = null
+    const realSet = Uint8Array.prototype.set
+    vi.spyOn(Uint8Array.prototype, 'set').mockImplementation((function (this: Uint8Array, source: ArrayLike<number>, offset?: number) {
+      if (source === rawSupplied) {
+        partial = this
+        throw new Error('serialization-failure')
+      }
+      return realSet.call(this, source, offset ?? 0)
+    }) as unknown as typeof Uint8Array.prototype.set)
+    expect(() => generateCapsuleKeyset()).toThrow('serialization-failure')
+    const raw = rawSupplied as Uint8Array | null
     expect(raw).not.toBeNull()
     expect(raw!.every((value) => value === 0)).toBe(true)
+    expect(partial).not.toBeNull()
+    expect((partial as unknown as Uint8Array).every((value) => value === 0)).toBe(true)
   })
 })

@@ -215,7 +215,7 @@ async function main(): Promise<void> {
     const stored = await storedFixture()
     assert('stored fixture is a JPEG', stored[0] === 0xff && stored[1] === 0xd8)
     const raw = await bitmapOf(stored, 'none')
-    assert('stored decodes 6x4 unoriented', raw.width === 6 && raw.height === 4)
+    assert('stored decodes 24x16 unoriented', raw.width === STORED_W && raw.height === STORED_H)
     const rawPixels = pixels(raw)
     assert(
       'stored quadrants hold the asymmetric pattern',

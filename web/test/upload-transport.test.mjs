@@ -208,6 +208,36 @@ describe('transport upload capability', () => {
     await expect(transport.uploadBytes(uploadRequest({ signal: bodyAbort.signal }))).rejects.toMatchObject({ code: 'CANCELLED' })
   })
 
+  it('returns CANCELLED at the resolved-success boundary when the signal is already aborted', async () => {
+    const transport = fetchTransport('http://127.0.0.1:9')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    // (a) fetch RESOLVES 204 while the signal is aborted during the request:
+    // the resolved-success boundary must not return success.
+    const resolved204 = new AbortController()
+    fetchSpy.mockImplementationOnce(async () => {
+      resolved204.abort()
+      return new Response(null, { status: 204 })
+    })
+    await expect(transport.uploadBytes(uploadRequest({ signal: resolved204.signal }))).rejects.toMatchObject({ code: 'CANCELLED' })
+
+    // (b1) the body read RESOLVES empty while the signal is aborted.
+    const resolvedEmpty = new AbortController()
+    fetchSpy.mockImplementationOnce(async () => {
+      resolvedEmpty.abort()
+      return new Response('', { status: 200 })
+    })
+    await expect(transport.uploadBytes(uploadRequest({ signal: resolvedEmpty.signal }))).rejects.toMatchObject({ code: 'CANCELLED' })
+
+    // (b2) the body read RESOLVES valid JSON while the signal is aborted.
+    const resolvedJson = new AbortController()
+    fetchSpy.mockImplementationOnce(async () => {
+      resolvedJson.abort()
+      return new Response(JSON.stringify({ code: 'STATUS' }), { status: 409, headers: { 'content-type': 'application/json' } })
+    })
+    await expect(transport.uploadBytes(uploadRequest({ signal: resolvedJson.signal }))).rejects.toMatchObject({ code: 'CANCELLED' })
+  })
+
   it('emits exactly one Idempotency-Key only on the draft POST and refuses elsewhere before fetch', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: true }), { status: 201, headers: { 'content-type': 'application/json' } }))
     const transport = fetchTransport('http://127.0.0.1:9')

@@ -116,6 +116,9 @@ export function fetchTransport(origin: string): ApiTransport & ByteTransport & U
         if (error instanceof AuthError) throw error
         throw new AuthError('TRANSPORT_FAILED')
       }
+      // Resolved-success boundary: if the signal aborted while the request was in
+      // flight but fetch still resolved, this is NOT success.
+      if (input.signal?.aborted) throw new AuthError('CANCELLED')
       if (response.status === 204) return { status: 204, body: null }
       let text: string
       try {
@@ -125,6 +128,9 @@ export function fetchTransport(origin: string): ApiTransport & ByteTransport & U
         if (error instanceof AuthError) throw error
         throw new AuthError('TRANSPORT_FAILED')
       }
+      // Resolved-body boundary: a body that resolved while the signal aborted is
+      // still a cancellation, never a success.
+      if (input.signal?.aborted) throw new AuthError('CANCELLED')
       if (text.length === 0) return { status: response.status, body: null }
       try {
         return { status: response.status, body: JSON.parse(text) as unknown }

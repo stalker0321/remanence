@@ -136,6 +136,11 @@ function categoryFor(code: string | null): string {
   return code !== null && Object.hasOwn(CATEGORY_BY_CODE, code) ? (CATEGORY_BY_CODE[code] as string) : 'http'
 }
 
+/** Typed UTC syntax AND a finite `Date.parse` — no freshness/clock-window policy. */
+function isUtcTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && UTC_TIMESTAMP.test(value) && Number.isFinite(Date.parse(value))
+}
+
 interface OwnedBlob {
   blobId: string
   kind: SealedCapsuleBlob['kind']
@@ -189,7 +194,8 @@ function refuse(stage: PublishStage, category: string, status?: number, code?: s
 function transportError(stage: PublishStage, error: unknown): PublishCapsuleError {
   if (error instanceof PublishCapsuleError) return error
   if (error instanceof AuthError) {
-    return refuse(stage, error.code === 'CANCELLED' ? 'cancelled' : 'transport')
+    const category = error.code === 'CANCELLED' ? 'cancelled' : error.code === 'STALE' ? 'stale' : 'transport'
+    return refuse(stage, category)
   }
   throw error
 }
@@ -228,6 +234,8 @@ export async function publishCapsule(input: PublishCapsuleInput): Promise<Publis
     const blob = owned.blobs[index]!
     if (!UUID.test(blob.blobId) || ids.has(blob.blobId)) throw refuse('preflight', 'contract')
     ids.add(blob.blobId)
+    // Unknown kinds are refused before any HTTP write (never left to the backend).
+    if (!Object.hasOwn(KIND_CAP, blob.kind)) throw refuse('preflight', 'contract')
     if (!Number.isInteger(blob.ciphertextSize) || blob.ciphertextSize < 1 || blob.ciphertextSize > KIND_CAP[blob.kind]) throw refuse('preflight', 'contract')
     if (!(blob.ciphertext instanceof Uint8Array) || blob.ciphertext.length !== blob.ciphertextSize) throw refuse('preflight', 'contract')
     if (!(blob.ciphertextSha256 instanceof Uint8Array) || blob.ciphertextSha256.length !== SHA256_BYTES) throw refuse('preflight', 'contract')
@@ -349,7 +357,7 @@ function readDraftReceipt(body: unknown, owned: OwnedCapsule): Set<string> {
   const root = record(body)
   if (!root || !exactKeys(root, ['capsule_id', 'state', 'draft_expires_at', 'blobs'])) throw refuse('draft', 'malformed')
   if (root.capsule_id !== owned.capsuleId || root.state !== 'DRAFT') throw refuse('draft', 'malformed')
-  if (typeof root.draft_expires_at !== 'string' || !UTC_TIMESTAMP.test(root.draft_expires_at)) throw refuse('draft', 'malformed')
+  if (!isUtcTimestamp(root.draft_expires_at)) throw refuse('draft', 'malformed')
   const blobs = root.blobs
   if (!Array.isArray(blobs) || blobs.length !== owned.blobs.length) throw refuse('draft', 'malformed')
   const stored = new Set<string>()
@@ -370,7 +378,7 @@ function readFinalizeReceipt(body: unknown, owned: OwnedCapsule): PublishedCapsu
   const keys = Object.keys(root)
   if (keys.length !== 3 && keys.length !== 5) throw refuse('finalize', 'malformed')
   if (root.capsule_id !== owned.capsuleId || root.state !== 'READY') throw refuse('finalize', 'malformed')
-  if (typeof root.ready_at !== 'string' || !UTC_TIMESTAMP.test(root.ready_at)) throw refuse('finalize', 'malformed')
+  if (!isUtcTimestamp(root.ready_at)) throw refuse('finalize', 'malformed')
   const hasCode = Object.hasOwn(root, 'locator_code')
   const hasHint = Object.hasOwn(root, 'locator_hint')
   if (hasCode !== hasHint) throw refuse('finalize', 'malformed')

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { b64 } from '../../server/src/remanence/recovery/web/crypto.mjs'
+import { AuthError } from '../src/auth/errors'
 import type { ApiRequest, ApiResult, ApiTransport, UploadRequest } from '../src/auth/http'
 import { utf8, bytesToHex } from '../src/protocol/bytes'
 import { nameUuidFromBytes } from '../src/protocol/uuid'
@@ -293,6 +294,64 @@ describe('production publishCapsule', () => {
     const b = makeTransport(capsuleB)
     await expect(publish({ ...fixture, capsule: capsuleB }, b.transport)).rejects.toMatchObject({ stage: 'preflight', category: 'contract' })
     expect(b.calls.draft).toHaveLength(0)
+  })
+
+  it('refuses regex-shaped but non-finite draft_expires_at/ready_at with no success', async () => {
+    const fixture = await buildSealedCapsuleFixture()
+    const impossible = ['2026-13-40T25:61:61Z', '2026-01-01T25:00:00Z']
+    for (const value of impossible) {
+      const draft = makeTransport(fixture.capsule, { draft: { status: 200, body: { ...(draftOk(fixture.capsule).body as object), draft_expires_at: value } } })
+      await expect(publish(fixture, draft.transport)).rejects.toMatchObject({ stage: 'draft', category: 'malformed' })
+      expect(draft.calls.uploads).toHaveLength(0)
+      expect(draft.calls.finalize).toHaveLength(0)
+
+      const finalize = makeTransport(fixture.capsule, { finalize: { status: 201, body: { ...(finalizeOk(fixture.capsule).body as object), ready_at: value } } })
+      await expect(publish(fixture, finalize.transport)).rejects.toMatchObject({ stage: 'finalize', category: 'malformed' })
+      expect(finalize.calls.finalize).toHaveLength(1)
+    }
+    // A genuine finite UTC case is still accepted.
+    const ok = makeTransport(fixture.capsule)
+    await expect(publish(fixture, ok.transport)).resolves.toEqual({ capsuleId: CAPSULE_UUID, readyAt: '2026-10-17T00:00:10Z', locator: null })
+  })
+
+  it('refuses an unknown blob kind in preflight with zero transport calls', async () => {
+    const fixture = await buildSealedCapsuleFixture()
+    const base = fixture.capsule.blobs[0]!
+    const unknown = { blobId: 'ffffffff-ffff-4fff-8fff-ffffffffffff', kind: 'BOGUS' as never, ordinal: -1, ciphertext: base.ciphertext.slice(), ciphertextSize: base.ciphertextSize, ciphertextSha256: base.ciphertextSha256.slice() }
+    const capsule = { ...fixture.capsule, blobs: [...fixture.capsule.blobs, unknown] }
+    const { transport, calls } = makeTransport(capsule)
+    await expect(publish({ ...fixture, capsule }, transport)).rejects.toMatchObject({ stage: 'preflight', category: 'contract' })
+    expect(calls.draft).toHaveLength(0)
+    expect(calls.uploads).toHaveLength(0)
+    expect(calls.finalize).toHaveLength(0)
+  })
+
+  it('maps a transport AuthError STALE to category stale (CANCELLED unchanged) with no later request', async () => {
+    const fixture = await buildSealedCapsuleFixture()
+    let uploads = 0
+    const stale = {
+      async request(): Promise<ApiResult> {
+        throw new AuthError('STALE')
+      },
+      async uploadBytes(): Promise<ApiResult> {
+        uploads += 1
+        return { status: 204, body: null }
+      },
+    }
+    await expect(publish(fixture, stale)).rejects.toMatchObject({ stage: 'draft', category: 'stale' })
+    expect(uploads).toBe(0)
+
+    const cancelled = {
+      async request(): Promise<ApiResult> {
+        throw new AuthError('CANCELLED')
+      },
+      async uploadBytes(): Promise<ApiResult> {
+        uploads += 1
+        return { status: 204, body: null }
+      },
+    }
+    await expect(publish(fixture, cancelled)).rejects.toMatchObject({ stage: 'draft', category: 'cancelled' })
+    expect(uploads).toBe(0)
   })
 
   it('does not mutate the caller-owned capsule arrays', async () => {

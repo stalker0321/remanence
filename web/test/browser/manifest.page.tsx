@@ -575,14 +575,18 @@ async function main(): Promise<void> {
       if (!snapshot) return
       const plan = snapshot.renderedPlan
       const result = await assembleFor(snapshot)
+      let recognitionPlain: Uint8Array | null = null
+      let opened: Awaited<ReturnType<typeof openGrantedPostcard>> | null = null
+      let receiverKeys: MemoryKeys | null = null
       try {
         // The recognition artifact is not decoded by production open, so prove it
         // really decrypts to the exact encoded plaintext (real AEAD + real AAD).
-        const recognitionPlain = await decryptArtifact(result.capsuleKeyset, result.recognition.aad, result.recognition.ciphertext, 'RECOGNITION_MANIFEST')
+        recognitionPlain = await decryptArtifact(result.capsuleKeyset, result.recognition.aad, result.recognition.ciphertext, 'RECOGNITION_MANIFEST')
         assert(`${label}: recognition artifact real-decrypts to the encoded plaintext`, sameBytes(recognitionPlain, result.recognition.plaintext))
         assert(`${label}: recognition blob id is the capsule byte0 tag`, result.recognition.blobId === deriveCapsuleBlobId(CAPSULE_UUID, 0x01))
 
         const { session: rxSession, keys } = settledSession()
+        receiverKeys = keys
         const envelopeShaB64 = await sha256B64(result.envelopeCiphertext)
         const transport = scriptedTransport(result, envelopeShaB64)
         const catalog = await fetchIncoming(rxSession, transport)
@@ -602,7 +606,7 @@ async function main(): Promise<void> {
         }
 
         const grant = ScanGrant.issue(RECIPIENT_ID, CAPSULE_UUID)
-        const opened = await openGrantedPostcard(rxSession, keys, grant, item, { blobId: result.content.blobId, ciphertext: contentCiphertext }, sealedPhotos, measurer)
+        opened = await openGrantedPostcard(rxSession, keys, grant, item, { blobId: result.content.blobId, ciphertext: contentCiphertext }, sealedPhotos, measurer)
         for (const photo of result.photos) {
           const returned = opened.photos.get(photo.contentId)
           const expected = normalizedByContentId.get(photo.contentId)!
@@ -694,6 +698,12 @@ async function main(): Promise<void> {
         }
         assert(`${label}: missing/wrong fixture grant cannot open (real GRANT guard)`, wrongGrantRejected)
       } finally {
+        // The receiver-returned decrypted JPEG copies and the separately decrypted
+        // recognition plaintext are owned by this fixture and wiped here; production
+        // open wipes only its own internal plains, not these caller-owned outputs.
+        recognitionPlain?.fill(0)
+        if (opened) for (const bytes of opened.photos.values()) bytes.fill(0)
+        receiverKeys?.drop()
         result.wipe()
       }
     }

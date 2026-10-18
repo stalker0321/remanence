@@ -11,6 +11,7 @@ import type { PhotoShape, Rect } from './model'
 import { sourceRect, type TextMeasurer } from './prepare'
 import { grammar5Plans, type Grammar5Input, type Grammar5Measure, type Grammar5Plan } from './planGrammar5'
 import { markLine } from './model'
+import { wrapNoteLines } from './creatorNote'
 import { opaqueColor, styleById } from './styles'
 import type { Scene } from './prepare'
 
@@ -168,17 +169,27 @@ export function plannerFromTextMeasurer(
   noteFace?: NoteFace,
 ): Grammar5Measure {
   return (text, width, size, line, font) => {
-    const measured = measurer.measure({
-      text,
-      family: noteFace?.font ?? font,
-      size,
-      weight: noteFace?.weight ?? 400,
-      italic: noteFace?.italic ?? false,
-      line,
-      maxWidth: Math.min(width, maxWidth),
-      maxHeight,
-    })
-    return { height: measured.height, lines: Math.max(1, Math.round(measured.height / line)) }
+    if (noteFace === undefined) {
+      const measured = measurer.measure({ text, family: font, size, weight: 400, italic: false, line, maxWidth: Math.min(width, maxWidth), maxHeight })
+      return { height: measured.height, lines: Math.max(1, Math.round(measured.height / line)) }
+    }
+    // Real creator note: use the SAME word-wrap the painter uses, with an
+    // unwrapped line-width primitive from the injected measurer
+    // (`softWrap:false` measures the widest literal line, no wrapping).
+    const measureLineWidth = (lineText: string): number =>
+      measurer.measure({
+        text: lineText,
+        family: noteFace.font,
+        size,
+        weight: noteFace.weight,
+        italic: noteFace.italic,
+        line,
+        maxWidth: Number.POSITIVE_INFINITY,
+        maxHeight: Number.POSITIVE_INFINITY,
+        softWrap: false,
+      }).width
+    const wrapped = wrapNoteLines(text, Math.min(width, maxWidth), measureLineWidth)
+    return { height: wrapped.lines.length * line, lines: wrapped.lines.length }
   }
 }
 

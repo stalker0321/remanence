@@ -7,6 +7,7 @@ import {
   type CreatorCandidateView,
 } from './creatorPreview'
 import { freezeSelection, freezeValid, type CreatorFreeze, type CreatorSlotFreeze, type FreezeCurrent } from '../create/creatorFreeze'
+import { layoutCreatorNote, paintCreatorNote, type CreatorNoteFace, type CreatorNoteLayout } from './creatorNote'
 import { paintScene, type PaintImage } from './paint'
 import type { TextMeasurer } from './prepare'
 import { styleById } from './styles'
@@ -253,7 +254,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
             height: photo.height,
             contentHash: photo.contentHash,
           })),
-          note: props.note,
+          note: props.note && props.note.trim() !== '' ? props.note : null,
         },
         new Map(Object.entries(transforms)),
         planner,
@@ -379,25 +380,37 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         noteText: props.note && props.note.trim() !== '' ? props.note : null,
         photos: new Map(props.photos.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
       })
+      // One shared wrapped layout drives BOTH the region (via the same
+      // wrap in `plannerFromTextMeasurer`) and the painted rows. The base
+      // scene is drawn WITHOUT its single-line note and the wrapper draws
+      // the real rows on top, so a measured 3/7-line note is fully visible.
+      let noteLayout: CreatorNoteLayout | null = null
+      let noteFace: CreatorNoteFace | null = null
       if (scene.note) {
-        const measurement = props.measurer.measure({
-          text: scene.note.text,
-          family: scene.note.family,
-          size: scene.note.size,
+        const face: CreatorNoteFace = {
+          font: scene.note.family,
           weight: scene.note.weight,
           italic: scene.note.italic,
+          size: scene.note.size,
           line: scene.note.line,
-          maxWidth: scene.note.region.width,
-          maxHeight: scene.note.region.height,
-        })
-        const fits =
-          !measurement.hasVisualOverflow &&
-          measurement.width >= 1 &&
-          measurement.height >= 1 &&
-          measurement.width <= scene.note.region.width &&
-          measurement.height <= scene.note.region.height
-        setNoteFits(fits)
-        if (!fits) {
+        }
+        const measureLineWidth = (lineText: string): number =>
+          props.measurer.measure({
+            text: lineText,
+            family: face.font,
+            size: face.size,
+            weight: face.weight,
+            italic: face.italic,
+            line: face.line,
+            maxWidth: Number.POSITIVE_INFINITY,
+            maxHeight: Number.POSITIVE_INFINITY,
+            softWrap: false,
+          }).width
+        const layout = layoutCreatorNote(scene.note.text, face, scene.note.region, measureLineWidth)
+        noteLayout = layout
+        noteFace = face
+        setNoteFits(!layout.overflow)
+        if (layout.overflow) {
           setReadySig(null)
           context.setTransform(1, 0, 0, 1, 0, 0)
           context.clearRect(0, 0, canvas.width, canvas.height)
@@ -407,7 +420,10 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       } else {
         setNoteFits(true)
       }
-      const painted = paintScene(context, scene, images, null)
+      const painted = paintScene(context, { ...scene, note: null }, images, null)
+      if (painted && scene.note !== null && noteLayout !== null && noteFace !== null) {
+        paintCreatorNote(context, noteLayout, noteFace, scene.note.region, scene.note.color)
+      }
       setPaintError(null)
       canvas.dataset['painted'] = painted ? 'ready' : 'refused'
       if (painted && signature !== null) setReadySig(signature)
@@ -491,7 +507,11 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     const live = props.session.getSnapshot()
     const liveTornDown =
       live.phase === 'signed-out' || live.phase === 'authenticated' || (live.accountId !== null && live.accountId !== props.ownerId)
-    if (liveTornDown) {
+    // Never stamp a newer generation onto a DTO built from an older render:
+    // require the live generation to match the prepared signature's. A
+    // same-owner lock->unlock before React flushes bumps the generation, so
+    // this refuses instead of emitting a non-null snapshot for a stale view.
+    if (liveTornDown || live.generation !== snap.generation) {
       dropIfStale()
       return
     }

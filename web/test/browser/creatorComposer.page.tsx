@@ -54,6 +54,14 @@ const RECIPIENT_HANDLE: string = 'ada'
 /** Effective face the component renders the note in (style `press`.`note`). */
 const NOTE_FACE = { font: 'StudySans', weight: 400, italic: false }
 
+/** Explicit breaks (with an empty line) — expected rows are the input's. */
+const EXPLICIT_NOTE = 'first line\nsecond line\n\nfourth line четвертий'
+/** Long wrapped note with RU words — every word must survive wrapping. */
+const WRAPPED_NOTE =
+  'Тихий вечір біля моря, довга дорога додому, і всі маленькі речі, які ми хотіли зберегти на потім, у пам’яті про цей день.'
+/** One unbreakable over-wide token — must refuse, never clip as ready. */
+const UNBREAKABLE_NOTE = 'x'.repeat(400)
+
 const NOTES = [
   'Probe note text.',
   'A remembered afternoon beside the sea, a long walk home, and all the little things we wanted to keep for later.',
@@ -86,6 +94,13 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
+/**
+ * Line measurer matching production `collage/measure.ts`
+ * `canvasTextMeasurer`: it lays out literal '\n' lines and does NOT wrap.
+ * `softWrap:false` with `maxWidth: Infinity` therefore returns the
+ * unwrapped width of a candidate line, which the shared creator
+ * `wrapNoteLines` uses as its one wrapping primitive.
+ */
 function canvasMeasurer(): TextMeasurer {
   const canvas = document.createElement('canvas')
   const context = canvas.getContext('2d')
@@ -93,25 +108,13 @@ function canvasMeasurer(): TextMeasurer {
   return {
     measure(request) {
       context.font = `${request.italic ? 'italic ' : ''}${request.weight} ${request.size}px ${request.family}`
-      const words = request.text.split(/\s+/).filter((word) => word.length > 0)
-      const lines: string[] = []
-      let current = ''
-      for (const word of words) {
-        const candidate = current === '' ? word : `${current} ${word}`
-        if (context.measureText(candidate).width <= request.maxWidth || current === '') current = candidate
-        else {
-          lines.push(current)
-          current = word
-        }
-      }
-      if (current !== '') lines.push(current)
-      const width = lines.reduce((max, line) => Math.max(max, context.measureText(line).width), 0)
-      const height = lines.length * request.line
-      return {
-        width,
-        height,
-        hasVisualOverflow: height > request.maxHeight || width > request.maxWidth,
-      }
+      const paragraphs = request.text.split('\n')
+      const width = paragraphs.reduce((max, line) => Math.max(max, context.measureText(line).width), 0)
+      const height = Math.max(request.line, paragraphs.length * request.line)
+      const hasVisualOverflow = request.softWrap === false
+        ? width > request.maxWidth || height > request.maxHeight
+        : width > request.maxWidth * Math.max(1, Math.floor(request.maxHeight / request.line)) || height > request.maxHeight
+      return { width: Math.ceil(width), height, hasVisualOverflow }
     },
   }
 }
@@ -185,11 +188,37 @@ function pixelAt(canvas: HTMLCanvasElement, x: number, y: number): [number, numb
   return [data[0], data[1], data[2]]
 }
 
+interface FillTextCall {
+  text: string
+  x: number
+  y: number
+  font: string
+}
+
+/**
+ * Trace real `fillText` draw calls on the mounted canvas so the test can
+ * prove every laid-out note row was painted (words present, rows advanced),
+ * not merely that the canvas was marked ready.
+ */
+function installFillTextTrace(): FillTextCall[] {
+  const calls: FillTextCall[] = []
+  const proto = CanvasRenderingContext2D.prototype as unknown as {
+    fillText: (this: CanvasRenderingContext2D, text: string, x: number, y: number) => void
+  }
+  const real = proto.fillText
+  proto.fillText = function (this: CanvasRenderingContext2D, text: string, x: number, y: number): void {
+    calls.push({ text, x, y, font: this.font })
+    real.call(this, text, x, y)
+  }
+  return calls
+}
+
 function App(props: {
   photos: CreatorComposerPhoto[]
   session: SessionStore
   measurer: TextMeasurer
   noteIndex: number
+  noteOverride: string | null
   senderOverride: string | undefined
   onFrozenChange: (frozen: boolean, branch: string | null) => void
   onCyclePhotos: () => void
@@ -197,6 +226,7 @@ function App(props: {
   onRestorePhotos: () => void
   onToggleSender: () => void
   onCycleNote: () => void
+  onSetNote: (note: string | null) => void
 }): React.JSX.Element {
   const [musicSelected, setMusicSelected] = useState(false)
   const lang = new URLSearchParams(window.location.search).get('lang')
@@ -220,10 +250,22 @@ function App(props: {
       <button type="button" data-testid="page-note-cycle" onClick={props.onCycleNote}>
         note
       </button>
+      <button type="button" data-testid="page-note-explicit" onClick={() => props.onSetNote(EXPLICIT_NOTE)}>
+        explicit
+      </button>
+      <button type="button" data-testid="page-note-wrapped" onClick={() => props.onSetNote(WRAPPED_NOTE)}>
+        wrapped
+      </button>
+      <button type="button" data-testid="page-note-unbreakable" onClick={() => props.onSetNote(UNBREAKABLE_NOTE)}>
+        unbreakable
+      </button>
+      <button type="button" data-testid="page-note-clear" onClick={() => props.onSetNote(null)}>
+        clearnote
+      </button>
       <span data-testid="page-photos">{props.photos.map((photo) => photo.contentId).join(',')}</span>
       <CreatorComposer
         photos={props.photos}
-        note={NOTES[props.noteIndex] ?? null}
+        note={props.noteOverride ?? (NOTES[props.noteIndex] ?? null)}
         musicSelected={musicSelected}
         styleId="press"
         senderHandle={props.senderOverride}
@@ -327,7 +369,10 @@ async function main(): Promise<void> {
     let photos: CreatorComposerPhoto[] = originalPhotos
     let alternates: CreatorComposerPhoto[] | null = null
     let noteIndex = 0
+    let noteOverride: string | null = null
     let senderOverride: string | undefined
+    const fillTextCalls = installFillTextTrace()
+    ;(window as unknown as { __fillTextCalls?: unknown }).__fillTextCalls = fillTextCalls
     const session = new SessionStore('en')
     session.signIn({
       accountId: ACCOUNT,
@@ -352,8 +397,13 @@ async function main(): Promise<void> {
           session={session}
           measurer={canvasMeasurer()}
           noteIndex={noteIndex}
+          noteOverride={noteOverride}
           senderOverride={senderOverride}
           onFrozenChange={(hasFrozen, branch) => frozenLog.push({ frozen: hasFrozen, branch })}
+          onSetNote={(note) => {
+            noteOverride = note
+            render()
+          }}
           onCyclePhotos={() => {
             void (async () => {
               if (alternates === null) {
@@ -772,6 +822,88 @@ function lastFrozen(): { frozen: boolean; branch: string | null } | null {
     }
   }, 'freeze restored note')
   assert('capture state holds a fresh matching freeze', true)
+
+  // --- r3: the creator note must PAINT every laid-out row/word ---
+  const traced = (): FillTextCall[] => (window as unknown as { __fillTextCalls?: FillTextCall[] }).__fillTextCalls ?? []
+  const noteRows = (): FillTextCall[] => traced().filter((call) => call.font.includes('StudySans'))
+  const armFreeze = async (label: string): Promise<void> => {
+    await waitFor(() => {
+      try {
+        return !(document.querySelector('[data-testid="creator-freeze"]') as HTMLButtonElement | null)?.disabled
+      } catch {
+        return false
+      }
+    }, label)
+  }
+
+  // Explicit breaks + an empty line: painted rows match the input lines.
+  traced().length = 0
+  click('page-note-explicit')
+  await armFreeze('explicit note repaints')
+  assert('explicit-break note paints ready', canvasState() === 'ready')
+  ;(() => {
+    const rows = noteRows()
+    const expected = ['first line', 'second line', 'fourth line четвертий']
+    assert(
+      'explicit note painted its non-empty rows in order',
+      JSON.stringify(rows.map((row) => row.text)) === JSON.stringify(expected),
+      JSON.stringify(rows.map((row) => row.text)),
+    )
+    assert(
+      'explicit note preserved the empty line as an advanced row',
+      rows.length === 3 && rows[2]!.y > rows[1]!.y && rows[1]!.y > rows[0]!.y
+        && Math.abs((rows[2]!.y - rows[1]!.y) - 2 * (rows[1]!.y - rows[0]!.y)) < 1e-6,
+      JSON.stringify(rows.map((row) => row.y)),
+    )
+  })()
+
+  // Long wrapped RU note: EVERY word must be painted (not hidden/clipped).
+  traced().length = 0
+  click('page-note-wrapped')
+  await armFreeze('wrapped note repaints')
+  assert('wrapped RU note paints ready', canvasState() === 'ready')
+  ;(() => {
+    const rows = noteRows()
+    const painted = rows.map((row) => row.text).join(' ').split(/\s+/).filter((word) => word.length > 0)
+    const input = WRAPPED_NOTE.split(/\s+/).filter((word) => word.length > 0)
+    assert('every wrapped word is painted (none dropped or hidden)', JSON.stringify(painted) === JSON.stringify(input), `${painted.length}/${input.length}`)
+    assert('wrapped note uses multiple rows', rows.length > 1, String(rows.length))
+    assert('painted rows are within the laid-out note region', rows.every((row) => row.x >= 10 && row.x < 350))
+  })()
+
+  // One unbreakable over-wide token: refuse honestly, never clip as ready.
+  traced().length = 0
+  click('page-note-unbreakable')
+  await waitFor(() => canvasState() === 'refused-note', 'unbreakable note refuses')
+  assert('over-wide unbreakable note refuses instead of clipping', canvasState() === 'refused-note')
+  assert('unbreakable note disables freeze', query<HTMLButtonElement>('[data-testid="creator-freeze"]').disabled)
+
+  // Restore a normal short note.
+  traced().length = 0
+  click('page-note-clear')
+  await waitFor(() => canvasState() === 'ready', 'clear note repaints')
+  assert('clearing the note restores a ready preview', canvasState() === 'ready')
+
+  // --- r3: freeze requires the live generation to match the prepared render ---
+  await armFreeze('freeze before generation race')
+  click('creator-freeze')
+  await waitFor(() => textOf('creator-frozen').length > 0, 'baseline freeze')
+  const frozenBefore = frozenLog.length
+  session.lock()
+  session.unlock()
+  // Stale render: the button is still enabled but its prepared generation is gone.
+  const freezeButton = document.querySelector('[data-testid="creator-freeze"]') as HTMLButtonElement | null
+  if (freezeButton && !freezeButton.disabled) freezeButton.click()
+  await waitFor(() => canvasState() === 'ready', 'repaint after generation bump')
+  assert(
+    'generation bump before flush emitted no non-null freeze',
+    frozenLog.slice(frozenBefore).every((entry) => entry.frozen === false),
+    JSON.stringify(frozenLog.slice(frozenBefore)),
+  )
+  await armFreeze('freeze re-armed after generation bump')
+  click('creator-freeze')
+  await waitFor(() => textOf('creator-frozen').length > 0, 'freeze after generation bump')
+  assert('explicit freeze works after the new generation paints', true)
 }
 
 async function runTeardown(session: SessionStore): Promise<void> {

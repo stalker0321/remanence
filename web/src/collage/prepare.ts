@@ -24,6 +24,7 @@ import {
   validateResolved,
 } from './model'
 import { equalBytes, opaqueColor, PALETTE_VERSION, styleById, styleDigest } from './styles'
+import { layoutCreatorNote, type CreatorNoteLayout } from './creatorNote'
 
 export interface SourcePhoto {
   width: number
@@ -46,6 +47,12 @@ export interface SceneText {
   italic: boolean
   line: number
   color: number
+  /**
+   * Canonical wrapped rows for the note (T243): the ONE `creatorNote` wrap
+   * used for both the sealed-region recursion and the per-row paint. Absent
+   * only on non-note producers (e.g. the creator presentation `Scene`).
+   */
+  noteLayout?: CreatorNoteLayout
 }
 
 export interface SceneMusic {
@@ -224,18 +231,36 @@ export async function prepare(
   let noteScene: SceneText | null = null
   if (noteText && expression.noteRegion) {
     const region = expression.noteRegion
-    const measurement = measurer.measure({
-      text: noteText,
-      family: noteType.family,
-      size: noteType.size,
+    // The note is measured with the SAME canonical word wrap the painter
+    // uses (unwrapped line-width primitive via `softWrap:false`), so the
+    // sealed region check and the painted rows are one layout — never a
+    // coarse non-wrapping estimate that lets a clipped multi-line note
+    // through as "ready".
+    const face = {
+      font: noteType.family,
       weight: noteType.weight,
       italic: noteType.italic,
+      size: noteType.size,
       line: noteType.line,
-      maxWidth: region.width,
-      maxHeight: region.height,
-    })
-    if (!fits(measurement, region)) return reject('note does not fit its sealed region')
-    noteScene = textLayer(noteText, region, noteType, opaqueColor(style.palette.ink))
+    }
+    const measureLineWidth = (lineText: string): number =>
+      measurer.measure({
+        text: lineText,
+        family: noteType.family,
+        size: noteType.size,
+        weight: noteType.weight,
+        italic: noteType.italic,
+        line: noteType.line,
+        maxWidth: Number.POSITIVE_INFINITY,
+        maxHeight: Number.POSITIVE_INFINITY,
+        softWrap: false,
+      }).width
+    const layout = layoutCreatorNote(noteText, face, region, measureLineWidth)
+    if (layout.overflow) return reject('note does not fit its sealed region')
+    noteScene = {
+      ...textLayer(noteText, region, noteType, opaqueColor(style.palette.ink)),
+      noteLayout: layout,
+    }
   }
   let musicScene: SceneMusic | null = null
   let artworkScene: SceneArtwork | null = null

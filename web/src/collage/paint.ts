@@ -1,4 +1,5 @@
 import { bandLayout, placeCover, roundRadii } from './geometry'
+import { paintCreatorNote } from './creatorNote'
 import type { PhotoShape, Rect } from './model'
 import { spineCopyPlacements, type Scene, type SceneDecor } from './prepare'
 
@@ -82,7 +83,27 @@ export function paintScene(
       )
       context.restore()
     } else if (op.kind === 'note' && scene.note) {
-      writeText(context, scene.note.text, scene.note.region, scene.note, scene.note.color, false)
+      // T243: draw the SAME canonical wrapped rows the sealed region was
+      // measured with (one `fillText` per row at its laid-out baseline).
+      // A note scene without the layout (creator presentation scenes use
+      // their own overlay) keeps the legacy single-line path.
+      if (scene.note.noteLayout) {
+        paintCreatorNote(
+          context,
+          scene.note.noteLayout,
+          {
+            font: scene.note.family,
+            weight: scene.note.weight,
+            italic: scene.note.italic,
+            size: scene.note.size,
+            line: scene.note.line,
+          },
+          scene.note.region,
+          scene.note.color,
+        )
+      } else {
+        writeText(context, scene.note.text, scene.note.region, scene.note, scene.note.color, false)
+      }
     } else if (op.kind === 'music-background' && scene.music) {
       if (op.transparent) {
         context.fillStyle = css(scene.music.color)

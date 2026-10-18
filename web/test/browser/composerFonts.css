@@ -1,0 +1,6 @@
+/* Bundled test fonts for the isolated creator fixture build.
+   Same files as web/public/fonts, served loopback-only by the runner. */
+@font-face { font-family: StudySans; src: url("/fonts/nimbus_sans_regular.otf") format("opentype"); font-weight: 400; font-style: normal; }
+@font-face { font-family: StudySerif; src: url("/fonts/nimbus_roman_regular.otf") format("opentype"); font-weight: 400; font-style: normal; }
+@font-face { font-family: StudySerif; src: url("/fonts/nimbus_roman_italic.otf") format("opentype"); font-weight: 400; font-style: italic; }
+@font-face { font-family: StudySerif; src: url("/fonts/nimbus_roman_bold.otf") format("opentype"); font-weight: 700; font-style: normal; }

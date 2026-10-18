@@ -1,0 +1,79 @@
+/* CreatorComposer — scoped creator surface. Quiet motion only; no transitions
+   that could mask a paint or state change. Respects reduced motion. */
+
+.creator-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 12px;
+  font-family: 'StudySans', system-ui, sans-serif;
+  color: #191b19;
+}
+
+.creator-composer canvas[data-testid='creator-canvas'] {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #f2f3b0;
+  border: 1px solid #191b19;
+}
+
+.creator-pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.creator-pager button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.creator-branch {
+  font-size: 13px;
+  opacity: 0.75;
+  margin: 0;
+}
+
+.creator-slots {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.creator-slots button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.creator-slots button[aria-pressed='true'] {
+  outline: 2px solid #191b19;
+  outline-offset: 1px;
+}
+
+.creator-crop {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.creator-crop button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.creator-composer button:disabled {
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .creator-composer *,
+  .creator-composer *::before,
+  .creator-composer *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

@@ -3,7 +3,7 @@
 // the repo's pinned Vite, serves the bundle on loopback only, and asserts in
 // real Chromium. Pages:
 // - index.html: normalizeCheck.page.ts (EXIF 1-8, ladder, strip, hash, draft).
-// - create.html: createPhotos.page.ts (connected Create fencing).
+// - create.html: createPhotos.page.tsx (connected Create fencing).
 // The launched executable is explicitly the verified installed headless
 // shell; its path + SHA-256 are recorded (T232 provenance correction).
 import assert from 'node:assert/strict'
@@ -47,7 +47,7 @@ const work = join(tmpdir(), `normcheck-${process.pid}`)
 await mkdir(work, { recursive: true })
 for (const [html, entry] of [
   ['index.html', join(web, 'test', 'browser', 'normalizeCheck.page.ts')],
-  ['create.html', join(web, 'test', 'browser', 'createPhotos.page.ts')],
+  ['create.html', join(web, 'test', 'browser', 'createPhotos.page.tsx')],
 ]) {
   await writeFile(join(work, html.replace('.html', '.ts')), `import ${JSON.stringify(entry)}\n`)
 }

@@ -30,6 +30,13 @@ export const NORMALIZED_PHOTO_QUALITY_LADDER = [90, 80, 70, 55, 40] as const
 export const SOURCE_PHOTO_MAX_BYTES = 64 * 1024 * 1024
 /** Decoded dimensions beyond this are refused without allocating a canvas. */
 export const SOURCE_PHOTO_MAX_EDGE_PX = 16384
+/**
+ * The SOF scan below reads at most this many leading bytes. A well-formed
+ * JPEG carries its frame header early (after SOI + small metadata); if no
+ * SOF appears within the bound the source is refused WITHOUT decoding —
+ * there is deliberately no fallback to decode on unparseable headers.
+ */
+export const SOURCE_SOF_SCAN_CAP_BYTES = 1024 * 1024
 
 export interface NormalizedPhoto {
   bytes: Uint8Array
@@ -59,6 +66,53 @@ export interface DecodedUpright {
 /** Injected decode/encode port: fake in unit tests, browser adapter in production. */
 export interface PhotoCodec {
   decode(bytes: Uint8Array): Promise<DecodedUpright>
+}
+
+export interface SourceDimensions {
+  width: number
+  height: number
+}
+
+/**
+ * Bounded SOF scan of a JPEG source (pure, no decode): SOI first, then
+ * segment walk capped at `SOURCE_SOF_SCAN_CAP_BYTES`. Returns stored
+ * dimensions or null (truncated, malformed, no SOF in bound, invalid dims).
+ *
+ * Accepted subset: baseline DCT (SOF0), extended sequential DCT (SOF1) and
+ * progressive DCT (SOF2) — all Huffman-coded, all decodable by the
+ * platform decoders used downstream. Arithmetic (SOF9–SOF11),
+ * differential (SOF5–SOF7, SOF13–SOF15) and lossless (SOF3) frames are
+ * refused as unsupported; the downstream decoders cannot decode them
+ * either, so refusing here only moves the same fail-closed earlier.
+ */
+export function sourceJpegDimensions(bytes: Uint8Array): SourceDimensions | null {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null
+  const end = Math.min(bytes.length, SOURCE_SOF_SCAN_CAP_BYTES)
+  let pos = 2
+  while (pos + 4 <= end) {
+    if (bytes[pos] !== 0xff) return null
+    pos += 1
+    while (pos < end && bytes[pos] === 0xff) pos += 1
+    if (pos >= end) return null
+    const marker = bytes[pos] as number
+    pos += 1
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) {
+      if (marker === 0xd9 || marker === 0xda) return null
+      continue
+    }
+    if (pos + 1 >= end) return null
+    const length = ((bytes[pos] as number) << 8) | (bytes[pos + 1] as number)
+    if (length < 2 || pos + length > bytes.length) return null
+    if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
+      if (length < 7) return null
+      const height = ((bytes[pos + 3] as number) << 8) | (bytes[pos + 4] as number)
+      const width = ((bytes[pos + 5] as number) << 8) | (bytes[pos + 6] as number)
+      if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) return null
+      return { width, height }
+    }
+    pos += length
+  }
+  return null
 }
 
 /**
@@ -132,6 +186,17 @@ export class PhotoNormalizer {
     if (input.byteLength === 0) {
       return { ok: false, reason: 'decode' }
     }
+    // Bounded source gate BEFORE any decode: parse the stored SOF dims from
+    // the header scan. Oversized/malformed/unsupported sources are refused
+    // here without ever allocating a bitmap — there is deliberately no
+    // fallback to decode on unparseable headers.
+    const source = sourceJpegDimensions(input)
+    if (!source) {
+      return { ok: false, reason: 'decode' }
+    }
+    if (Math.max(source.width, source.height) > SOURCE_PHOTO_MAX_EDGE_PX) {
+      return { ok: false, reason: 'oversize' }
+    }
     let decoded: DecodedUpright
     try {
       decoded = await this.codec.decode(input)
@@ -148,8 +213,15 @@ export class PhotoNormalizer {
         } catch {
           return { ok: false, reason: 'decode' }
         }
-        if (bytes.byteLength === 0 || bytes.byteLength > maxBytes) continue
-        if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return { ok: false, reason: 'decode' }
+        if (bytes.byteLength === 0 || bytes.byteLength > maxBytes) {
+          // Rejected ladder output carries owned pixels: wipe best-effort.
+          bytes.fill(0)
+          continue
+        }
+        if (bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+          bytes.fill(0)
+          return { ok: false, reason: 'decode' }
+        }
         const digest = await crypto.subtle.digest('SHA-256', arrayBuffer(bytes))
         return {
           ok: true,
@@ -278,12 +350,19 @@ export class PhotoIntake {
       try {
         if (!this.fenceAlive(guard, fence, epoch)) return { added, refused, completed: false }
         const result = await this.normalizer.normalize(raw)
-        if (!this.fenceAlive(guard, fence, epoch)) return { added, refused, completed: false }
         if (!result.ok) {
           refused = true
           continue
         }
+        // Owned normalized bytes: the draft keeps its own slice, so wipe
+        // this working copy on EVERY path — stale, refused, or accepted.
+        // No success is reported for dropped output.
+        if (!this.fenceAlive(guard, fence, epoch)) {
+          result.photo.bytes.fill(0)
+          return { added, refused, completed: false }
+        }
         const reason: PhotoRefusal | null = this.draft.add(result.photo)
+        result.photo.bytes.fill(0)
         if (!this.fenceAlive(guard, fence, epoch)) return { added, refused, completed: false }
         if (reason) refused = true
         else added += 1

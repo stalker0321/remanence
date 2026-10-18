@@ -32,7 +32,7 @@ describe('create photos', () => {
     expect(NORMALIZED_PHOTO_MAX_PLAINTEXT_BYTES).toBe(limits.normalized_photo_max_plaintext_bytes)
     expect(protocolLimitsMatchFixture()).toBe(true)
     const draft = new PhotoDraft()
-    expect(draft.add({ ...photo(), bytes: new Uint8Array([1, 2, 3, 4]) })).toBe('decode')
+    expect(draft.add({ ...photo(), bytes: new Uint8Array([1, 2, 3, 4]) })).toBe('type')
     expect(draft.add({ ...photo(), bytes: new Uint8Array([0xff, 0xd8]) })).toBe('size')
     expect(draft.add({ ...photo(), width: 0 })).toBe('decode')
     expect(draft.add({ ...photo(), height: -2 })).toBe('decode')
@@ -55,6 +55,16 @@ describe('create photos', () => {
     draft.move('1', 1)
     expect(draft.photos().map((item) => item.id)).toEqual(['3', '1', '4', '5', '6'])
     expect(draft.accepted()).not.toBeNull()
+  })
+
+  it('bounds normalized dimensions at the protocol long edge', () => {
+    const draft = new PhotoDraft()
+    expect(draft.add({ ...photo(), width: 2560, height: 2560 })).toBeNull()
+    expect(draft.photos()[0]).toMatchObject({ width: 2560, height: 2560 })
+    expect(draft.add({ ...photo(), width: 2561, height: 10 })).toBe('decode')
+    expect(draft.add({ ...photo(), width: 10, height: 2561 })).toBe('decode')
+    expect(draft.add({ ...photo(), width: 16384, height: 16384 })).toBe('decode')
+    expect(draft.photos()).toHaveLength(1)
   })
 
   it('carries dimensions and content hash into the accepted draft', () => {

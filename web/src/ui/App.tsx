@@ -24,7 +24,7 @@ import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
 import { canvasTextMeasurer } from '../collage/measure'
 import { FrontHold } from '../create/front'
 import { browserPhotoCodec } from '../create/browserPhoto'
-import { PhotoIntake, PhotoNormalizer } from '../create/normalize'
+import { PhotoIntake, PhotoNormalizer, type PhotoCodec } from '../create/normalize'
 import { MUSIC_QUERY_MAX_CODE_POINTS, MUSIC_SEARCH_DEBOUNCE_MS, musicCoverKey, musicLine, MusicDraft, searchMusic } from '../create/music'
 import { NOTE_MAX_UTF8_BYTES, type NoteDraft } from '../create/note'
 import { PHOTO_COUNT_MAX, type PhotoDraft } from '../create/photos'
@@ -324,7 +324,8 @@ function Scan({
   )
 }
 
-function Create({
+/** Exported for connected browser checks; production renders it via App. */
+export function Create({
   t,
   store,
   transport,
@@ -334,6 +335,7 @@ function Create({
   photos,
   music,
   onNotice,
+  photoCodec = browserPhotoCodec(document),
 }: {
   t: (key: MessageKey) => string
   store: SessionStore
@@ -344,6 +346,12 @@ function Create({
   photos: PhotoDraft
   music: MusicDraft
   onNotice: (notice: MessageKey) => void
+  /**
+   * Injectable codec seam for connected tests (default: real browser
+   * decoder). Production always uses the default; tests inject a gated
+   * fake around the real codec or a full fake. No test bypass route.
+   */
+  photoCodec?: PhotoCodec
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [handle, setHandle] = useState('')
@@ -387,9 +395,11 @@ function Create({
 
   // Owned Create mount only: the intake is bound to this draft for the visit;
   // a StrictMode remount disposes the old intake and builds a fresh one.
+  // The codec comes from props (default: real browser decoder) so connected
+  // checks can gate timing without touching production wiring.
   useEffect(() => {
     mounted.current = true
-    const next = new PhotoIntake(new PhotoNormalizer(browserPhotoCodec(document)), photos)
+    const next = new PhotoIntake(new PhotoNormalizer(photoCodec), photos)
     intake.current = next
     return () => {
       mounted.current = false
@@ -502,6 +512,15 @@ function Create({
     if (!list || !confirmed) return
     const intakePort = intake.current
     if (!intakePort) return
+    // Capture the FULL tuple up front. The intake fences internally too,
+    // and this handler re-checks everything after the await BEFORE any
+    // rememberPhotos/state/notice side effect: mere mounted/completed is
+    // not enough for owner changes landing in the final promise boundary.
+    const view = store.getSnapshot()
+    const owner = view.accountId
+    const generation = view.generation
+    const snap = confirmed
+    if (owner === null) return
     onNotice('photoLoading')
     const outcome = await intakePort.addFiles(list, () => ({
       owner: store.getSnapshot().accountId,
@@ -509,9 +528,20 @@ function Create({
       confirmed: recipient.confirmed(),
       mounted: mounted.current,
     }))
+    const live = store.getSnapshot()
+    const current =
+      mounted.current &&
+      outcome.completed &&
+      live.accountId === owner &&
+      live.generation === generation &&
+      recipient.confirmed() === snap
+    // Stale completion: no URLs, no state, no parent notice mutation —
+    // loading clears only while still current (handled by the next live
+    // action). Never report dropped output as success.
+    if (!current) return
     rememberPhotos()
     setStamp((value) => value + 1)
-    onNotice(outcome.completed ? (outcome.refused ? 'photoRejected' : 'errorRegion') : 'errorRegion')
+    onNotice(outcome.refused ? 'photoRejected' : 'errorRegion')
   }
 
   function onMusicInput(value: string) {

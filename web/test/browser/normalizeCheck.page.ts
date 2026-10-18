@@ -253,6 +253,72 @@ async function main(): Promise<void> {
     }
     raw.close()
 
+  // Pre-decode source bounds: the header scan refuses oversized, truncated,
+  // malformed and unsupported inputs WITHOUT calling createImageBitmap.
+  // The spy below counts real decodes; only genuinely decodable inputs may
+  // increment it.
+  let decodeCalls = 0
+  const realCreateImageBitmap = window.createImageBitmap.bind(window)
+  window.createImageBitmap = (async (...args: [Blob, ImageBitmapOptions?]) => {
+    decodeCalls += 1
+    return realCreateImageBitmap(args[0] as ImageBitmapSource, args[1])
+  }) as typeof window.createImageBitmap
+  const minimalSof = (width: number, height: number, marker = 0xc0): Uint8Array => {
+    const out = new Uint8Array(64)
+    out[0] = 0xff
+    out[1] = 0xd8
+    out[2] = 0xff
+    out[3] = marker
+    out[4] = 0
+    out[5] = 11
+    out[6] = 8
+    out[7] = (height >> 8) & 0xff
+    out[8] = height & 0xff
+    out[9] = (width >> 8) & 0xff
+    out[10] = width & 0xff
+    out[11] = 1
+    out[12] = 1
+    out[13] = 0x11
+    out[14] = 0
+    out[out.length - 2] = 0xff
+    out[out.length - 1] = 0xd9
+    return out
+  }
+  const spyStart = decodeCalls
+  const huge = minimalSof(30000, 100)
+  const hugeResult = await normalizer.normalize(huge)
+  assert(
+    'oversize dims refused without decode',
+    !hugeResult.ok &&
+      (hugeResult as { ok: false; reason: string }).reason === 'oversize' &&
+      decodeCalls === spyStart,
+  )
+  const truncated = minimalSof(64, 64).subarray(0, 5)
+  const truncatedResult = await normalizer.normalize(truncated)
+  assert(
+    'truncated header refused without decode',
+    !truncatedResult.ok &&
+      (truncatedResult as { ok: false; reason: string }).reason === 'decode' &&
+      decodeCalls === spyStart,
+  )
+  const malformedResult = await normalizer.normalize(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))
+  assert(
+    'malformed header refused without decode',
+    !malformedResult.ok &&
+      (malformedResult as { ok: false; reason: string }).reason === 'decode' &&
+      decodeCalls === spyStart,
+  )
+  const lossless = minimalSof(64, 64, 0xc3)
+  const losslessResult = await normalizer.normalize(lossless)
+  assert(
+    'unsupported SOF refused without decode',
+    !losslessResult.ok &&
+      (losslessResult as { ok: false; reason: string }).reason === 'decode' &&
+      decodeCalls === spyStart,
+  )
+  const decodable = await normalizer.normalize(stored)
+  assert('decodable input still decodes', decodable.ok && decodeCalls === spyStart + 1)
+
     // Full production normalize() on an EXIF-6 input.
     const exif6 = injectExifOrientation(stored, 6)
     const normal = await normalizer.normalize(exif6)

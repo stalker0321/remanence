@@ -1,7 +1,7 @@
 import type { SessionStore } from '../session/session'
 import {
+  NORMALIZED_PHOTO_MAX_LONG_EDGE_PX,
   NORMALIZED_PHOTO_MAX_PLAINTEXT_BYTES,
-  SOURCE_PHOTO_MAX_EDGE_PX,
   type NormalizedPhotoInput,
 } from './normalize'
 
@@ -19,20 +19,22 @@ export interface DraftPhoto {
 }
 
 /**
- * `decode` means the payload could not be carried as a normalized photo
- * (not SOI JPEG, invalid dimensions, or malformed content hash). It is
- * explicit and never a silent skip: normalized input always validates.
+ * `type` means the payload is not a JPEG at all; `decode` means it is
+ * JPEG-shaped but unusable (invalid dimensions or malformed content hash).
+ * Both are explicit and never a silent skip.
  */
 export type PhotoRefusal = 'type' | 'size' | 'full' | 'decode'
 
 function validDimensions(width: number, height: number): boolean {
+  // Normalized photos only: bounded by the normalized long edge (2560),
+  // not the larger source-input working cap.
   return (
     Number.isInteger(width) &&
     Number.isInteger(height) &&
     width >= 1 &&
     height >= 1 &&
-    width <= SOURCE_PHOTO_MAX_EDGE_PX &&
-    height <= SOURCE_PHOTO_MAX_EDGE_PX
+    width <= NORMALIZED_PHOTO_MAX_LONG_EDGE_PX &&
+    height <= NORMALIZED_PHOTO_MAX_LONG_EDGE_PX
   )
 }
 
@@ -55,7 +57,7 @@ export class PhotoDraft {
   add(photo: NormalizedPhotoInput): PhotoRefusal | null {
     if (this.#photos.length >= PHOTO_COUNT_MAX) return 'full'
     if (photo.bytes.byteLength < 3 || photo.bytes.byteLength > PHOTO_MAX_PLAINTEXT_BYTES) return 'size'
-    if (photo.bytes[0] !== 0xff || photo.bytes[1] !== 0xd8) return 'decode'
+    if (photo.bytes[0] !== 0xff || photo.bytes[1] !== 0xd8) return 'type'
     if (!validDimensions(photo.width, photo.height)) return 'decode'
     if (!CONTENT_HASH.test(photo.contentHash)) return 'decode'
     this.#photos.push({

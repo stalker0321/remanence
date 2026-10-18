@@ -10,7 +10,9 @@ import {
   PhotoNormalizer,
   SOURCE_PHOTO_MAX_BYTES,
   SOURCE_PHOTO_MAX_EDGE_PX,
+  SOURCE_SOF_SCAN_CAP_BYTES,
   planNormalization,
+  sourceJpegDimensions,
 } from '../src/create/normalize'
 import { PHOTO_COUNT_MAX, PHOTO_COUNT_MIN, PHOTO_MAX_PLAINTEXT_BYTES, PhotoDraft } from '../src/create/photos'
 import { protocolLimitsMatchFixture } from '../src/protocol/limits'
@@ -19,6 +21,32 @@ function soiBytes(size: number, fill = 7): Uint8Array {
   const bytes = new Uint8Array(size).fill(fill)
   bytes[0] = 0xff
   bytes[1] = 0xd8
+  return bytes
+}
+
+/**
+ * Minimal SOF-bearing JPEG: SOI + one SOF segment (default baseline SOF0)
+ * + EOI pad. Enough for the bounded header scan; not a drawable photo.
+ */
+function jpegSof(width: number, height: number, size = 64, marker = 0xc0): Uint8Array {
+  const bytes = new Uint8Array(Math.max(size, 22))
+  bytes[0] = 0xff
+  bytes[1] = 0xd8
+  bytes[2] = 0xff
+  bytes[3] = marker
+  bytes[4] = 0x00
+  bytes[5] = 11
+  bytes[6] = 8
+  bytes[7] = (height >> 8) & 0xff
+  bytes[8] = height & 0xff
+  bytes[9] = (width >> 8) & 0xff
+  bytes[10] = width & 0xff
+  bytes[11] = 1
+  bytes[12] = 1
+  bytes[13] = 0x11
+  bytes[14] = 0
+  bytes[bytes.length - 2] = 0xff
+  bytes[bytes.length - 1] = 0xd9
   return bytes
 }
 
@@ -36,6 +64,8 @@ interface FakeScript {
 class FakeCodec implements PhotoCodec {
   decoded = 0
   encoded: { width: number; height: number; quality: number }[] = []
+  /** Every buffer handed out by `encodeJpeg`, retained to assert zeroing. */
+  produced: Uint8Array[] = []
   released = 0
   constructor(private readonly script: FakeScript) {}
   async decode(bytes: Uint8Array): Promise<DecodedUpright> {
@@ -56,6 +86,7 @@ class FakeCodec implements PhotoCodec {
           bytes[0] = 0x00
           bytes[1] = 0x00
         }
+        self.produced.push(bytes)
         return bytes
       },
       release(): void {
@@ -94,8 +125,12 @@ describe('photo normalization contract', () => {
 
   it('rejects undecodable input with an explicit reason', async () => {
     const normalizer = new PhotoNormalizer(new FakeCodec({ width: 4, height: 4, failDecode: true }))
-    expect(await normalizer.normalize(soiBytes(64))).toEqual({ ok: false, reason: 'decode' })
+    expect(await normalizer.normalize(jpegSof(4, 4))).toEqual({ ok: false, reason: 'decode' })
     expect(await normalizer.normalize(new Uint8Array(0))).toEqual({ ok: false, reason: 'decode' })
+    expect(await normalizer.normalize(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))).toEqual({
+      ok: false,
+      reason: 'decode',
+    })
   })
 
   it('refuses oversized source input before decode', async () => {
@@ -115,7 +150,7 @@ describe('photo normalization contract', () => {
       sizes: { 90: NORMALIZED_PHOTO_MAX_PLAINTEXT_BYTES + 1, 80: NORMALIZED_PHOTO_MAX_PLAINTEXT_BYTES - 8 },
     })
     const normalizer = new PhotoNormalizer(codec)
-    const result = await normalizer.normalize(soiBytes(64))
+    const result = await normalizer.normalize(jpegSof(1200, 800))
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error('unreachable')
     expect(result.photo.quality).toBe(80)
@@ -124,19 +159,31 @@ describe('photo normalization contract', () => {
     expect(result.photo.height).toBe(800)
     expect(codec.encoded.map((call) => call.quality)).toEqual([90, 80])
     expect(codec.released).toBe(1)
+    // The rejected q90 working copy is wiped; only the accepted q80 copy
+    // (owned by the caller) survives.
+    expect(codec.produced).toHaveLength(2)
+    const [rejected, accepted] = codec.produced as [Uint8Array, Uint8Array]
+    expect(Array.from(rejected ?? new Uint8Array(0)).every((byte) => byte === 0)).toBe(true)
+    expect(accepted?.byteLength).toBe(NORMALIZED_PHOTO_MAX_PLAINTEXT_BYTES - 8)
+    expect(accepted?.[0]).toBe(0xff)
   })
 
   it('fails closed when no ladder step fits', async () => {
     const codec = new FakeCodec({ width: 100, height: 100, size: NORMALIZED_PHOTO_MAX_PLAINTEXT_BYTES + 1 })
     const normalizer = new PhotoNormalizer(codec)
-    expect(await normalizer.normalize(soiBytes(64))).toEqual({ ok: false, reason: 'budget' })
+    expect(await normalizer.normalize(jpegSof(100, 100))).toEqual({ ok: false, reason: 'budget' })
     expect(codec.encoded.map((call) => call.quality)).toEqual([90, 80, 70, 55, 40])
+    // Every rejected ladder output is wiped; nothing usable escapes.
+    expect(codec.produced).toHaveLength(5)
+    for (const bytes of codec.produced) {
+      expect(Array.from(bytes).every((byte) => byte === 0)).toBe(true)
+    }
   })
 
   it('rejects unusable encoder output and releases the pixels', async () => {
     const codec = new FakeCodec({ width: 100, height: 100, badBytes: true })
     const normalizer = new PhotoNormalizer(codec)
-    expect(await normalizer.normalize(soiBytes(64))).toEqual({ ok: false, reason: 'decode' })
+    expect(await normalizer.normalize(jpegSof(100, 100))).toEqual({ ok: false, reason: 'decode' })
     expect(codec.released).toBe(1)
   })
 
@@ -144,9 +191,9 @@ describe('photo normalization contract', () => {
     const first = new PhotoNormalizer(new FakeCodec({ width: 8, height: 8, size: 512 }))
     const again = new PhotoNormalizer(new FakeCodec({ width: 8, height: 8, size: 512 }))
     const other = new PhotoNormalizer(new FakeCodec({ width: 8, height: 8, size: 513 }))
-    const a = await first.normalize(soiBytes(64))
-    const b = await again.normalize(soiBytes(64))
-    const c = await other.normalize(soiBytes(64))
+    const a = await first.normalize(jpegSof(8, 8))
+    const b = await again.normalize(jpegSof(8, 8))
+    const c = await other.normalize(jpegSof(8, 8))
     if (!a.ok || !b.ok || !c.ok) throw new Error('unreachable')
     expect(a.photo.contentHash).toMatch(/^[0-9a-f]{64}$/)
     expect(a.photo.contentHash).toBe(b.photo.contentHash)
@@ -162,6 +209,85 @@ describe('photo normalization contract', () => {
   })
 })
 
+describe('source header bounds (no decode)', () => {
+  it('reads stored dims for baseline, extended-sequential and progressive SOF', () => {
+    expect(sourceJpegDimensions(jpegSof(640, 480))).toEqual({ width: 640, height: 480 })
+    expect(sourceJpegDimensions(jpegSof(640, 480, 64, 0xc1))).toEqual({ width: 640, height: 480 })
+    expect(sourceJpegDimensions(jpegSof(640, 480, 64, 0xc2))).toEqual({ width: 640, height: 480 })
+  })
+
+  it('refuses non-JPEG, truncated and malformed headers without decoding', async () => {
+    const truncated = jpegSof(64, 64).subarray(0, 5)
+    expect(sourceJpegDimensions(new Uint8Array(0))).toBeNull()
+    expect(sourceJpegDimensions(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))).toBeNull()
+    expect(sourceJpegDimensions(truncated)).toBeNull()
+    const badLength = jpegSof(64, 64)
+    badLength[4] = 0x00
+    badLength[5] = 0x01
+    expect(sourceJpegDimensions(badLength)).toBeNull()
+    const zeroDims = jpegSof(64, 64)
+    zeroDims[7] = 0
+    zeroDims[8] = 0
+    zeroDims[9] = 0
+    zeroDims[10] = 0
+    expect(sourceJpegDimensions(zeroDims)).toBeNull()
+    const codec = new FakeCodec({ width: 64, height: 64 })
+    const normalizer = new PhotoNormalizer(codec)
+    expect(await normalizer.normalize(truncated)).toEqual({ ok: false, reason: 'decode' })
+    expect(codec.decoded).toBe(0)
+  })
+
+  it('refuses unsupported SOF markers without decoding', async () => {
+    // Lossless SOF3 and arithmetic SOF9: well-formed headers the platform
+    // decoders cannot handle — refused here, never decoded.
+    expect(sourceJpegDimensions(jpegSof(64, 64, 64, 0xc3))).toBeNull()
+    expect(sourceJpegDimensions(jpegSof(64, 64, 64, 0xc9))).toBeNull()
+    const codec = new FakeCodec({ width: 64, height: 64 })
+    const normalizer = new PhotoNormalizer(codec)
+    expect(await normalizer.normalize(jpegSof(64, 64, 64, 0xc3))).toEqual({
+      ok: false,
+      reason: 'decode',
+    })
+    expect(codec.decoded).toBe(0)
+  })
+
+  it('refuses oversized source dimensions without decoding', async () => {
+    const huge = jpegSof(SOURCE_PHOTO_MAX_EDGE_PX + 1, 100)
+    expect(sourceJpegDimensions(huge)).toEqual({
+      width: SOURCE_PHOTO_MAX_EDGE_PX + 1,
+      height: 100,
+    })
+    const codec = new FakeCodec({ width: 64, height: 64 })
+    const normalizer = new PhotoNormalizer(codec)
+    expect(await normalizer.normalize(huge)).toEqual({ ok: false, reason: 'oversize' })
+    expect(codec.decoded).toBe(0)
+  })
+
+  it('refuses SOF beyond the scan bound without decoding', async () => {
+    // 20 filler APP0 segments push a valid SOF past the 1 MiB scan cap.
+    const filler = new Uint8Array(2 + 2 + 60000)
+    filler[0] = 0xff
+    filler[1] = 0xe0
+    filler[2] = (60002 >> 8) & 0xff
+    filler[3] = 60002 & 0xff
+    const tail = jpegSof(64, 64).subarray(2)
+    const bytes = new Uint8Array(2 + 20 * filler.length + tail.length)
+    bytes.set([0xff, 0xd8], 0)
+    let at = 2
+    for (let i = 0; i < 20; i += 1) {
+      bytes.set(filler, at)
+      at += filler.length
+    }
+    bytes.set(tail, at)
+    expect(bytes.length).toBeGreaterThan(SOURCE_SOF_SCAN_CAP_BYTES)
+    expect(sourceJpegDimensions(bytes)).toBeNull()
+    const codec = new FakeCodec({ width: 64, height: 64 })
+    const normalizer = new PhotoNormalizer(codec)
+    expect(await normalizer.normalize(bytes)).toEqual({ ok: false, reason: 'decode' })
+    expect(codec.decoded).toBe(0)
+  })
+})
+
 function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
   let resolve!: (value: T | PromiseLike<T>) => void
   const promise = new Promise<T>((ok) => {
@@ -171,7 +297,10 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T | Promi
 }
 
 function immediateFile(size = 64): { size: number; arrayBuffer(): Promise<ArrayBuffer> } {
-  return { size, arrayBuffer: async () => new ArrayBuffer(size) }
+  // SOF-bearing bytes: the intake normalizes for real, so fixtures must
+  // pass the pre-decode header scan.
+  const bytes = jpegSof(8, 8, Math.max(size, 32))
+  return { size, arrayBuffer: async () => bytes.buffer as ArrayBuffer }
 }
 
 /**
@@ -183,9 +312,11 @@ function midFlightCodec(): {
   codec: PhotoCodec
   encodeGate: { promise: Promise<Uint8Array>; resolve: (value: Uint8Array | PromiseLike<Uint8Array>) => void }
   started: () => boolean
+  produced: Uint8Array[]
 } {
   let encodeStarted = false
   const encodeGate = deferred<Uint8Array>()
+  const produced: Uint8Array[] = []
   return {
     codec: {
       async decode(): Promise<DecodedUpright> {
@@ -194,7 +325,9 @@ function midFlightCodec(): {
           height: 8,
           async encodeJpeg(): Promise<Uint8Array> {
             encodeStarted = true
-            return encodeGate.promise
+            const bytes = await encodeGate.promise
+            produced.push(bytes)
+            return bytes
           },
           release(): void {},
         }
@@ -202,6 +335,7 @@ function midFlightCodec(): {
     },
     encodeGate,
     started: () => encodeStarted,
+    produced,
   }
 }
 
@@ -237,6 +371,10 @@ describe('photo intake fencing and order', () => {
     expect(outcome.completed).toBe(false)
     expect(outcome.added).toBe(0)
     expect(draft.photos()).toHaveLength(0)
+    // The stale normalized working copy is wiped; only retained references
+    // prove it (no GC promise is claimed).
+    expect(mid.produced).toHaveLength(1)
+    expect(Array.from(mid.produced[0] as Uint8Array).every((byte) => byte === 0)).toBe(true)
   })
 
   it('drops pending output on unmount and on explicit cancel', async () => {
@@ -254,6 +392,8 @@ describe('photo intake fencing and order', () => {
       const outcome = await pending
       expect(outcome.completed).toBe(false)
       expect(draft.photos()).toHaveLength(0)
+      expect(mid.produced).toHaveLength(1)
+      expect(Array.from(mid.produced[0] as Uint8Array).every((byte) => byte === 0)).toBe(true)
     }
   })
 
@@ -275,6 +415,36 @@ describe('photo intake fencing and order', () => {
     const outcome = await pending
     expect(outcome.completed).toBe(false)
     expect(draft.photos()).toHaveLength(0)
+    expect(mid.produced).toHaveLength(1)
+    expect(Array.from(mid.produced[0] as Uint8Array).every((byte) => byte === 0)).toBe(true)
+  })
+
+  it('wipes the working copy when the draft refuses, keeping its own copy intact', async () => {
+    const mid = midFlightCodec()
+    const normalizer = new PhotoNormalizer(mid.codec)
+    const draft = new PhotoDraft()
+    for (let index = 0; index < 5; index += 1) {
+      expect(
+        draft.add({ bytes: jpegSof(8, 8), width: 8, height: 8, contentHash: `${index}b`.repeat(32) }),
+      ).toBeNull()
+    }
+    const intake = new PhotoIntake(normalizer, draft)
+    const pending = intake.addFiles([immediateFile()], () => ({
+      owner: 'owner-a',
+      generation: 1,
+      confirmed: { id: 1 },
+      mounted: true,
+    }))
+    await untilStarted(mid.started)
+    // Encoder output succeeds, but the full draft refuses it.
+    mid.encodeGate.resolve(jpegSof(8, 8, 256))
+    const outcome = await pending
+    expect(outcome).toEqual({ added: 0, refused: true, completed: true })
+    expect(mid.produced).toHaveLength(1)
+    expect(Array.from(mid.produced[0] as Uint8Array).every((byte) => byte === 0)).toBe(true)
+    // The draft's own copies are untouched by the working-copy wipe.
+    expect(draft.photos()).toHaveLength(5)
+    expect(draft.photos().every((photo) => photo.bytes.some((byte) => byte !== 0))).toBe(true)
   })
 
   it('serializes concurrent picks, preserving order and the 3..5 bound', async () => {
@@ -300,7 +470,7 @@ describe('photo intake fencing and order', () => {
       size: 64,
       arrayBuffer: async () => {
         order.push(name)
-        return new ArrayBuffer(64)
+        return jpegSof(8, 8).buffer as ArrayBuffer
       },
     })
     const first = intake.addFiles([file('a'), file('b'), file('c')], fence)
@@ -337,10 +507,7 @@ describe('photo intake fencing and order', () => {
     const confirmed = { id: 1 }
     const fence = () => ({ owner: 'owner-a', generation: 1, confirmed, mounted: true })
     const outcome = await intake.addFiles(
-      [
-        { size: 64, arrayBuffer: async () => new ArrayBuffer(64) },
-        { size: 64, arrayBuffer: async () => new ArrayBuffer(64) },
-      ],
+      [immediateFile(), immediateFile()],
       fence,
     )
     expect(outcome).toEqual({ added: 1, refused: true, completed: true })
@@ -365,7 +532,7 @@ describe('photo intake fencing and order', () => {
       draft,
     )
     const confirmed = { id: 1 }
-    const outcome = await intake.addFiles([{ size: 64, arrayBuffer: async () => new ArrayBuffer(64) }], () => ({
+    const outcome = await intake.addFiles([immediateFile()], () => ({
       owner: 'owner-a',
       generation: 1,
       confirmed,

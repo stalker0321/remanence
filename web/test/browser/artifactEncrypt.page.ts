@@ -7,15 +7,17 @@
  * then decrypts with the EXISTING `decryptArtifact`. No React App, server,
  * provider or network path; no secret bytes are logged or screenshotted.
  */
+import { encodeRecognitionManifest } from '../../src/collage/recognitionManifest'
 import { decryptArtifact } from '../../src/crypto/artifact'
 import { encryptArtifact } from '../../src/crypto/artifactEncrypt'
 import { generateCapsuleKeyset } from '../../src/crypto/capsuleKeyset'
 import { parseAes256GcmKeyset } from '../../src/crypto/tink'
-import { concat, readUint32, utf8 } from '../../src/protocol/bytes'
+import { concat, hexToBytes, readUint32, utf8 } from '../../src/protocol/bytes'
 import { artifactAad } from '../../src/protocol/context'
 import { ProtocolError } from '../../src/protocol/errors'
 import { limits } from '../../src/protocol/limits'
 import { protoBytes, protoVarint } from '../../src/protocol/proto'
+import { uuidToBytes } from '../../src/protocol/uuid'
 
 interface CheckResult { name: string; ok: boolean; detail?: string }
 const assertions: CheckResult[] = []
@@ -90,6 +92,33 @@ async function main(): Promise<void> {
     assert('generated frame binds the generated key id (BE)', readUint32(generatedCiphertext, 1) === generatedParsed.keyId)
     assert('fresh generations produce distinct keysets', !sameBytes(generated, generateCapsuleKeyset()))
     assert('caller-owned generated keyset remains usable after encrypt', parseAes256GcmKeyset(generated).keyId === generatedParsed.keyId)
+
+    // T289 recognition-manifest plaintext encoder -> real WebCrypto AEAD ->
+    // existing decrypt, in the real browser. Hand-constructed v2 vector
+    // (handle "ada", time 1755000000, place "Lviv", fingerprint deadbeef).
+    const recognitionFingerprint = Uint8Array.from([0xde, 0xad, 0xbe, 0xef])
+    const recognitionEncoded = encodeRecognitionManifest({
+      capsuleId: uuidToBytes(CAPSULE),
+      senderHandleSnapshot: 'ada',
+      createdAtEpochSeconds: 1_755_000_000n,
+      placeLabel: 'Lviv',
+      frontFingerprint: recognitionFingerprint,
+    })
+    assert('recognition manifest encodes version 2', recognitionEncoded.ok && recognitionEncoded.bytes[0] === 0x08 && recognitionEncoded.bytes[1] === 2)
+    if (recognitionEncoded.ok) {
+      assert(
+        'recognition manifest matches the exact hand-constructed vector',
+        sameBytes(recognitionEncoded.bytes, hexToBytes('08021210000102030405060708090a0b0c0d0e0f1a110a0361646110c0d9ecc4061a044c7669762204deadbeef')),
+      )
+      const recognitionAad = artifactAad({ capsuleId: CAPSULE, blobId: BLOB, kind: 'RECOGNITION_MANIFEST', ordinal: -1, senderUserId: SENDER, recipientUserId: RECIPIENT })
+      const recognitionCiphertext = await encryptArtifact(keyset, recognitionAad, recognitionEncoded.bytes, 'RECOGNITION_MANIFEST')
+      assert('recognition manifest frame length is plaintext + 33', recognitionCiphertext.length === recognitionEncoded.bytes.length + limits.artifactOverhead)
+      assert(
+        'recognition manifest real AEAD round-trips through existing decrypt',
+        sameBytes(await decryptArtifact(keyset, recognitionAad, recognitionCiphertext, 'RECOGNITION_MANIFEST'), recognitionEncoded.bytes),
+      )
+      assert('recognition fingerprint caller bytes are not mutated', sameBytes(recognitionFingerprint, Uint8Array.from([0xde, 0xad, 0xbe, 0xef])))
+    }
 
     const contentAad = artifactAad({ capsuleId: CAPSULE, blobId: BLOB, kind: 'CONTENT_MANIFEST', ordinal: -1, senderUserId: SENDER, recipientUserId: RECIPIENT })
     const contentMax = new Uint8Array(limits.contentCiphertext - limits.artifactOverhead).fill(7)

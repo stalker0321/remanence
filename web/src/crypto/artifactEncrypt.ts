@@ -15,31 +15,18 @@ import { parseAes256GcmKeyset } from './tink'
  * caller route/identity defaults, no nonce argument, no key derivation from
  * images/IDs. Fresh IV per call via `crypto.getRandomValues`.
  *
- * Caller-owned arrays are never mutated. The owned copies (plaintext, AAD, key
- * material, import buffer) and the IV are wiped in `finally` on success and on
- * import/encrypt failure. WebCrypto's internal key/cipher copies cannot be
- * zeroized from JS; that limitation is explicit, not claimed away.
+ * Caller-owned arrays are never mutated. Every sensitive buffer THIS function
+ * owns (the parsed key copy, plaintext/AAD copies, import and encrypt buffers,
+ * IV) is acquired/assigned inside one `try` and wiped in `finally`, so a throw
+ * during a partial copy, import or encrypt cannot evade the wipe. WebCrypto's
+ * internal key/cipher copies cannot be zeroized from JS; that limitation is
+ * explicit, not claimed away.
  */
 
 const PREFIX = utf8(ARTIFACT_AAD_PREFIX)
 const IV_BYTES = 12
 const TAG_BITS = 128
 const TINK_PREFIX_BYTE = 1
-
-export interface ArtifactEncryptOwnedBuffers {
-  readonly plaintext: Uint8Array
-  readonly aad: Uint8Array
-  readonly key: Uint8Array
-}
-
-/**
- * TEST-ONLY observational port. Production never sets it; unit tests use it to
- * keep references to the owned copy buffers and prove they are wiped in
- * `finally`. It is not a crypto path and must stay inert in production.
- */
-export const artifactEncryptTestPort: {
-  onOwnedBuffers: ((owned: ArtifactEncryptOwnedBuffers) => void) | null
-} = { onOwnedBuffers: null }
 
 export async function encryptArtifact(
   keyset: Uint8Array,
@@ -64,18 +51,23 @@ export async function encryptArtifact(
   const parsed = parseAes256GcmKeyset(keyset)
   const keyId = parsed.keyId
 
-  // Own every mutable input synchronously, BEFORE the first await, so caller
-  // mutation during import/encrypt cannot change the emitted binding/content.
-  const ownedPlaintext = plaintext.slice()
-  const ownedAad = aad.slice()
-  const ownedKey = parsed.key
-  artifactEncryptTestPort.onOwnedBuffers?.({ plaintext: ownedPlaintext, aad: ownedAad, key: ownedKey })
-
+  // Every owned sensitive buffer is assigned inside the try and wiped in the
+  // finally. `ownedKey` is registered FIRST so the parsed secret is covered
+  // before any later copy/allocation can throw.
+  let ownedKey: Uint8Array | null = null
+  let ownedPlaintext: Uint8Array | null = null
+  let ownedAad: Uint8Array | null = null
   let importBuffer: ArrayBuffer | null = null
   let aadBuffer: ArrayBuffer | null = null
   let plaintextBuffer: ArrayBuffer | null = null
   let iv: Uint8Array | null = null
   try {
+    ownedKey = parsed.key
+    // Own the caller's mutable inputs synchronously, BEFORE the first await, so
+    // caller mutation during import/encrypt cannot change the emitted
+    // binding/content.
+    ownedPlaintext = plaintext.slice()
+    ownedAad = aad.slice()
     importBuffer = arrayBuffer(ownedKey)
     const key = await crypto.subtle.importKey('raw', importBuffer, 'AES-GCM', false, ['encrypt'])
     iv = crypto.getRandomValues(new Uint8Array(IV_BYTES))
@@ -97,9 +89,9 @@ export async function encryptArtifact(
     }
     throw error
   } finally {
-    ownedPlaintext.fill(0)
-    ownedAad.fill(0)
-    ownedKey.fill(0)
+    if (ownedKey) ownedKey.fill(0)
+    if (ownedPlaintext) ownedPlaintext.fill(0)
+    if (ownedAad) ownedAad.fill(0)
     if (importBuffer) new Uint8Array(importBuffer).fill(0)
     if (aadBuffer) new Uint8Array(aadBuffer).fill(0)
     if (plaintextBuffer) new Uint8Array(plaintextBuffer).fill(0)

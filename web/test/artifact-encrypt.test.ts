@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as artifactEncryptModule from '../src/crypto/artifactEncrypt'
+import { encryptArtifact } from '../src/crypto/artifactEncrypt'
 import { decryptArtifact } from '../src/crypto/artifact'
-import { artifactEncryptTestPort, encryptArtifact, type ArtifactEncryptOwnedBuffers } from '../src/crypto/artifactEncrypt'
 import { concat, readUint32, utf8 } from '../src/protocol/bytes'
 import { artifactAad } from '../src/protocol/context'
 import { ProtocolError } from '../src/protocol/errors'
@@ -39,12 +40,52 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
+function allZero(bytes: Uint8Array | undefined): boolean {
+  return bytes !== undefined && bytes.every((value) => value === 0)
+}
+
+interface OwnedCapture {
+  ownedPlain?: Uint8Array
+  ownedAad?: Uint8Array
+  ownedKey?: Uint8Array
+}
+
+/**
+ * TEST-ONLY spy on the existing `Uint8Array.prototype.slice` call the encoder
+ * uses to copy caller inputs. It captures the references to the ACTUAL owned
+ * copies (and the parser's 32-byte key copy) in test scope; optionally it can
+ * throw on the AAD copy to exercise the partial-copy cleanup path. Restored by
+ * `afterEach`. No production hook.
+ */
+function captureOwnedSlices(
+  plaintext: Uint8Array,
+  aad: Uint8Array,
+  rawKey: Uint8Array,
+  options: { throwOnAad?: boolean } = {},
+): OwnedCapture {
+  const capture: OwnedCapture = {}
+  const realSlice = Uint8Array.prototype.slice
+  vi.spyOn(Uint8Array.prototype, 'slice').mockImplementation((function (this: Uint8Array, start?: number, end?: number) {
+    if (options.throwOnAad && this === aad) throw new Error('partial-copy-failure')
+    const result = realSlice.call(this, start, end)
+    if (this === plaintext) capture.ownedPlain = result
+    if (this === aad) capture.ownedAad = result
+    if (result.length === rawKey.length && sameBytes(result, rawKey)) capture.ownedKey = result
+    return result
+  }) as unknown as typeof Uint8Array.prototype.slice)
+  return capture
+}
+
 afterEach(() => {
-  artifactEncryptTestPort.onOwnedBuffers = null
   vi.restoreAllMocks()
 })
 
 describe('artifact WebCrypto encrypt', () => {
+  it('exports only the production encryptArtifact API (no secret observer/setter)', () => {
+    expect(Object.keys(artifactEncryptModule)).toEqual(['encryptArtifact'])
+    expect('artifactEncryptTestPort' in artifactEncryptModule).toBe(false)
+  })
+
   it('round-trips through the existing decrypt for every artifact kind', async () => {
     const keyset = aesKeyset(RAW_KEY)
     for (const kind of ['PHOTO', 'CONTENT_MANIFEST', 'RECOGNITION_MANIFEST'] as const) {
@@ -144,15 +185,17 @@ describe('artifact WebCrypto encrypt', () => {
     const keyset = aesKeyset(RAW_KEY)
     const aad = aadFor()
     const plaintext = utf8('owned-success')
-    let owned: ArtifactEncryptOwnedBuffers | null = null
-    artifactEncryptTestPort.onOwnedBuffers = (buffers) => {
-      owned = buffers
-    }
+    const capture = captureOwnedSlices(plaintext, aad, RAW_KEY)
+    const importSpy = vi.spyOn(crypto.subtle, 'importKey')
+    const encryptSpy = vi.spyOn(crypto.subtle, 'encrypt')
     await encryptArtifact(keyset, aad, plaintext, 'PHOTO')
-    expect(owned).not.toBeNull()
-    expect(owned!.plaintext.every((value) => value === 0)).toBe(true)
-    expect(owned!.aad.every((value) => value === 0)).toBe(true)
-    expect(owned!.key.every((value) => value === 0)).toBe(true)
+    expect(allZero(capture.ownedPlain)).toBe(true)
+    expect(allZero(capture.ownedAad)).toBe(true)
+    expect(allZero(capture.ownedKey)).toBe(true)
+    expect(allZero(new Uint8Array(importSpy.mock.calls[0]![1] as ArrayBuffer))).toBe(true)
+    const algorithm = encryptSpy.mock.calls[0]![0] as AesGcmParams
+    expect(allZero(new Uint8Array(algorithm.additionalData as ArrayBuffer))).toBe(true)
+    expect(allZero(new Uint8Array(encryptSpy.mock.calls[0]![2] as ArrayBuffer))).toBe(true)
     expect(sameBytes(plaintext, utf8('owned-success'))).toBe(true)
     expect(sameBytes(aad, aadFor())).toBe(true)
     expect(sameBytes(keyset, aesKeyset(RAW_KEY))).toBe(true)
@@ -162,16 +205,13 @@ describe('artifact WebCrypto encrypt', () => {
     const keyset = aesKeyset(RAW_KEY)
     const aad = aadFor()
     const plaintext = utf8('owned-import-fail')
-    let owned: ArtifactEncryptOwnedBuffers | null = null
-    artifactEncryptTestPort.onOwnedBuffers = (buffers) => {
-      owned = buffers
-    }
-    vi.spyOn(crypto.subtle, 'importKey').mockRejectedValue(new DOMException('nope', 'OperationError'))
+    const capture = captureOwnedSlices(plaintext, aad, RAW_KEY)
+    const importSpy = vi.spyOn(crypto.subtle, 'importKey').mockRejectedValue(new DOMException('nope', 'OperationError'))
     await expect(encryptArtifact(keyset, aad, plaintext, 'PHOTO')).rejects.toMatchObject({ code: 'ARTIFACT_REJECTED' })
-    expect(owned).not.toBeNull()
-    expect(owned!.plaintext.every((value) => value === 0)).toBe(true)
-    expect(owned!.aad.every((value) => value === 0)).toBe(true)
-    expect(owned!.key.every((value) => value === 0)).toBe(true)
+    expect(allZero(capture.ownedPlain)).toBe(true)
+    expect(allZero(capture.ownedAad)).toBe(true)
+    expect(allZero(capture.ownedKey)).toBe(true)
+    expect(allZero(new Uint8Array(importSpy.mock.calls[0]![1] as ArrayBuffer))).toBe(true)
     expect(sameBytes(plaintext, utf8('owned-import-fail'))).toBe(true)
     expect(sameBytes(aad, aadFor())).toBe(true)
   })
@@ -180,17 +220,29 @@ describe('artifact WebCrypto encrypt', () => {
     const keyset = aesKeyset(RAW_KEY)
     const aad = aadFor()
     const plaintext = utf8('owned-encrypt-fail')
-    let owned: ArtifactEncryptOwnedBuffers | null = null
-    artifactEncryptTestPort.onOwnedBuffers = (buffers) => {
-      owned = buffers
-    }
-    vi.spyOn(crypto.subtle, 'encrypt').mockRejectedValue(new DOMException('nope', 'OperationError'))
+    const capture = captureOwnedSlices(plaintext, aad, RAW_KEY)
+    const encryptSpy = vi.spyOn(crypto.subtle, 'encrypt').mockRejectedValue(new DOMException('nope', 'OperationError'))
     await expect(encryptArtifact(keyset, aad, plaintext, 'PHOTO')).rejects.toMatchObject({ code: 'ARTIFACT_REJECTED' })
-    expect(owned).not.toBeNull()
-    expect(owned!.plaintext.every((value) => value === 0)).toBe(true)
-    expect(owned!.aad.every((value) => value === 0)).toBe(true)
-    expect(owned!.key.every((value) => value === 0)).toBe(true)
+    expect(allZero(capture.ownedPlain)).toBe(true)
+    expect(allZero(capture.ownedAad)).toBe(true)
+    expect(allZero(capture.ownedKey)).toBe(true)
+    const algorithm = encryptSpy.mock.calls[0]![0] as AesGcmParams
+    expect(allZero(new Uint8Array(algorithm.additionalData as ArrayBuffer))).toBe(true)
+    expect(allZero(new Uint8Array(encryptSpy.mock.calls[0]![2] as ArrayBuffer))).toBe(true)
     expect(sameBytes(plaintext, utf8('owned-encrypt-fail'))).toBe(true)
+    expect(sameBytes(aad, aadFor())).toBe(true)
+  })
+
+  it('wipes already-acquired copies on a partial-copy failure and rethrows the unknown error', async () => {
+    const keyset = aesKeyset(RAW_KEY)
+    const aad = aadFor()
+    const plaintext = utf8('partial-copy-failure')
+    const capture = captureOwnedSlices(plaintext, aad, RAW_KEY, { throwOnAad: true })
+    await expect(encryptArtifact(keyset, aad, plaintext, 'PHOTO')).rejects.toThrow('partial-copy-failure')
+    expect(allZero(capture.ownedPlain)).toBe(true)
+    expect(allZero(capture.ownedKey)).toBe(true)
+    expect(capture.ownedAad).toBeUndefined()
+    expect(sameBytes(plaintext, utf8('partial-copy-failure'))).toBe(true)
     expect(sameBytes(aad, aadFor())).toBe(true)
   })
 

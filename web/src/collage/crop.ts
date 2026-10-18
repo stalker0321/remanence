@@ -167,9 +167,16 @@ export function centerCoverBase(
   }
   const scale = Math.max(cellWidth / sourceWidth, cellHeight / sourceHeight)
   if (!Number.isFinite(scale) || scale <= 0) return null
-  const width = cellWidth / (sourceWidth * scale)
-  const height = cellHeight / (sourceHeight * scale)
-  const window = { x: (1 - width) / 2, y: (1 - height) / 2, width, height }
+  // IEEE rounding can push the limiting side a hair above 1.0 (and its
+  // centering offset a hair below 0), e.g. a 600x800 source in a
+  // 143.571x213.5 cell yields height 1.0000000000000002, y -1.11e-16.
+  // The documented contract is `[0,1]^2` with max side exactly 1.0, and
+  // the source-bounded editor clamp (Android `CropEditorGeometry.valid`)
+  // requires `x,y >= 0`; confine the creator-only base exactly so a
+  // legitimate cell is never refused as `BASE_CROP_OUT_OF_SOURCE`.
+  const width = Math.min(1, cellWidth / (sourceWidth * scale))
+  const height = Math.min(1, cellHeight / (sourceHeight * scale))
+  const window = { x: Math.max(0, (1 - width) / 2), y: Math.max(0, (1 - height) / 2), width, height }
   if (!isFiniteCrop(window) || width <= 0 || height <= 0) return null
   return window
 }

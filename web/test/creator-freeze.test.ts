@@ -27,6 +27,8 @@ function current(): FreezeCurrent {
     ownerId: 'owner-1',
     sessionGeneration: 7,
     recipient: { userId: 'u-1', keyBundleId: 'b-1', directoryVersion: 'd-1' },
+    senderHandle: 'sergio',
+    musicSelected: false,
   }
 }
 
@@ -36,6 +38,7 @@ describe('creator freeze', () => {
       branchId: 'editorial-1+2-equal-1',
       styleId: 'press',
       styleVersion: 'style-study-1',
+      senderHandle: 'sergio',
       slots: slots(),
       note: null,
       noteRegion: null,
@@ -64,6 +67,7 @@ describe('creator freeze', () => {
       branchId: 'b',
       styleId: 'press',
       styleVersion: 'v',
+      senderHandle: 'sergio',
       slots: slots(),
       note: null as string | null,
       noteRegion: null as { x: number; y: number; width: number; height: number } | null,
@@ -75,6 +79,7 @@ describe('creator freeze', () => {
     }
     expect(freezeSelection({ ...base, musicSelected: true })).toEqual({ ok: false, reason: 'music-not-supported' })
     expect(freezeSelection({ ...base, recipient: null })).toEqual({ ok: false, reason: 'no-recipient' })
+    expect(() => freezeSelection({ ...base, senderHandle: '  ' })).toThrowError(CollageError)
     expect(
       freezeSelection({ ...base, note: 'hi', noteRegion: null, noteFits: true }),
     ).toEqual({ ok: false, reason: 'note-no-region' })
@@ -101,6 +106,7 @@ describe('creator freeze', () => {
       branchId: 'b',
       styleId: 'press',
       styleVersion: 'v',
+      senderHandle: 'sergio',
       slots: slots(),
       note: null as string | null,
       noteRegion: null as { x: number; y: number; width: number; height: number } | null,
@@ -122,6 +128,7 @@ describe('creator freeze', () => {
       branchId: 'editorial-1+2-equal-1',
       styleId: 'press',
       styleVersion: 'style-study-1',
+      senderHandle: 'sergio',
       slots: slots(),
       note: 'Probe note text.',
       noteRegion: { x: 16, y: 573, width: 328, height: 30 },
@@ -140,7 +147,7 @@ describe('creator freeze', () => {
       change(next)
       const invalidated = freezeValid(frozen, next)
       expect(invalidated, reason).toEqual({ ok: false, invalidated: reason })
-    };
+    }
     (
       [
         [(next) => next.slots.pop(), 'photo set changed'],
@@ -155,6 +162,9 @@ describe('creator freeze', () => {
         [(next) => (next.sessionGeneration = 8), 'session changed'],
         [(next) => (next.recipient = null), 'recipient cleared'],
         [(next) => (next.recipient = { userId: 'u-2', keyBundleId: 'b-1', directoryVersion: 'd-1' }), 'recipient changed'],
+        [(next) => (next.senderHandle = 'ada'), 'sender changed'],
+        [(next) => (next.senderHandle = null), 'sender changed'],
+        [(next) => (next.musicSelected = true), 'music selected'],
       ] as Array<[(next: FreezeCurrent) => void, string]>
     ).forEach(([change, reason]) => mutate(change, reason))
   })
@@ -164,6 +174,7 @@ describe('creator freeze', () => {
       branchId: 'b',
       styleId: 'press',
       styleVersion: 'v',
+      senderHandle: 'sergio',
       slots: slots(),
       note: null,
       noteRegion: null,

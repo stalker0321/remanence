@@ -27,17 +27,19 @@ export interface CreatorSlotFreeze {
 }
 
 export interface CreatorFreeze {
-  readonly grammarId: 'g5'
-  readonly branchId: string
-  readonly styleId: string
-  readonly styleVersion: string
-  readonly slots: readonly CreatorSlotFreeze[]
-  readonly note: string | null
-  readonly noteRegion: { x: number; y: number; width: number; height: number } | null
-  readonly ownerId: string
-  readonly sessionGeneration: number
-  readonly recipient: CreatorFreezeRecipient
-  readonly createdAtMs: number
+  readonly grammarId: 'g5';
+  readonly branchId: string;
+  readonly styleId: string;
+  readonly styleVersion: string;
+  /** Effective sender handle bound at freeze time (`From <handle>` provenance). */
+  readonly senderHandle: string;
+  readonly slots: readonly CreatorSlotFreeze[];
+  readonly note: string | null;
+  readonly noteRegion: { x: number; y: number; width: number; height: number } | null;
+  readonly ownerId: string;
+  readonly sessionGeneration: number;
+  readonly recipient: CreatorFreezeRecipient;
+  readonly createdAtMs: number;
 }
 
 export type FreezeRefusal =
@@ -53,6 +55,7 @@ export interface FreezeInput {
   branchId: string
   styleId: string
   styleVersion: string
+  senderHandle: string
   slots: CreatorSlotFreeze[]
   note: string | null
   noteRegion: { x: number; y: number; width: number; height: number } | null
@@ -84,6 +87,7 @@ export function freezeSelection(input: FreezeInput): FreezeResult {
   if (input.branchId.trim() === '' || input.styleId.trim() === '' || input.styleVersion.trim() === '') {
     throw new CollageError('REJECTED')
   }
+  if (input.senderHandle.trim() === '') throw new CollageError('REJECTED')
   if (input.slots.length < 3 || input.slots.length > 5) {
     throw new CollageError('REJECTED')
   }
@@ -92,6 +96,7 @@ export function freezeSelection(input: FreezeInput): FreezeResult {
     branchId: input.branchId,
     styleId: input.styleId,
     styleVersion: input.styleVersion,
+    senderHandle: input.senderHandle,
     slots: Object.freeze(
       input.slots.map((slot, index) => {
         if (slot.ordinal !== index) throw new CollageError('REJECTED')
@@ -119,6 +124,8 @@ export interface FreezeCurrent {
   branchId: string
   styleId: string
   styleVersion: string
+  senderHandle: string | null
+  musicSelected: boolean
   slots: CreatorSlotFreeze[]
   note: string | null
   ownerId: string
@@ -140,6 +147,8 @@ export function freezeValid(frozen: CreatorFreeze, current: FreezeCurrent): { ok
   const bad = (invalidated: string) => ({ ok: false as const, invalidated })
   if (current.branchId !== frozen.branchId) return bad('branch changed')
   if (current.styleId !== frozen.styleId || current.styleVersion !== frozen.styleVersion) return bad('style changed')
+  if (current.senderHandle !== frozen.senderHandle) return bad('sender changed')
+  if (current.musicSelected) return bad('music selected')
   if (current.note !== frozen.note) return bad('note changed')
   if (current.ownerId !== frozen.ownerId) return bad('owner changed')
   if (current.sessionGeneration !== frozen.sessionGeneration) return bad('session changed')

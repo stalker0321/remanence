@@ -139,21 +139,41 @@ export interface PreviewInput {
   note: string | null
 }
 
+/** Effective face for the creator's rendered note (family/weight/italic). */
+export interface NoteFace {
+  font: string
+  weight: number
+  italic: boolean
+}
+
 /**
  * Adapts the injected browser `TextMeasurer` to the grammar-5 note
  * contract. Line count is derived from the measured height at the
  * requested line box (`round(height / line)`); the caller must pass a
  * measurer whose height is a whole number of line boxes for wrapped
  * text (the provided canvas measurer lays out whole lines).
+ *
+ * `noteFace` pins the FACE actually rendered by `creatorScene` (the
+ * style note family/weight/italic), so the region is measured with the
+ * same typography the note is drawn in. The plan grammar's own requested
+ * face (`font`) is ignored when `noteFace` is supplied; T233's pure
+ * geometry source is untouched and the size/line density still comes
+ * from the grammar's short/regular rows. Without `noteFace` the grammar
+ * face is used (unchanged behaviour for the golden-parity adapter tests).
  */
-export function plannerFromTextMeasurer(measurer: TextMeasurer, maxWidth: number, maxHeight: number): Grammar5Measure {
+export function plannerFromTextMeasurer(
+  measurer: TextMeasurer,
+  maxWidth: number,
+  maxHeight: number,
+  noteFace?: NoteFace,
+): Grammar5Measure {
   return (text, width, size, line, font) => {
     const measured = measurer.measure({
       text,
-      family: font,
+      family: noteFace?.font ?? font,
       size,
-      weight: 400,
-      italic: false,
+      weight: noteFace?.weight ?? 400,
+      italic: noteFace?.italic ?? false,
       line,
       maxWidth: Math.min(width, maxWidth),
       maxHeight,
@@ -256,16 +276,26 @@ export function creatorScene(input: CreatorSceneInput): Scene {
       shape: slot.shape,
     }
   })
+  // The plan's note region is sized by `grammar5NoteState` with the
+  // grammar typography (StudySerif 27/30 short, 16/20 regular). Render
+  // the creator note at the SAME state size/line so the real measured
+  // region actually contains it; using the style's nominal size (e.g.
+  // StudySans 22) over an 16/20-sized region overflowed and refused every
+  // multi-line note. The style supplies the face/palette; the plan owns
+  // the density that its region was measured for.
+  const noteState = input.view.note?.state
+  const noteSize = noteState === 'regular' ? 16 : 27
+  const noteLine = noteState === 'regular' ? 20 : 30
   const note =
     input.noteText !== null && input.view.note !== null
       ? {
           text: input.noteText,
           region: { ...input.view.note.region },
           family: style.note.font,
-          size: style.note.size,
+          size: noteSize,
           weight: style.note.weight,
           italic: style.note.italic,
-          line: Math.ceil(style.note.size * 1.12),
+          line: noteLine,
           color: opaqueColor(style.palette.ink),
         }
       : null

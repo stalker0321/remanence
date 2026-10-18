@@ -126,7 +126,31 @@ try {
         }
       })
       await page.goto(`http://127.0.0.1:4176/${route}`)
-      await page.waitForFunction(() => document.querySelector('#composer-status')?.textContent === 'capture-ready', undefined, { timeout: 60000 })
+      page.on('console', (msg) => { if (msg.type() === 'error') console.log(`CONSOLE-ERROR ${run.lang}/${run.viewport}:`, msg.text().slice(0, 200)) })
+      await page.waitForFunction(
+        () => {
+          const status = document.querySelector('#composer-status')?.textContent
+          return status === 'capture-ready' || status === 'failed'
+        },
+        undefined,
+        { timeout: 90000 },
+      )
+      const statusText = await page.evaluate(() => document.querySelector('#composer-status')?.textContent)
+      if (statusText === 'failed') {
+        const diag = await page.evaluate(() => {
+          const canvas = document.querySelector('[data-testid="creator-canvas"]')
+          return {
+            composer: window.__creatorComposer,
+            frozen: window.__creatorFrozenLog,
+            testids: [...document.querySelectorAll('[data-testid]')].map((node) => node.getAttribute('data-testid')),
+            canvas: canvas instanceof HTMLCanvasElement ? canvas.dataset.painted ?? null : null,
+            bodyLen: document.body.textContent.length,
+          }
+        })
+        report.failures = report.failures ?? []
+        report.failures.push(`${route}/${run.viewport}: ${JSON.stringify(diag)}`)
+        throw new Error(`page reported failed status for ${route}/${run.viewport} :: ${JSON.stringify(diag)}`)
+      }
       const shot = join(outDir, `creator-${run.lang}-${run.viewport}-chromium.png`)
       await page.screenshot({ path: shot })
       await page.evaluate(() => {
@@ -135,10 +159,13 @@ try {
       await page.waitForFunction(() => document.querySelector('#composer-status')?.textContent === 'done', undefined, { timeout: 60000 })
       const result = await page.evaluate(() => window.__creatorComposer)
       report.pages[`${run.lang}-${run.viewport}`] = { assertions: result.assertions, failures: result.failures }
+      if (result.failures.length > 0) {
+        console.log(`PAGE-FAILURES ${run.lang}/${run.viewport}: ${JSON.stringify(result.failures)}`)
+      }
       for (const item of result.assertions) {
         assert.equal(item.ok, true, `${run.lang}/${run.viewport} :: ${item.name} ${item.detail ?? ''}`)
       }
-      assert.ok(result.assertions.length >= 30, `${run.lang}/${run.viewport}: expected >=30 assertions, got ${result.assertions.length}`)
+      assert.ok(result.assertions.length >= 40, `${run.lang}/${run.viewport}: expected >=30 assertions, got ${result.assertions.length}`)
       assert.deepEqual(result.failures, [])
       await page.close()
     }

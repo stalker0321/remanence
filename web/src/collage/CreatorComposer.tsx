@@ -168,15 +168,15 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const [planIndex, setPlanIndex] = useState(0)
   const [activeSlot, setActiveSlot] = useState(0)
   const [transforms, setTransforms] = useState<Record<string, CropTransform>>({})
-  const [views, setViews] = useState<CreatorCandidateView[] | null>(null)
-  const [planError, setPlanError] = useState<string | null>(null)
+  const [fontsReady, setFontsReady] = useState(false)
+  const [fontsError, setFontsError] = useState<string | null>(null)
   const [frozen, setFrozen] = useState<CreatorFreeze | null>(null)
   const [freezeError, setFreezeError] = useState<string | null>(null)
   const [paintError, setPaintError] = useState<string | null>(null)
   const [noteFits, setNoteFits] = useState(true)
   const [readySig, setReadySig] = useState<string | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const epochRef = useRef(0)
+  const fontsEpochRef = useRef(0)
   const frozenRef = useRef<CreatorFreeze | null>(null)
   const onFrozenChangeRef = useRef(props.onFrozenChange)
   onFrozenChangeRef.current = props.onFrozenChange
@@ -192,62 +192,80 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const sessionSender = snap.handle !== null && snap.handle.trim() !== '' ? snap.handle.trim() : null
   const senderHandle = explicitSender ?? sessionSender
 
-  const photosKey = useMemo(
-    () => JSON.stringify(props.photos.map((photo) => [photo.contentId, photo.width, photo.height, photo.contentHash])),
-    [props.photos],
-  )
-  const transformsKey = useMemo(() => JSON.stringify(transforms), [transforms]);
+  const inputKey = useMemo(() => {
+    const photosKey = JSON.stringify(props.photos.map((photo) => [photo.contentId, photo.width, photo.height, photo.contentHash]))
+    const transformsKey = JSON.stringify(transforms)
+    return JSON.stringify([photosKey, props.note, transformsKey, styleId, senderHandle, props.musicSelected])
+  }, [props.photos, props.note, transforms, styleId, senderHandle, props.musicSelected])
 
-  // Plan with REAL note geometry: required bundled faces load first, then
-  // the injected measurer drives the grammar-5 row decision (short vs
-  // multi-line/regular) through the same T233 seam — never the stub.
+  // Fonts gate: the ONLY async step. Required bundled faces load first;
+  // its own epoch, never shared with paint (paint is synchronous after
+  // this gate). A held gate keeps the composer in an honest preparing
+  // state — never a stale paint.
   useEffect(() => {
-    if (tornDown) return
-    const epoch = ++epochRef.current
-    setPlanError(null)
+    if (tornDown) {
+      setFontsReady(false)
+      return
+    }
+    const epoch = ++fontsEpochRef.current
+    setFontsReady(false)
+    setFontsError(null)
+    let cancelled = false
     void (async () => {
       try {
         const style = styleById(styleId)
         if (!style) throw new Error(`unknown style ${styleId}`)
         await Promise.all([
-          document.fonts.load(`400 ${27}px StudySerif`),
+          document.fonts.load('400 27px StudySerif'),
           document.fonts.load(`${style.note.weight} ${style.note.size}px ${style.note.font}`),
           document.fonts.load('400 64px StudySerif'),
           document.fonts.load('italic 400 20px StudySerif'),
         ])
-        if (cancelledOrStale(epoch)) return
-        const planner: Grammar5Measure = plannerFromTextMeasurer(props.measurer, 640, 640)
-        const planned = previewCandidates(
-          {
-            id: 'creator',
-            sender: senderHandle ?? 'creator',
-            photos: props.photos.map((photo) => ({
-              contentId: photo.contentId,
-              width: photo.width,
-              height: photo.height,
-              contentHash: photo.contentHash,
-            })),
-            note: props.note,
-          },
-          new Map(Object.entries(transforms)),
-          planner,
-        )
-        if (cancelledOrStale(epoch)) return
-        setViews(planned)
+        if (cancelled || epoch !== fontsEpochRef.current) return
+        setFontsReady(true)
       } catch (error) {
-        if (cancelledOrStale(epoch)) return
-        setPlanError(error instanceof Error ? error.message : String(error))
-        setViews(null)
+        if (cancelled || epoch !== fontsEpochRef.current) return
+        setFontsError(error instanceof Error ? error.message : String(error))
       }
     })()
-    function cancelledOrStale(run: number): boolean {
-      return run !== epochRef.current
-    }
     return () => {
-      epochRef.current += 1
+      cancelled = true
+      fontsEpochRef.current += 1
     }
-  }, [photosKey, props.note, transformsKey, styleId, tornDown, senderHandle, props.measurer, props.photos, transforms])
+  }, [styleId, tornDown])
 
+  // Synchronous planning bound to the exact current inputs: after the
+  // fonts gate, every render derives views deterministically from the
+  // live props. No stale geometry can survive an input change, and no
+  // paint epoch can cancel a replan.
+  const planned: { views: CreatorCandidateView[] } | { error: string } | null = useMemo(() => {
+    if (tornDown || !fontsReady) return null
+    try {
+      const noteFace = styleById(styleId)?.note
+      const planner: Grammar5Measure = plannerFromTextMeasurer(props.measurer, 640, 640, noteFace)
+      const completed = previewCandidates(
+        {
+          id: 'creator',
+          sender: senderHandle ?? 'creator',
+          photos: props.photos.map((photo) => ({
+            contentId: photo.contentId,
+            width: photo.width,
+            height: photo.height,
+            contentHash: photo.contentHash,
+          })),
+          note: props.note,
+        },
+        new Map(Object.entries(transforms)),
+        planner,
+      )
+      return { views: completed }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) }
+    }
+  }, [tornDown, fontsReady, inputKey, props.measurer, props.photos, props.note, transforms, senderHandle])
+
+  const views = planned !== null && 'views' in planned ? planned.views : null
+  const planError = fontsError ?? (planned !== null && 'error' in planned ? planned.error : null)
   const view = views !== null ? views[Math.min(planIndex, views.length - 1)] ?? null : null
 
   const currentFreeze: FreezeCurrent | null = useMemo(() => {
@@ -256,6 +274,8 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       branchId: view.branch,
       styleId,
       styleVersion: styleById(styleId)?.version ?? '',
+      senderHandle,
+      musicSelected: props.musicSelected,
       slots: view.slots.map((slot, index) => {
         const meta = props.photos.find((photo) => photo.contentId === slot.photoId)
         return {
@@ -279,15 +299,16 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
               directoryVersion: props.recipient.directoryVersion,
             },
     }
-  }, [view, styleId, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
+  }, [view, styleId, senderHandle, props.musicSelected, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
 
   const signature = useMemo(() => (currentFreeze === null ? null : JSON.stringify(currentFreeze)), [currentFreeze])
 
   // Explicit parent-visible invalidation: the holder's snapshot becomes
   // unusable on any listed input/context change (checked with the same
-  // gate the freeze tests use).
+  // gate the freeze tests use). A null/refused plan also drops a held
+  // snapshot — missing geometry never preserves an old freeze.
   useEffect(() => {
-    if (frozen !== null && currentFreeze !== null && freezeValid(frozen, currentFreeze).ok === false) {
+    if (frozen !== null && (currentFreeze === null || freezeValid(frozen, currentFreeze).ok === false)) {
       frozenRef.current = null
       setFrozen(null)
       notifyFrozen(null)
@@ -295,10 +316,11 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   }, [frozen, currentFreeze])
 
   // Sensitive teardown on lock/owner change and on unmount: clear the
-  // canvas, drop the frozen snapshot (parent notified), fence async.
+  // canvas, drop the frozen snapshot (parent notified). Paint itself is
+  // synchronous after the fonts gate, so no paint epoch is needed; the
+  // fonts gate below owns the only async step with its own epoch.
   useEffect(() => {
     if (!tornDown) return
-    epochRef.current += 1
     setReadySig(null)
     setFreezeError(null)
     const canvas = canvasRef.current
@@ -323,84 +345,85 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     if (view !== null && activeSlot >= view.slots.length) setActiveSlot(0)
   }, [view, activeSlot])
 
-  // Preview paint: real scene → real paint. Async font loads are fenced;
-  // stale completions never touch DOM or canvas. A completed paint for
-  // the current inputs arms the ready gate that Freeze requires.
+  // Preview paint: real scene → real paint, fully synchronous after
+  // the fonts gate. A painted `ready` for the current inputs arms the
+  // ready gate that Freeze requires; refused/failed paint clears it.
   useEffect(() => {
-    if (tornDown || view === null) return
-    const epoch = ++epochRef.current
+    if (tornDown || view === null) {
+      if (tornDown) {
+        const canvas = canvasRef.current
+        const context = canvas?.getContext('2d')
+        if (canvas && context) {
+          context.setTransform(1, 0, 0, 1, 0, 0)
+          context.clearRect(0, 0, canvas.width, canvas.height)
+          canvas.dataset['painted'] = 'cleared'
+        }
+      }
+      return
+    }
     const canvas = canvasRef.current
     const context = canvas?.getContext('2d')
     if (!canvas || !context) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const style = styleById(styleId)
-        if (!style) throw new Error(`unknown style ${styleId}`)
-        if (senderHandle === null) throw new Error('no sender')
-        const images = new Map<string, PaintImage>()
-        for (const photo of props.photos) {
-          images.set(photo.contentId, { source: photo.image, width: photo.width, height: photo.height })
-        }
-        const scene = creatorScene({
-          view,
-          styleId,
-          senderHandle,
-          noteText: props.note && props.note.trim() !== '' ? props.note : null,
-          photos: new Map(props.photos.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
-        })
-        if (cancelled || epoch !== epochRef.current) return
-        if (scene.note) {
-          const measurement = props.measurer.measure({
-            text: scene.note.text,
-            family: scene.note.family,
-            size: scene.note.size,
-            weight: scene.note.weight,
-            italic: scene.note.italic,
-            line: scene.note.line,
-            maxWidth: scene.note.region.width,
-            maxHeight: scene.note.region.height,
-          })
-          const fits =
-            !measurement.hasVisualOverflow &&
-            measurement.width >= 1 &&
-            measurement.height >= 1 &&
-            measurement.width <= scene.note.region.width &&
-            measurement.height <= scene.note.region.height
-          if (cancelled || epoch !== epochRef.current) return
-          setNoteFits(fits)
-          if (!fits) {
-            setReadySig(null)
-            context.setTransform(1, 0, 0, 1, 0, 0)
-            context.clearRect(0, 0, canvas.width, canvas.height)
-            canvas.dataset['painted'] = 'refused-note'
-            return
-          }
-        } else {
-          setNoteFits(true)
-        }
-        const painted = paintScene(context, scene, images, null)
-        if (cancelled || epoch !== epochRef.current) return
-        setPaintError(null)
-        canvas.dataset['painted'] = painted ? 'ready' : 'refused'
-        if (signature !== null) setReadySig(signature)
-      } catch (error) {
-        if (cancelled || epoch !== epochRef.current) return
-        setPaintError(error instanceof Error ? error.message : String(error))
-        canvas.dataset['painted'] = 'refused'
+    try {
+      const style = styleById(styleId)
+      if (!style) throw new Error(`unknown style ${styleId}`)
+      if (senderHandle === null) throw new Error('no sender')
+      const images = new Map<string, PaintImage>()
+      for (const photo of props.photos) {
+        images.set(photo.contentId, { source: photo.image, width: photo.width, height: photo.height })
       }
-    })()
-    return () => {
-      cancelled = true
+      const scene = creatorScene({
+        view,
+        styleId,
+        senderHandle,
+        noteText: props.note && props.note.trim() !== '' ? props.note : null,
+        photos: new Map(props.photos.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
+      })
+      if (scene.note) {
+        const measurement = props.measurer.measure({
+          text: scene.note.text,
+          family: scene.note.family,
+          size: scene.note.size,
+          weight: scene.note.weight,
+          italic: scene.note.italic,
+          line: scene.note.line,
+          maxWidth: scene.note.region.width,
+          maxHeight: scene.note.region.height,
+        })
+        const fits =
+          !measurement.hasVisualOverflow &&
+          measurement.width >= 1 &&
+          measurement.height >= 1 &&
+          measurement.width <= scene.note.region.width &&
+          measurement.height <= scene.note.region.height
+        setNoteFits(fits)
+        if (!fits) {
+          setReadySig(null)
+          context.setTransform(1, 0, 0, 1, 0, 0)
+          context.clearRect(0, 0, canvas.width, canvas.height)
+          canvas.dataset['painted'] = 'refused-note'
+          return
+        }
+      } else {
+        setNoteFits(true)
+      }
+      const painted = paintScene(context, scene, images, null)
+      setPaintError(null)
+      canvas.dataset['painted'] = painted ? 'ready' : 'refused'
+      if (painted && signature !== null) setReadySig(signature)
+      else setReadySig(null)
+    } catch (error) {
+      setPaintError(error instanceof Error ? error.message : String(error))
+      canvas.dataset['painted'] = 'refused'
+      setReadySig(null)
     }
   }, [view, props.photos, props.note, props.measurer, styleId, tornDown, senderHandle, signature])
 
-  // Unmount: fence async work and release the parent snapshot.
+  // Unmount: release the parent snapshot. Paint is synchronous, so no
+  // async fence is needed here; the fonts gate owns its own epoch.
   useEffect(() => {
-    const epoch = epochRef
     const notify = notifyFrozen
     return () => {
-      epoch.current += 1
       if (frozenRef.current !== null) {
         frozenRef.current = null
         notify(null)
@@ -436,12 +459,18 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const activePhotoId = view.slots[activeSlot]?.photoId ?? null
   const activeTransform: CropTransform = view.slots[activeSlot]?.effective ?? IDENTITY_CROP
 
-  const setActiveTransform = (next: CropTransform): void => {
+  // Plain callback (NOT a hook): it must stay callable after the
+  // conditional returns below. Functional update so rapid taps
+  // accumulate instead of clobbering each other on a stale closure.
+  const setStoredTransform = (next: (current: CropTransform) => CropTransform): void => {
     if (activePhotoId === null) return
-    // Frozen control domain first: z∈[1,1.25], pan into (z−1)*50,
-    // z=1 ⇒ exactly 0. Readout, stored state, and preview agree.
-    const frozen = clampTransform(next.z, next.xPercent, next.yPercent) ?? IDENTITY_CROP
-    setTransforms((prev) => ({ ...prev, [activePhotoId]: frozen }))
+    setTransforms((prev) => {
+      const cur = prev[activePhotoId] ?? IDENTITY_CROP
+      const wanted = next(cur)
+      // Frozen control domain first: z∈[1,1.25], pan into (z−1)*50,
+      // z=1 ⇒ exactly 0.
+      return { ...prev, [activePhotoId]: clampTransform(wanted.z, wanted.xPercent, wanted.yPercent) ?? IDENTITY_CROP }
+    })
   }
 
   const freezeBlocked: { disabled: boolean; reason: string | null } = (() => {
@@ -450,12 +479,13 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     if (props.recipient === null) return { disabled: true, reason: t.noRecipient }
     if (view.note !== null && (props.note === null || props.note.trim() === '')) return { disabled: true, reason: t.noteMissing }
     if (!noteFits) return { disabled: true, reason: t.noteOverflow }
+    if (paintError !== null) return { disabled: true, reason: t.notReady }
     if (readySig === null || readySig !== signature) return { disabled: true, reason: t.notReady }
     return { disabled: false, reason: null }
   })()
 
   const handleFreeze = (): void => {
-    if (freezeBlocked.disabled || view === null) return
+    if (freezeBlocked.disabled || view === null || senderHandle === null) return
     // Re-check live owner/session context at click time: never freeze
     // from a stale render, and never emit a non-null callback torn down.
     const live = props.session.getSnapshot()
@@ -481,6 +511,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       branchId: view.branch,
       styleId,
       styleVersion: style?.version ?? '',
+      senderHandle,
       slots,
       note: props.note && props.note.trim() !== '' ? props.note : null,
       noteRegion: view.note === null ? null : { ...view.note.region },
@@ -554,22 +585,22 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         ))}
       </div>
       <div className="creator-crop">
-        <button type="button" data-testid="creator-zoom-out" aria-label={t.zoomOut} onClick={() => setActiveTransform({ ...activeTransform, z: activeTransform.z - 0.05 })}>
+        <button type="button" data-testid="creator-zoom-out" aria-label={t.zoomOut} onClick={() => setStoredTransform((current) => ({ ...current, z: current.z - 0.05 }))}>
           −
         </button>
-        <button type="button" data-testid="creator-zoom-in" aria-label={t.zoomIn} onClick={() => setActiveTransform({ ...activeTransform, z: activeTransform.z + 0.05 })}>
+        <button type="button" data-testid="creator-zoom-in" aria-label={t.zoomIn} onClick={() => setStoredTransform((current) => ({ ...current, z: current.z + 0.05 }))}>
           +
         </button>
-        <button type="button" data-testid="creator-pan-left" aria-label={t.panLeft} onClick={() => setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent - 1, yPercent: activeTransform.yPercent })}>
+        <button type="button" data-testid="creator-pan-left" aria-label={t.panLeft} onClick={() => setStoredTransform((current) => ({ ...current, xPercent: current.xPercent - 1 }))}>
           ←
         </button>
-        <button type="button" data-testid="creator-pan-right" aria-label={t.panRight} onClick={() => setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent + 1, yPercent: activeTransform.yPercent })}>
+        <button type="button" data-testid="creator-pan-right" aria-label={t.panRight} onClick={() => setStoredTransform((current) => ({ ...current, xPercent: current.xPercent + 1 }))}>
           →
         </button>
-        <button type="button" data-testid="creator-pan-up" aria-label={t.panUp} onClick={() => setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent, yPercent: activeTransform.yPercent - 1 })}>
+        <button type="button" data-testid="creator-pan-up" aria-label={t.panUp} onClick={() => setStoredTransform((current) => ({ ...current, yPercent: current.yPercent - 1 }))}>
           ↑
         </button>
-        <button type="button" data-testid="creator-pan-down" aria-label={t.panDown} onClick={() => setActiveTransform({ ...activeTransform, xPercent: activeTransform.xPercent, yPercent: activeTransform.yPercent + 1 })}>
+        <button type="button" data-testid="creator-pan-down" aria-label={t.panDown} onClick={() => setStoredTransform((current) => ({ ...current, yPercent: current.yPercent + 1 }))}>
           ↓
         </button>
         <button

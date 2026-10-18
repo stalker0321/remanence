@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { explainFailure, explainGoogle, explainRestore } from '../auth/notice'
 import { browserGoogleIdentity } from '../auth/googleBrowser'
 import { continueWithGoogle, type GoogleIdentityPort } from '../auth/google'
@@ -22,6 +22,9 @@ import { explainScan } from '../scan/notice'
 import { receivePostcard } from '../scan/receive'
 import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
 import { canvasTextMeasurer } from '../collage/measure'
+import { CreatorComposer, type CreatorComposerPhoto } from '../collage/CreatorComposer'
+import type { CreatorFreeze } from '../create/creatorFreeze'
+import { CreatorImageBridge, browserImageDecode, type CreatorImageDecode } from '../create/creatorImages'
 import { FrontHold } from '../create/front'
 import { browserPhotoCodec } from '../create/browserPhoto'
 import { PhotoIntake, PhotoNormalizer, type PhotoCodec } from '../create/normalize'
@@ -336,6 +339,7 @@ export function Create({
   music,
   onNotice,
   photoCodec = browserPhotoCodec(document),
+  imageDecode = browserImageDecode(),
 }: {
   t: (key: MessageKey) => string
   store: SessionStore
@@ -352,6 +356,12 @@ export function Create({
    * fake around the real codec or a full fake. No test bypass route.
    */
   photoCodec?: PhotoCodec
+  /**
+   * Injectable normalized-photo decode seam (default: real browser
+   * `createImageBitmap`). Tests gate timing only; production uses the real
+   * decoder. No plaintext or provider bypass.
+   */
+  imageDecode?: CreatorImageDecode
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [handle, setHandle] = useState('')
@@ -368,6 +378,11 @@ export function Create({
   const urls = useRef(new Map<string, string>())
   const mounted = useRef(true)
   const intake = useRef<PhotoIntake | null>(null)
+  const imageBridge = useRef<CreatorImageBridge | null>(null)
+  const frozenRef = useRef<CreatorFreeze | null>(null)
+  const [creatorImages, setCreatorImages] = useState<CreatorComposerPhoto[] | null>(null)
+  const [creatorImageState, setCreatorImageState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const measurer = useMemo(() => canvasTextMeasurer(document), [])
   const open = view.phase !== 'signed-out' && view.phase !== 'authenticated' && view.accountId !== null
   const pending = open ? recipient.pending() : null
   const confirmed = open ? recipient.confirmed() : null
@@ -401,10 +416,15 @@ export function Create({
     mounted.current = true
     const next = new PhotoIntake(new PhotoNormalizer(photoCodec), photos)
     intake.current = next
+    const bridge = new CreatorImageBridge(imageDecode)
+    imageBridge.current = bridge
     return () => {
       mounted.current = false
       next.dispose()
       if (intake.current === next) intake.current = null
+      bridge.dispose()
+      if (imageBridge.current === bridge) imageBridge.current = null
+      frozenRef.current = null
       abort.current?.abort()
       musicAbort.current?.abort()
       if (musicTimer.current !== null) clearTimeout(musicTimer.current)
@@ -430,6 +450,62 @@ export function Create({
     rememberPhotos()
     if (urls.current.size !== before) setStamp((value) => value + 1)
   }, [open])
+
+  const accepted = confirmed ? photos.accepted() : null
+  const acceptedKey = accepted ? accepted.map((photo) => `${photo.id}:${photo.contentHash}`).join(',') : ''
+  const noteFits = note.fits()
+  // Stable recipient tuple: a fresh object each render would re-sign the
+  // composer's freeze signature and repaint in a loop.
+  const composerRecipient = useMemo(
+    () =>
+      confirmed === null
+        ? null
+        : {
+            userId: confirmed.userId,
+            keyBundleId: confirmed.keyBundleId,
+            directoryVersion: confirmed.directoryVersion,
+            handle: confirmed.handle,
+          },
+    [confirmed],
+  )
+
+  // Normalized photos -> owner/generation/confirmed/mount-fenced decoded
+  // images for the creator composer. Any stale completion is dropped and
+  // its owned bitmaps closed; a new image set drops a held selection.
+  useEffect(() => {
+    const bridge = imageBridge.current
+    frozenRef.current = null
+    if (!open || confirmed === null || accepted === null || !noteFits || bridge === null) {
+      setCreatorImages(null)
+      setCreatorImageState('idle')
+      return
+    }
+    let cancelled = false
+    // Keep the mounted composer stable across reorder/restore loads: only
+    // the very first load shows the preparing state (cached bitmaps resolve
+    // without an unmount flash).
+    if (creatorImages === null) setCreatorImageState('loading')
+    void bridge
+      .load(accepted, acceptedKey, () => ({
+        owner: store.getSnapshot().accountId,
+        generation: store.getSnapshot().generation,
+        confirmed: recipient.confirmed(),
+        mounted: mounted.current,
+      }))
+      .then((result) => {
+        if (cancelled) return
+        if (result.ok) {
+          setCreatorImages(result.photos)
+          setCreatorImageState('ready')
+        } else {
+          setCreatorImages(null)
+          setCreatorImageState(result.stale ? 'idle' : 'error')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [acceptedKey, open, confirmed, noteFits])
 
   useEffect(() => {
     if (open) return
@@ -725,6 +801,29 @@ export function Create({
             <p>{photos.photos().length} / {PHOTO_COUNT_MAX}</p>
             <p>{t('photoCount')}</p>
           </div>
+          {accepted !== null && noteFits ? (
+            creatorImageState === 'loading' ? (
+              <p>{t('photoLoading')}</p>
+            ) : creatorImageState === 'error' ? (
+              <p role="alert">{t('createComposeFailed')}</p>
+            ) : creatorImages !== null ? (
+              <div className="creator-connected">
+                <CreatorComposer
+                  photos={creatorImages}
+                  note={note.accepted()}
+                  musicSelected={selectedMusic !== null}
+                  recipient={composerRecipient}
+                  ownerId={view.accountId ?? ''}
+                  session={store}
+                  lang={view.language}
+                  measurer={measurer}
+                  onFrozenChange={(frozen) => {
+                    frozenRef.current = frozen
+                  }}
+                />
+              </div>
+            ) : null
+          ) : null}
           <div className="music-draft">
             <label className="handle-form">
               {t('musicLabel')}

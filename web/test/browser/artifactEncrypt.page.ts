@@ -9,6 +9,8 @@
  */
 import { decryptArtifact } from '../../src/crypto/artifact'
 import { encryptArtifact } from '../../src/crypto/artifactEncrypt'
+import { generateCapsuleKeyset } from '../../src/crypto/capsuleKeyset'
+import { parseAes256GcmKeyset } from '../../src/crypto/tink'
 import { concat, readUint32, utf8 } from '../../src/protocol/bytes'
 import { artifactAad } from '../../src/protocol/context'
 import { ProtocolError } from '../../src/protocol/errors'
@@ -73,6 +75,21 @@ async function main(): Promise<void> {
     assert('caller keyset is not mutated', sameBytes(keyset, keysetBefore))
     assert('caller AAD is not mutated', sameBytes(aad, aadBefore))
     assert('caller plaintext is not mutated', sameBytes(plaintext, plaintextBefore))
+
+    // Fresh per-capsule keyset minted in the real browser, then used with the
+    // real WebCrypto encrypt and the existing decrypt (no sidecar/fake path).
+    const generated = generateCapsuleKeyset()
+    const generatedParsed = parseAes256GcmKeyset(generated)
+    assert('generated keyset parses as a 32-byte AES key', generatedParsed.key.length === 32)
+    assert('generated keyset has a nonzero primary key id', generatedParsed.keyId !== 0, String(generatedParsed.keyId))
+    const generatedCiphertext = await encryptArtifact(generated, aad, utf8('browser generated keyset plaintext'), 'PHOTO')
+    assert(
+      'generated keyset encrypts and existing decrypt recovers the plaintext',
+      sameBytes(await decryptArtifact(generated, aad, generatedCiphertext, 'PHOTO'), utf8('browser generated keyset plaintext')),
+    )
+    assert('generated frame binds the generated key id (BE)', readUint32(generatedCiphertext, 1) === generatedParsed.keyId)
+    assert('fresh generations produce distinct keysets', !sameBytes(generated, generateCapsuleKeyset()))
+    assert('caller-owned generated keyset remains usable after encrypt', parseAes256GcmKeyset(generated).keyId === generatedParsed.keyId)
 
     const contentAad = artifactAad({ capsuleId: CAPSULE, blobId: BLOB, kind: 'CONTENT_MANIFEST', ordinal: -1, senderUserId: SENDER, recipientUserId: RECIPIENT })
     const contentMax = new Uint8Array(limits.contentCiphertext - limits.artifactOverhead).fill(7)

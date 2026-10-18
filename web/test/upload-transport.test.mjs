@@ -208,34 +208,70 @@ describe('transport upload capability', () => {
     await expect(transport.uploadBytes(uploadRequest({ signal: bodyAbort.signal }))).rejects.toMatchObject({ code: 'CANCELLED' })
   })
 
-  it('returns CANCELLED at the resolved-success boundary when the signal is already aborted', async () => {
+  it('returns CANCELLED at the resolved-success (204) boundary when the signal is already aborted', async () => {
     const transport = fetchTransport('http://127.0.0.1:9')
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
-
-    // (a) fetch RESOLVES 204 while the signal is aborted during the request:
-    // the resolved-success boundary must not return success.
+    // fetch RESOLVES 204 while the signal is aborted during the request: the
+    // post-fetch resolved-success boundary must not return success.
     const resolved204 = new AbortController()
     fetchSpy.mockImplementationOnce(async () => {
       resolved204.abort()
       return new Response(null, { status: 204 })
     })
     await expect(transport.uploadBytes(uploadRequest({ signal: resolved204.signal }))).rejects.toMatchObject({ code: 'CANCELLED' })
+  })
 
-    // (b1) the body read RESOLVES empty while the signal is aborted.
-    const resolvedEmpty = new AbortController()
-    fetchSpy.mockImplementationOnce(async () => {
-      resolvedEmpty.abort()
-      return new Response('', { status: 200 })
-    })
-    await expect(transport.uploadBytes(uploadRequest({ signal: resolvedEmpty.signal }))).rejects.toMatchObject({ code: 'CANCELLED' })
+  it('enters the REAL upload body reader and returns CANCELLED when the body closes successfully after an abort', async () => {
+    const transport = fetchTransport('http://127.0.0.1:9')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-    // (b2) the body read RESOLVES valid JSON while the signal is aborted.
-    const resolvedJson = new AbortController()
+    // (b1) empty 200: fetch resolves while the signal is demonstrably NOT aborted;
+    // the REAL readBounded pull then aborts and CLOSES SUCCESSFULLY (never throws),
+    // so the completed body read must still surface CANCELLED.
+    const emptyCtl = new AbortController()
+    let emptyAbortedAtFetchReturn = true
+    let emptyBodyReadEntered = false
+    const emptyStream = new ReadableStream(
+      {
+        pull(streamController) {
+          emptyBodyReadEntered = true
+          emptyCtl.abort()
+          streamController.close()
+        },
+      },
+      { highWaterMark: 0 },
+    )
     fetchSpy.mockImplementationOnce(async () => {
-      resolvedJson.abort()
-      return new Response(JSON.stringify({ code: 'STATUS' }), { status: 409, headers: { 'content-type': 'application/json' } })
+      emptyAbortedAtFetchReturn = emptyCtl.signal.aborted
+      return new Response(emptyStream, { status: 200 })
     })
-    await expect(transport.uploadBytes(uploadRequest({ signal: resolvedJson.signal }))).rejects.toMatchObject({ code: 'CANCELLED' })
+    await expect(transport.uploadBytes(uploadRequest({ signal: emptyCtl.signal }))).rejects.toMatchObject({ code: 'CANCELLED' })
+    expect(emptyAbortedAtFetchReturn).toBe(false)
+    expect(emptyBodyReadEntered).toBe(true)
+
+    // (b2) valid JSON 409: same controlled body path; the reader enqueues the JSON
+    // chunk then aborts and closes successfully before the reader finishes.
+    const jsonCtl = new AbortController()
+    let jsonAbortedAtFetchReturn = true
+    let jsonBodyReadEntered = false
+    const jsonStream = new ReadableStream(
+      {
+        pull(streamController) {
+          jsonBodyReadEntered = true
+          streamController.enqueue(new TextEncoder().encode(JSON.stringify({ code: 'STATUS' })))
+          jsonCtl.abort()
+          streamController.close()
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    fetchSpy.mockImplementationOnce(async () => {
+      jsonAbortedAtFetchReturn = jsonCtl.signal.aborted
+      return new Response(jsonStream, { status: 409, headers: { 'content-type': 'application/json' } })
+    })
+    await expect(transport.uploadBytes(uploadRequest({ signal: jsonCtl.signal }))).rejects.toMatchObject({ code: 'CANCELLED' })
+    expect(jsonAbortedAtFetchReturn).toBe(false)
+    expect(jsonBodyReadEntered).toBe(true)
   })
 
   it('emits exactly one Idempotency-Key only on the draft POST and refuses elsewhere before fetch', async () => {

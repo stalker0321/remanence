@@ -86,17 +86,21 @@ async function canvasJpeg(element: HTMLCanvasElement, quality: number): Promise<
   return new Uint8Array(await blob.arrayBuffer())
 }
 
-/** Stored 6x4 asymmetric fixture: TL red, TR green, BL blue, BR white. */
+/** Stored 24x16 asymmetric fixture: TL red, TR green, BL blue, BR white. */
+const STORED_W = 24
+const STORED_H = 16
 async function storedFixture(): Promise<Uint8Array> {
-  const [element, context] = canvas(6, 4)
+  const [element, context] = canvas(STORED_W, STORED_H)
+  const halfW = STORED_W / 2
+  const halfH = STORED_H / 2
   context.fillStyle = 'rgb(255,0,0)'
-  context.fillRect(0, 0, 3, 2)
+  context.fillRect(0, 0, halfW, halfH)
   context.fillStyle = 'rgb(0,255,0)'
-  context.fillRect(3, 0, 3, 2)
+  context.fillRect(halfW, 0, halfW, halfH)
   context.fillStyle = 'rgb(0,0,255)'
-  context.fillRect(0, 2, 3, 2)
+  context.fillRect(0, halfH, halfW, halfH)
   context.fillStyle = 'rgb(255,255,255)'
-  context.fillRect(3, 2, 3, 2)
+  context.fillRect(halfW, halfH, halfW, halfH)
   return canvasJpeg(element, 0.95)
 }
 
@@ -192,11 +196,14 @@ function sofSize(bytes: Uint8Array): { width: number; height: number } | null {
 }
 
 function samplePoints(w: number, h: number): [number, number][] {
-  const xs = w >= 6 ? [1, Math.floor(w / 2), w - 2] : [0, w - 1]
-  const ys = h >= 4 ? [1, h - 2] : [0, h - 1]
-  const points: [number, number][] = []
-  for (const y of ys) for (const x of xs) points.push([x, y])
-  return points
+  // Quadrant centres of the 2x2 upright grid: far from every edge, so JPEG
+  // blocking cannot flip the dominant colour class.
+  return [
+    [Math.floor(w / 4), Math.floor(h / 4)],
+    [Math.floor((3 * w) / 4), Math.floor(h / 4)],
+    [Math.floor(w / 4), Math.floor((3 * h) / 4)],
+    [Math.floor((3 * w) / 4), Math.floor((3 * h) / 4)],
+  ]
 }
 
 async function main(): Promise<void> {
@@ -212,10 +219,10 @@ async function main(): Promise<void> {
     const rawPixels = pixels(raw)
     assert(
       'stored quadrants hold the asymmetric pattern',
-      colourClass(rawPixels, 1, 0) === 'R' &&
-        colourClass(rawPixels, 4, 0) === 'G' &&
-        colourClass(rawPixels, 1, 3) === 'B' &&
-        colourClass(rawPixels, 4, 3) === 'W',
+      colourClass(rawPixels, 6, 4) === 'R' &&
+        colourClass(rawPixels, 18, 4) === 'G' &&
+        colourClass(rawPixels, 6, 12) === 'B' &&
+        colourClass(rawPixels, 18, 12) === 'W',
       'baseline fixture itself must be asymmetric',
     )
 
@@ -228,14 +235,14 @@ async function main(): Promise<void> {
       const bytes = injectExifOrientation(stored, orientation)
       const seen = await bitmapOf(bytes, 'from-image')
       const swap = orientation >= 5
-      const ew = swap ? 4 : 6
-      const eh = swap ? 6 : 4
+      const ew = swap ? STORED_H : STORED_W
+      const eh = swap ? STORED_W : STORED_H
       assert(`ori${orientation} upright dims ${ew}x${eh}`, seen.width === ew && seen.height === eh)
       const seenPixels = pixels(seen)
       let matched = 0
       let total = 0
       for (const [x, y] of samplePoints(ew, eh)) {
-        const [sx, sy] = mapUpright(orientation, x, y, 6, 4)
+        const [sx, sy] = mapUpright(orientation, x, y, STORED_W, STORED_H)
         const expected = colourClass(rawPixels, sx, sy)
         const actual = colourClass(seenPixels, x, y)
         total += 1
@@ -251,7 +258,7 @@ async function main(): Promise<void> {
     const normal = await normalizer.normalize(exif6)
     assert('normalize ok on exif6', normal.ok)
     if (normal.ok) {
-      assert('normalized upright dims', normal.photo.width === 4 && normal.photo.height === 6)
+      assert('normalized upright dims', normal.photo.width === STORED_H && normal.photo.height === STORED_W)
       assert('normalized fits budget', normal.photo.bytes.byteLength <= 8388608)
       assert('normalized hash is 64 hex', /^[0-9a-f]{64}$/.test(normal.photo.contentHash))
       const size = sofSize(normal.photo.bytes)
@@ -261,7 +268,7 @@ async function main(): Promise<void> {
       )
       assert('encoded metadata stripped (no Exif)', !hasExifSegment(normal.photo.bytes))
       const redecoded = await bitmapOf(normal.photo.bytes, 'from-image')
-      assert('normalized output re-decodes upright', redecoded.width === 4 && redecoded.height === 6)
+      assert('normalized output re-decodes upright', redecoded.width === STORED_H && redecoded.height === STORED_W)
       redecoded.close()
     }
 

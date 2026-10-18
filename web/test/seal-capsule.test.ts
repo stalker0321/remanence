@@ -6,7 +6,8 @@ import { MemoryKeys } from '../src/auth/memoryKeys'
 import { layoutCreatorNote } from '../src/collage/creatorNote'
 import { creatorScene, plannerFromTextMeasurer, previewCandidates } from '../src/collage/creatorPreview'
 import { captureFrozenRenderedPlan } from '../src/collage/frozenRenderedPlan'
-import { jpegDimensionFixture } from '../src/collage/jpeg'
+import { jpegDimensionFixture, jpegSize } from '../src/collage/jpeg'
+import * as manifestModule from '../src/collage/manifest'
 import { openGrantedPostcard } from '../src/collage/open'
 import type { TextMeasurer } from '../src/collage/prepare'
 import { styleById } from '../src/collage/styles'
@@ -19,12 +20,21 @@ import type { DraftPhoto } from '../src/create/photos'
 import type { RecipientSnapshot } from '../src/create/recipient'
 import { sealCapsule, SealCapsuleError } from '../src/create/sealCapsule'
 import { arrayBuffer, bytesToHex } from '../src/protocol/bytes'
+import { artifactAad, recipientEnvelopeInfo } from '../src/protocol/context'
 import { ProtocolError } from '../src/protocol/errors'
+import { fieldBytes, readMessage } from '../src/protocol/proto'
 import { ScanGrant } from '../src/scan/grant'
 import { SessionStore } from '../src/session/session'
 import { downloadCiphertext, fetchIncoming } from '../src/sync/incoming'
 import type { ApiTransport, ByteTransport } from '../src/auth/http'
 import { keysetFromJson, type JsonKeyset } from './keysetJson'
+
+// TEST-ONLY seam: wrap the real content encoder so one bounded test can force the
+// content-cap refusal branch (the normal 3..5-photo manifest never reaches it).
+vi.mock('../src/collage/manifest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/collage/manifest')>()
+  return { ...actual, encodeContentManifest: vi.fn(actual.encodeContentManifest) }
+})
 
 const SENDER_ID = '11111111-2222-4333-8444-555555555555'
 const SENDER_BUNDLE = '22222222-3333-4444-8555-666666666666'
@@ -163,7 +173,9 @@ async function senderFixture(note: string | null = 'hello'): Promise<SenderFixtu
   const keys = new MemoryKeys()
   keys.hold(session.getSnapshot(), caps)
   const freeze = buildFreeze(photos, note, session.getSnapshot().generation)
-  return { session, keys, caps, freeze, photos }
+  // Present photos in the frozen authored slot order (the sealer requires it).
+  const orderedPhotos = freeze.slots.map((slot) => photos.find((photo) => photo.id === slot.contentId)!)
+  return { session, keys, caps, freeze, photos: orderedPhotos }
 }
 
 function seal(sender: SenderFixture, overrides: Partial<Parameters<typeof sealCapsule>[0]> = {}) {
@@ -450,5 +462,149 @@ describe('production sealCapsule', () => {
     await expect(seal(failing)).rejects.toMatchObject({ code: 'sign' })
     expect(matched.length).toBeGreaterThan(0)
     for (const copy of matched) expect(zeroed.has(copy)).toBe(true)
+  })
+
+  it('rejects a same-dimension JPEG whose bytes changed (actual hash mismatch) without signing', async () => {
+    const sender = await senderFixture()
+    const signSpy = vi.fn(sender.caps.sign)
+    sender.keys.hold(sender.session.getSnapshot(), { ...sender.caps, sign: signSpy })
+    const tampered = sender.photos.map((photo, index) => {
+      if (index !== 0) return photo
+      const bytes = photo.bytes.slice()
+      bytes[11] ^= 0x01 // SOF sample/component byte: jpegSize dims unchanged
+      return { ...photo, bytes }
+    })
+    expect(jpegSize(tampered[0]!.bytes)).toEqual({ width: sender.photos[0]!.width, height: sender.photos[0]!.height })
+    await expect(seal(sender, { photos: tampered })).rejects.toMatchObject({ code: 'photo' })
+    expect(signSpy).not.toHaveBeenCalled()
+  })
+
+  it('refuses a reordered photo array (authored slot order is required)', async () => {
+    const sender = await senderFixture()
+    await expect(seal(sender, { photos: [...sender.photos].reverse() })).rejects.toMatchObject({ code: 'photo' })
+  })
+
+  it('owns and wipes the content plaintext on the content-cap refusal', async () => {
+    const sender = await senderFixture()
+    const big = new Uint8Array(65_504).fill(7) // 65504 + 33 > 65536
+    vi.mocked(manifestModule.encodeContentManifest).mockResolvedValueOnce({ ok: true, bytes: big })
+    await expect(seal(sender)).rejects.toMatchObject({ code: 'content' })
+    expect(big.every((byte) => byte === 0)).toBe(true)
+  })
+
+  it('captures the fingerprint and recipient before the first await (recovered from the real envelope)', async () => {
+    const sender = await senderFixture()
+    const originalFp = FP.slice()
+    const mutableRecipient: RecipientSnapshot = { ...RECIPIENT_SNAPSHOT }
+    const realDigest = crypto.subtle.digest.bind(crypto.subtle)
+    let first = true
+    vi.spyOn(crypto.subtle, 'digest').mockImplementation(((algorithm: AlgorithmIdentifier, data: BufferSource) => {
+      if (first) {
+        first = false
+        return (async () => {
+          await new Promise((resolve) => setTimeout(resolve, 25))
+          return realDigest(algorithm, data)
+        })()
+      }
+      return realDigest(algorithm, data)
+    }) as typeof crypto.subtle.digest)
+    const pending = seal(sender, { recipient: mutableRecipient, frontFingerprint: FP })
+    FP.fill(0xcc)
+    mutableRecipient.encryptionPublicKeyset = b64(SIGNING_PUBLIC)
+    const sealed = await pending
+
+    const envelopePlain = await openRecipientEnvelope(
+      HPKE_PRIVATE,
+      recipientEnvelopeInfo({ capsuleId: CAPSULE_UUID, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID, recipientKeyBundleId: RECIPIENT_BUNDLE }),
+      sealed.envelopeCiphertext,
+    )
+    const keyset = fieldBytes(readMessage(envelopePlain, [1, 2, 3, 4, 5, 6, 7, 8]), 7)
+    const recognitionBlob = sealed.blobs.find((blob) => blob.kind === 'RECOGNITION_MANIFEST')!
+    const recognitionPlain = await decryptArtifact(
+      keyset,
+      artifactAad({ capsuleId: CAPSULE_UUID, blobId: recognitionBlob.blobId, kind: 'RECOGNITION_MANIFEST', ordinal: -1, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID }),
+      recognitionBlob.ciphertext,
+      'RECOGNITION_MANIFEST',
+    )
+    const recoveredFp = fieldBytes(readMessage(recognitionPlain, [1, 2, 3, 4]), 4)
+    expect(bytesToHex(recoveredFp)).toBe(bytesToHex(originalFp))
+    envelopePlain.fill(0)
+    keyset.fill(0)
+    recognitionPlain.fill(0)
+  })
+
+  it('fails closed when the session locks/signs out or the caps are replaced during async', async () => {
+    for (const transition of ['lock', 'signout', 'caps'] as const) {
+      const sender = await senderFixture()
+      const realDigest = crypto.subtle.digest.bind(crypto.subtle)
+      let first = true
+      vi.spyOn(crypto.subtle, 'digest').mockImplementation(((algorithm: AlgorithmIdentifier, data: BufferSource) => {
+        if (first) {
+          first = false
+          return (async () => {
+            await new Promise((resolve) => setTimeout(resolve, 15))
+            if (transition === 'lock') sender.session.lock()
+            else if (transition === 'signout') sender.session.signOut()
+            else sender.keys.hold(sender.session.getSnapshot(), { ...sender.caps })
+            return realDigest(algorithm, data)
+          })()
+        }
+        return realDigest(algorithm, data)
+      }) as typeof crypto.subtle.digest)
+      await expect(seal(sender)).rejects.toMatchObject({ code: 'stale' })
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('wipes the acquired owned copies when the post-await fence refuses (stale)', async () => {
+    const sender = await senderFixture()
+    const ownedCopies: Uint8Array[] = []
+    const zeroed = new Set<Uint8Array>()
+    const realSet = Uint8Array.prototype.set
+    const realFill = Uint8Array.prototype.fill
+    vi.spyOn(Uint8Array.prototype, 'set').mockImplementation((function (this: Uint8Array, source: ArrayLike<number>, offset?: number) {
+      if (sender.photos.some((photo) => (source as unknown) === photo.bytes) || (source as unknown) === FP) ownedCopies.push(this)
+      return realSet.call(this, source as never, offset as never)
+    }) as unknown as typeof Uint8Array.prototype.set)
+    vi.spyOn(Uint8Array.prototype, 'fill').mockImplementation((function (this: Uint8Array, value: number, start?: number, end?: number) {
+      if (value === 0 && start === undefined) zeroed.add(this)
+      return realFill.call(this, value, start, end)
+    }) as unknown as typeof Uint8Array.prototype.fill)
+    const realDigest = crypto.subtle.digest.bind(crypto.subtle)
+    let first = true
+    vi.spyOn(crypto.subtle, 'digest').mockImplementation(((algorithm: AlgorithmIdentifier, data: BufferSource) => {
+      if (first) {
+        first = false
+        return (async () => {
+          await new Promise((resolve) => setTimeout(resolve, 15))
+          sender.keys.drop()
+          return realDigest(algorithm, data)
+        })()
+      }
+      return realDigest(algorithm, data)
+    }) as typeof crypto.subtle.digest)
+    await expect(seal(sender)).rejects.toMatchObject({ code: 'stale' })
+    expect(ownedCopies.length).toBeGreaterThan(0)
+    for (const copy of ownedCopies) expect(zeroed.has(copy)).toBe(true)
+    // Caller inputs are unchanged.
+    expect(sender.photos[0]!.bytes.some((byte) => byte !== 0)).toBe(true)
+    expect(FP.some((byte) => byte !== 0)).toBe(true)
+  })
+
+  it('wipes a partial owned copy when the copy write writes then throws', async () => {
+    const sender = await senderFixture()
+    const realSet = Uint8Array.prototype.set
+    const partials: Uint8Array[] = []
+    vi.spyOn(Uint8Array.prototype, 'set').mockImplementation((function (this: Uint8Array, source: ArrayLike<number>, offset?: number) {
+      const done = realSet.call(this, source as never, offset as never)
+      if ((source as unknown) === sender.photos[0]!.bytes) {
+        partials.push(this)
+        throw new Error('partial-copy-write')
+      }
+      return done
+    }) as unknown as typeof Uint8Array.prototype.set)
+    await expect(seal(sender)).rejects.toThrow('partial-copy-write')
+    expect(partials.length).toBeGreaterThan(0)
+    for (const partial of partials) expect(partial.every((byte) => byte === 0)).toBe(true)
   })
 })

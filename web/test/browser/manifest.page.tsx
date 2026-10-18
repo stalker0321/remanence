@@ -800,13 +800,11 @@ async function main(): Promise<void> {
       assert(`${label}: production seal freeze snapshot`, snapshot !== null, String(snapshot))
       if (!snapshot) return
       const plan = snapshot.renderedPlan
-      const draftPhotos: DraftPhoto[] = photos.map((photo) => ({
-        id: photo.contentId,
-        bytes: normalizedByContentId.get(photo.contentId)!,
-        width: photo.width,
-        height: photo.height,
-        contentHash: photo.contentHash,
-      }))
+      // Present photos in the frozen authored slot order (the sealer requires it).
+      const draftPhotos: DraftPhoto[] = snapshot.slots.map((slot) => {
+        const photo = photos.find((candidate) => candidate.contentId === slot.contentId)!
+        return { id: slot.contentId, bytes: normalizedByContentId.get(slot.contentId)!, width: photo.width, height: photo.height, contentHash: photo.contentHash }
+      })
       const senderMemory = senderKeys(session)
       let sealed: SealedCapsule | null = null
       let opened: Awaited<ReturnType<typeof openGrantedPostcard>> | null = null

@@ -8,7 +8,7 @@ import { encryptArtifact } from '../crypto/artifactEncrypt'
 import { generateCapsuleKeyset } from '../crypto/capsuleKeyset'
 import { sealRecipientEnvelope } from '../crypto/hpkeSeal'
 import { buildRecipientEnvelopePlaintext } from '../crypto/recipientEnvelope'
-import { arrayBuffer, bytesToHex } from '../protocol/bytes'
+import { bytesToHex } from '../protocol/bytes'
 import { artifactAad, recipientEnvelopeInfo } from '../protocol/context'
 import { ProtocolError } from '../protocol/errors'
 import { limits } from '../protocol/limits'
@@ -113,7 +113,10 @@ const INT64_MAX = 2n ** 63n - 1n
 const CONTENT_HASH = /^[0-9a-f]{64}$/
 
 function sha256(bytes: Uint8Array): Promise<Uint8Array> {
-  return crypto.subtle.digest('SHA-256', arrayBuffer(bytes)).then((digest) => new Uint8Array(digest))
+  // Hash the owned view directly. `arrayBuffer()` would allocate a SECOND full
+  // plaintext copy (notably for each photo JPEG) that this module does not own
+  // and would never wipe; WebCrypto accepts the view as a BufferSource.
+  return crypto.subtle.digest('SHA-256', bytes as unknown as BufferSource).then((digest) => new Uint8Array(digest))
 }
 
 function formatUuid(bytes: Uint8Array): string {
@@ -163,6 +166,14 @@ export async function sealCapsule(input: SealCapsuleInput): Promise<SealedCapsul
   // wipe as soon as acquired, so a later failure cannot leak an earlier copy.
   const owned: Uint8Array[] = []
   let capsuleKeyset: Uint8Array | null = null
+  // Allocate AND register an owned copy BEFORE the fallible write, so a partial
+  // copy (a test-only `set` spy that writes then throws) is still wiped.
+  const ownCopy = (source: Uint8Array): Uint8Array => {
+    const copy = new Uint8Array(source.length)
+    owned.push(copy)
+    copy.set(source)
+    return copy
+  }
 
   try {
     let ownedFreeze: CreatorFreeze
@@ -199,23 +210,21 @@ export async function sealCapsule(input: SealCapsuleInput): Promise<SealedCapsul
     if (!(recipientPublic instanceof Uint8Array) || recipientPublic.length === 0) throw new SealCapsuleError('recipient')
 
     if (!(frontFingerprint instanceof Uint8Array) || frontFingerprint.length === 0) throw new SealCapsuleError('recognition')
-    const ownedFingerprint = frontFingerprint.slice()
-    owned.push(ownedFingerprint)
+    const ownedFingerprint = ownCopy(frontFingerprint)
 
     const slots = ownedFreeze.slots
     if (!Array.isArray(slots) || slots.length < 3 || slots.length > 5) throw new SealCapsuleError('photo')
     if (!Array.isArray(photos) || photos.length !== slots.length) throw new SealCapsuleError('photo')
-    const byId = new Map<string, DraftPhoto>()
-    for (const photo of photos) {
-      if (!photo || typeof photo.id !== 'string' || byId.has(photo.id)) throw new SealCapsuleError('photo')
-      byId.set(photo.id, photo)
-    }
     const ownedPhotoBytes = new Map<string, Uint8Array>()
+    const seenIds = new Set<string>()
     for (let index = 0; index < slots.length; index++) {
       const slot = slots[index]!
       if (slot.ordinal !== index) throw new SealCapsuleError('photo')
-      const photo = byId.get(slot.contentId)
-      if (!photo) throw new SealCapsuleError('photo')
+      const photo = photos[index]
+      // Authored slot order is required: no missing/extra/duplicate/reordered
+      // substitution. The caller presents photos in the frozen slot order.
+      if (!photo || typeof photo.id !== 'string' || photo.id !== slot.contentId || seenIds.has(photo.id)) throw new SealCapsuleError('photo')
+      seenIds.add(photo.id)
       if (photo.width !== slot.widthPx || photo.height !== slot.heightPx) throw new SealCapsuleError('photo')
       if (!(photo.bytes instanceof Uint8Array) || photo.bytes.length === 0 || photo.bytes.length > NORMALIZED_PHOTO_MAX_PLAINTEXT_BYTES) {
         throw new SealCapsuleError('photo')
@@ -231,11 +240,9 @@ export async function sealCapsule(input: SealCapsuleInput): Promise<SealedCapsul
       if (!size || size.width !== slot.widthPx || size.height !== slot.heightPx) throw new SealCapsuleError('photo')
       if (typeof slot.contentHash !== 'string' || !CONTENT_HASH.test(slot.contentHash)) throw new SealCapsuleError('photo')
       if (typeof photo.contentHash !== 'string' || photo.contentHash !== slot.contentHash) throw new SealCapsuleError('photo')
-      const copy = photo.bytes.slice()
-      owned.push(copy)
+      const copy = ownCopy(photo.bytes)
       ownedPhotoBytes.set(slot.contentId, copy)
     }
-    if (byId.size !== slots.length) throw new SealCapsuleError('photo')
 
     // Session/key identity guard: same visit, same account/bundle, SAME caps object.
     const fresh = (): void => {
@@ -265,15 +272,18 @@ export async function sealCapsule(input: SealCapsuleInput): Promise<SealedCapsul
     for (let index = 0; index < slots.length; index++) {
       const slot = slots[index]!
       const copy = ownedPhotoBytes.get(slot.contentId)!
-      const digest = await withFresh(() => sha256(copy))
-      const hex = bytesToHex(digest)
-      digest.fill(0)
-      if (hex !== slot.contentHash) throw new SealCapsuleError('photo')
+      fresh()
+      const digest = await sha256(copy)
+      owned.push(digest) // own before the post-await fence; wiped in the finally
+      fresh()
+      if (bytesToHex(digest) !== slot.contentHash) throw new SealCapsuleError('photo')
     }
 
-    const built = await withFresh(() => buildFrozenExpression(ownedFreeze, epoch))
+    fresh()
+    const built = await buildFrozenExpression(ownedFreeze, epoch)
+    if (built.ok) owned.push(built.bytes) // own before the post-await fence
+    fresh()
     if (!built.ok) throw new SealCapsuleError('expression')
-    owned.push(built.bytes)
 
     // Recognition manifest over the explicit opaque upstream fingerprint.
     const recognitionBlobId = tagBlobId(capsuleBytes, RECOGNITION_BLOB_BYTE)
@@ -291,12 +301,14 @@ export async function sealCapsule(input: SealCapsuleInput): Promise<SealedCapsul
     const blobIdByContentId = new Map<string, Uint8Array>(
       built.expression.input.photos.map((photo): [string, Uint8Array] => [photo.contentId, uuidToBytes(tagBlobId(capsuleBytes, PHOTO_BLOB_TAG_BASE + photo.ordinal))]),
     )
-    const content = await withFresh(() => encodeContentManifest({ expression: built.expression, capsuleId: capsuleBytes, candidateId, blobIdByContentId }))
+    fresh()
+    const content = await encodeContentManifest({ expression: built.expression, capsuleId: capsuleBytes, candidateId, blobIdByContentId })
+    if (content.ok) owned.push(content.bytes) // own before the post-await fence/validation
+    fresh()
     if (!content.ok) throw new SealCapsuleError('content')
     // The manifest encoder caps at 65536 while the AEAD usable plaintext is
     // 65503; refuse explicitly rather than reaching an OVERSIZED crypto error.
     if (content.bytes.length + limits.artifactOverhead > limits.contentCiphertext) throw new SealCapsuleError('content')
-    owned.push(content.bytes)
 
     capsuleKeyset = generateCapsuleKeyset()
 

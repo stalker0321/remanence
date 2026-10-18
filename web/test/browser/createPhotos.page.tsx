@@ -235,7 +235,13 @@ async function main(): Promise<void> {
       h.pick(makeFile('ok.jpg', bytes))
       const deadline = Date.now() + 5000
       while (h.draft.photos().length === 0) {
-        if (Date.now() > deadline) throw new Error('positive pick never landed')
+        if (Date.now() > deadline) {
+          throw new Error(
+            `positive pick never landed (decodeCalls=${h.decodeCalls()}, ` +
+              `notices=${JSON.stringify(h.notices)}, ` +
+              `photoInputs=${h.container.querySelectorAll('.photo-draft input[type="file"]').length})`,
+          )
+        }
         await new Promise((resolve) => setTimeout(resolve, 10))
       }
       assert('control pick lands in draft', h.draft.photos().length === 1)

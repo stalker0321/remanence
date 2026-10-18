@@ -272,24 +272,36 @@ async function main(): Promise<void> {
       redecoded.close()
     }
 
-    // Quality ladder: noisy input with a small test-only budget must step down.
+    // Quality ladder: photographic-like input (gradient + mild noise) with
+    // a budget of half the q90 size must step below 90 and still fit, since
+    // each ladder step shrinks photographic JPEGs well below that ratio.
     const [noisy, nctx] = canvas(1200, 900)
     const image = nctx.createImageData(1200, 900)
     let seed = 123456789
-    for (let i = 0; i < image.data.length; i += 4) {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff
-      image.data[i] = seed & 0xff
-      image.data[i + 1] = (seed >> 8) & 0xff
-      image.data[i + 2] = (seed >> 16) & 0xff
-      image.data[i + 3] = 255
+    for (let y = 0; y < 900; y += 1) {
+      for (let x = 0; x < 1200; x += 1) {
+        const at = (y * 1200 + x) * 4
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff
+        const tone = Math.floor((x / 1200) * 200) + 28
+        image.data[at] = Math.min(255, Math.max(0, tone + ((seed & 31) - 16)))
+        image.data[at + 1] = Math.min(255, Math.max(0, tone + (((seed >> 5) & 31) - 16)))
+        image.data[at + 2] = Math.min(255, Math.max(0, 255 - tone + (((seed >> 10) & 31) - 16)))
+        image.data[at + 3] = 255
+      }
     }
     nctx.putImageData(image, 0, 0)
     const noisyJpeg = await canvasJpeg(noisy, 0.95)
-    const stepped = await normalizer.normalize(noisyJpeg, { maxBytes: 30000 })
-    assert('ladder ok on noisy input', stepped.ok)
-    if (stepped.ok) {
-      assert('ladder stepped below 90', stepped.photo.quality < 90, `quality=${stepped.photo.quality}`)
-      assert('ladder output fits test budget', stepped.photo.bytes.byteLength <= 30000)
+    const full = await normalizer.normalize(noisyJpeg)
+    assert('ladder baseline ok', full.ok)
+    if (full.ok) {
+      assert('baseline encodes at 90', full.photo.quality === 90, `quality=${full.photo.quality}`)
+      const half = Math.floor(full.photo.bytes.byteLength / 2)
+      const stepped = await normalizer.normalize(noisyJpeg, { maxBytes: half })
+      assert('ladder ok under half budget', stepped.ok)
+      if (stepped.ok) {
+        assert('ladder stepped below 90', stepped.photo.quality < 90, `quality=${stepped.photo.quality}`)
+        assert('ladder output fits test budget', stepped.photo.bytes.byteLength <= half)
+      }
     }
     const impossible = await normalizer.normalize(noisyJpeg, { maxBytes: 64 })
     assert(

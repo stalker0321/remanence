@@ -219,10 +219,19 @@ describe('photo intake fencing and order', () => {
     const normalizer = new PhotoNormalizer(mid.codec)
     const draft = new PhotoDraft()
     const intake = new PhotoIntake(normalizer, draft)
-    const fence = { owner: 'owner-a', generation: 1, confirmed: { id: 1 }, mounted: true }
-    const pending = intake.addFiles([immediateFile()], () => fence)
+    // The guard reads LIVE state on every call (like the App reads the
+    // store): a fresh object per read, so identity compares state, not self.
+    let owner = 'owner-a'
+    const confirmed = { id: 1 }
+    const guard = (): { owner: string | null; generation: number; confirmed: unknown; mounted: boolean } => ({
+      owner,
+      generation: 1,
+      confirmed,
+      mounted: true,
+    })
+    const pending = intake.addFiles([immediateFile()], guard)
     await untilStarted(mid.started)
-    fence.owner = 'owner-b'
+    owner = 'owner-b'
     mid.encodeGate.resolve(soiBytes(256))
     const outcome = await pending
     expect(outcome.completed).toBe(false)
@@ -363,6 +372,9 @@ describe('photo intake fencing and order', () => {
       mounted: true,
     }))
     expect(outcome).toEqual({ added: 1, refused: false, completed: true })
-    expect(draft.photos()[0]).toMatchObject({ width: 8, height: 8, contentHash: 'ab'.repeat(32) })
+    // Dimensions ride along; the hash is the real SHA-256 of the normalized
+    // bytes (64 hex) — exact digest values are pinned in the hash test above.
+    expect(draft.photos()[0]).toMatchObject({ width: 8, height: 8 })
+    expect(draft.photos()[0]?.contentHash).toMatch(/^[0-9a-f]{64}$/)
   })
 })

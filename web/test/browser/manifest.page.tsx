@@ -45,6 +45,10 @@ import { ScanGrant } from '../../src/scan/grant'
 import { SessionStore } from '../../src/session/session'
 import { SyncError } from '../../src/sync/errors'
 import { downloadCiphertext, fetchIncoming, type IncomingCapsule } from '../../src/sync/incoming'
+import { signPublishStatement } from '../../src/crypto/publish'
+import type { DraftPhoto } from '../../src/create/photos'
+import type { RecipientSnapshot } from '../../src/create/recipient'
+import { sealCapsule, type SealedCapsule } from '../../src/create/sealCapsule'
 import { assembleSenderCapsule, deriveCapsuleBlobId } from '../senderRoundTrip'
 import { keysetFromJson, type JsonKeyset } from '../keysetJson'
 import hpkeVector from '../../../protocol/fixtures/recipient-envelope-v1.json'
@@ -94,10 +98,25 @@ const HPKE_PRIVATE = keysetFromJson(hpkeVector.fixed_private_keyset_json as Json
 const SIGNING_PRIVATE = keysetFromJson(signatureVector.fixed_private_keyset_json as JsonKeyset)
 const SIGNING_PUBLIC = keysetFromJson(signatureVector.fixed_public_keyset_json as JsonKeyset)
 
+/** Explicit test-only confirmed recipient (fixed HPKE golden public half). */
+const RECIPIENT_SNAPSHOT: RecipientSnapshot = {
+  userId: RECIPIENT_ID,
+  handle: RECIPIENT_HANDLE,
+  keyBundleId: RECIPIENT_BUNDLE,
+  suite: 'HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519',
+  protocolVersion: 1,
+  encryptionPublicKeyset: b64(HPKE_PUBLIC),
+  signingPublicKeyset: b64(SIGNING_PUBLIC),
+  directoryVersion: '0'.repeat(16),
+  self: false,
+}
+
 const SHORT = 'Probe note text.'
 const MULTILINE = 'A small note that wraps across a few rows so the receiver must reproduce every single word.'
 /** Distinct from SHORT so the composer invalidates the prior held freeze. */
 const CRYPTO_SHORT = 'Sealed round-trip note.'
+/** Distinct from the prior crypto case so the composer invalidates. */
+const CRYPTO_SEAL_NOTE = 'Production sealed note.'
 
 /** Three visibly and byte-distinct synthetic patterns (unique normalized hashes). */
 const PATTERN_COLORS: ReadonlyArray<readonly [string, string]> = [
@@ -352,6 +371,73 @@ function settledSession(): { session: SessionStore; keys: MemoryKeys } {
   const keys = new MemoryKeys()
   keys.hold(session.getSnapshot(), receiverCapabilities())
   return { session, keys }
+}
+
+/** TEST-ONLY sender capability whose `sign` uses the committed golden keyset. */
+function senderKeys(session: SessionStore): MemoryKeys {
+  const keys = new MemoryKeys()
+  keys.hold(session.getSnapshot(), {
+    accountId: SENDER_ID,
+    bundleId: SENDER_BUNDLE,
+    openEnvelope: async () => {
+      throw new Error('unused by sealCapsule')
+    },
+    decryptArtifact: async () => {
+      throw new Error('unused by sealCapsule')
+    },
+    sign: (statement) => signPublishStatement(SIGNING_PRIVATE, statement),
+    lock: () => {},
+  })
+  return keys
+}
+
+/** Scripted transports over a production SealedCapsule (no network/backend). */
+function sealedTransport(sealed: SealedCapsule, envelopeShaB64: string): ApiTransport & ByteTransport {
+  const byBlob = new Map<string, Uint8Array>(sealed.blobs.map((blob): [string, Uint8Array] => [blob.blobId, blob.ciphertext]))
+  const page = {
+    items: [
+      {
+        capsule_id: sealed.capsuleId,
+        sender_user_id: sealed.senderUserId,
+        recipient_user_id: sealed.recipientUserId,
+        sender_key_bundle_id: sealed.senderKeyBundleId,
+        recipient_key_bundle_id: sealed.recipientKeyBundleId,
+        protocol_version: 1,
+        ready_at: '2023-11-14T22:13:20Z',
+        signed_publish_statement: { statement: b64(sealed.statement), statement_sha256: b64(sealed.statementSha256), signature: b64(sealed.signature) },
+        recipient_envelope: {
+          recipient_key_bundle_id: sealed.recipientKeyBundleId,
+          ciphertext: b64(sealed.envelopeCiphertext),
+          ciphertext_size: sealed.envelopeCiphertext.length,
+          ciphertext_sha256: envelopeShaB64,
+        },
+        blobs: sealed.blobs.map((blob) => ({ blob_id: blob.blobId, kind: blob.kind, ordinal: blob.kind === 'PHOTO' ? blob.ordinal : null, ciphertext_size: blob.ciphertextSize, ciphertext_sha256: b64(blob.ciphertextSha256) })),
+      },
+    ],
+    has_more: false,
+    next_cursor: null,
+  }
+  const directory = {
+    key_bundle_id: SENDER_BUNDLE,
+    user_id: SENDER_ID,
+    suite: 'tink',
+    protocol_version: 1,
+    encryption_public_keyset: b64(SIGNING_PUBLIC),
+    signing_public_keyset: b64(SIGNING_PUBLIC),
+    status: 'ACTIVE',
+    created_at: '2023-11-14T22:13:20Z',
+  }
+  return {
+    async request(input: ApiRequest): Promise<ApiResult> {
+      if (input.path === '/v1/capsules/incoming') return { status: 200, body: page }
+      return { status: 200, body: directory }
+    },
+    async requestBytes(input: ByteRequest): Promise<ByteResult> {
+      const blobId = input.path.slice(input.path.lastIndexOf('/') + 1)
+      const body = byBlob.get(blobId)
+      return body ? { status: 200, body } : { status: 404, body: new Uint8Array() }
+    },
+  }
 }
 
 async function main(): Promise<void> {
@@ -708,8 +794,120 @@ async function main(): Promise<void> {
       }
     }
 
+    // ---- REAL production sealCapsule -> SAME real receiver round-trip ----
+    const runProductionSealRoundTrip = async (label: string, note: string | null): Promise<void> => {
+      const snapshot = await armAndFreeze(label, note)
+      assert(`${label}: production seal freeze snapshot`, snapshot !== null, String(snapshot))
+      if (!snapshot) return
+      const plan = snapshot.renderedPlan
+      const draftPhotos: DraftPhoto[] = photos.map((photo) => ({
+        id: photo.contentId,
+        bytes: normalizedByContentId.get(photo.contentId)!,
+        width: photo.width,
+        height: photo.height,
+        contentHash: photo.contentHash,
+      }))
+      const senderMemory = senderKeys(session)
+      let sealed: SealedCapsule | null = null
+      let opened: Awaited<ReturnType<typeof openGrantedPostcard>> | null = null
+      let receiverKeys: MemoryKeys | null = null
+      try {
+        sealed = await sealCapsule({
+          session,
+          keys: senderMemory,
+          freeze: snapshot,
+          recipient: RECIPIENT_SNAPSHOT,
+          photos: draftPhotos,
+          capsuleId: CAPSULE_UUID,
+          candidateId: CANDIDATE,
+          createdAtEpochSeconds: CREATED_AT,
+          epoch: EPOCH,
+          frontFingerprint: RECOGNITION_FP,
+          placeLabel: null,
+        })
+        for (const forbidden of ['capsuleKeyset', 'plaintext', 'frontFingerprint', 'expression', 'note', 'wipe']) {
+          assert(`${label}: production sealed output has no ${forbidden}`, !(forbidden in (sealed as unknown as Record<string, unknown>)))
+        }
+        assert(`${label}: production sealer returns ciphertext+public metadata only`, sealed.blobs.length === 5 && sealed.blobs.filter((blob) => blob.kind === 'PHOTO').length === 3)
+
+        const { session: rxSession, keys } = settledSession()
+        receiverKeys = keys
+        const envelopeShaB64 = await sha256B64(sealed.envelopeCiphertext)
+        const transport = sealedTransport(sealed, envelopeShaB64)
+        const catalog = await fetchIncoming(rxSession, transport)
+        assert(`${label}: production seal fetchIncoming one verified item`, catalog.items.length === 1, String(catalog.items.length))
+        const item = catalog.items[0]
+        if (!item) return
+        const contentBlob = sealed.blobs.find((blob) => blob.kind === 'CONTENT_MANIFEST')!
+        const contentCiphertext = await downloadCiphertext(rxSession, transport, item, contentBlob.blobId)
+        const sealedPhotos: Array<{ blobId: string; ordinal: number; ciphertext: Uint8Array }> = []
+        for (const blob of sealed.blobs) {
+          if (blob.kind !== 'PHOTO') continue
+          sealedPhotos.push({ blobId: blob.blobId, ordinal: blob.ordinal, ciphertext: await downloadCiphertext(rxSession, transport, item, blob.blobId) })
+        }
+        opened = await openGrantedPostcard(rxSession, keys, ScanGrant.issue(RECIPIENT_ID, CAPSULE_UUID), item, { blobId: contentBlob.blobId, ciphertext: contentCiphertext }, sealedPhotos, measurer)
+        for (const photo of photos) {
+          const returned = opened.photos.get(photo.contentId)
+          const expected = normalizedByContentId.get(photo.contentId)!
+          assert(`${label}: production seal returned decrypted JPEG ${photo.contentId} byte-identical to normalized input`, returned !== undefined && sameBytes(returned, expected))
+        }
+
+        const openedScene = opened.scene as Scene
+        const decryptedImages = new Map<string, PaintImage>()
+        const decryptedBitmaps: ImageBitmap[] = []
+        try {
+          for (const scenePhoto of openedScene.photos) {
+            const jpeg = opened.photos.get(scenePhoto.contentId)
+            if (!jpeg) throw new Error(`missing decrypted photo ${scenePhoto.contentId}`)
+            const bitmap = await createImageBitmap(new Blob([arrayBuffer(jpeg)], { type: 'image/jpeg' }))
+            decryptedBitmaps.push(bitmap)
+            decryptedImages.set(scenePhoto.contentId, { source: bitmap, width: bitmap.width, height: bitmap.height })
+          }
+          traces.fillText.length = 0
+          traces.drawImage.length = 0
+          assert(`${label}: production seal receiver paints from decrypted JPEGs`, paintScene(receiverContext, openedScene, decryptedImages, null))
+          const destinations = traces.drawImage.slice(-plan.slots.length).map((call) => [call.dx, call.dy, call.dw, call.dh])
+          assert(`${label}: production seal drawImage destination = frozen slots`, JSON.stringify(destinations) === JSON.stringify(plan.slots.map((slot) => [slot.destination.x, slot.destination.y, slot.destination.width, slot.destination.height])), JSON.stringify(destinations))
+          openedScene.photos.forEach((scenePhoto, index) => {
+            const frozenSlot = plan.slots[index]!
+            assert(
+              `${label}: production seal scene photo ${index} geometry = frozen preview`,
+              scenePhoto.destination.x === frozenSlot.destination.x &&
+                scenePhoto.destination.y === frozenSlot.destination.y &&
+                scenePhoto.destination.width === frozenSlot.destination.width &&
+                scenePhoto.destination.height === frozenSlot.destination.height &&
+                scenePhoto.source.x === frozenSlot.source.x &&
+                scenePhoto.source.y === frozenSlot.source.y &&
+                scenePhoto.source.width === frozenSlot.source.width &&
+                scenePhoto.source.height === frozenSlot.source.height &&
+                scenePhoto.shape === frozenSlot.shape,
+              JSON.stringify({ got: scenePhoto, want: frozenSlot }),
+            )
+          })
+          assert(`${label}: production seal scene style = frozen style`, openedScene.styleId === snapshot.styleId, `${openedScene.styleId} vs ${snapshot.styleId}`)
+          const noteCalls = traces.fillText.filter((call) => call.font.includes('StudySans'))
+          if (plan.note === null) {
+            assert(`${label}: production seal absent note paints no rows`, noteCalls.length === 0, JSON.stringify(noteCalls))
+          } else {
+            const paintedRows = noteCalls.map((call) => ({ text: call.text, x: call.x, baseline: call.y }))
+            const expectedRows = plan.note.rows.map((row) => ({ text: row.text, x: row.x, baseline: row.baseline }))
+            assert(`${label}: production seal note rows/baselines = captured preview`, JSON.stringify(paintedRows) === JSON.stringify(expectedRows), JSON.stringify({ paintedRows, expectedRows }))
+          }
+          const provenanceTexts = traces.fillText.filter((call) => call.font.includes('StudySerif')).map((call) => call.text)
+          assert(`${label}: production seal provenance = captured preview`, plan.provenance.every((mark) => provenanceTexts.includes(mark.text)), JSON.stringify(provenanceTexts))
+        } finally {
+          for (const bitmap of decryptedBitmaps) bitmap.close()
+        }
+      } finally {
+        if (opened) for (const bytes of opened.photos.values()) bytes.fill(0)
+        receiverKeys?.drop()
+        if (sealed) for (const blob of sealed.blobs) blob.ciphertext.fill(0)
+      }
+    }
+
     await runCryptoRoundTrip('crypto short note', CRYPTO_SHORT)
     await runCryptoRoundTrip('crypto absent note', null)
+    await runProductionSealRoundTrip('production seal note', CRYPTO_SEAL_NOTE)
   } catch (error) {
     assert('manifest harness', false, String(error))
   } finally {

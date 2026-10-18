@@ -162,7 +162,7 @@ try {
         report.failures.push(`${route}/${run.viewport}: ${JSON.stringify(diag)}`)
         throw new Error(`create journey reported failed status for ${route}/${run.viewport} :: ${JSON.stringify(diag)}`)
       }
-      await page.screenshot({ path: join(outDir, `create-journey-${run.lang}-${run.viewport}-chromium.png`) })
+      await page.screenshot({ path: join(outDir, `create-journey-${run.lang}-${run.viewport}-chromium.png`), fullPage: true })
       await page.evaluate(() => { window.__createRelease = true })
       await page.waitForFunction(() => document.querySelector('#journey-status')?.textContent === 'done', undefined, { timeout: 60000 })
       const result = await page.evaluate(() => window.__createJourney)

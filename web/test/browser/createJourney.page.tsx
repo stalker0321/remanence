@@ -106,15 +106,19 @@ interface Harness {
   restartRecipient: () => void
   holdDecode: () => void
   releaseDecode: () => void
+  signIn: () => void
+  unmount: () => void
+}
+
+const SIGN_IN = {
+  accountId: ACCOUNT, bundleId: BUNDLE, handle: 'sergio',
+  accessToken: 'access-token-value', refreshToken: 'refresh-token-value',
+  accessExpiresAt: '2026-10-17T00:00:00Z', refreshExpiresAt: '2026-11-17T00:00:00Z',
 }
 
 function harness(lang: Language): Harness {
   const store = new SessionStore(lang)
-  store.signIn({
-    accountId: ACCOUNT, bundleId: BUNDLE, handle: 'sergio',
-    accessToken: 'access-token-value', refreshToken: 'refresh-token-value',
-    accessExpiresAt: '2026-10-17T00:00:00Z', refreshExpiresAt: '2026-11-17T00:00:00Z',
-  })
+  store.signIn(SIGN_IN)
   store.unlock()
   const recipient = new RecipientDraft()
   recipient.attach(store)
@@ -132,7 +136,12 @@ function harness(lang: Language): Harness {
 
   let gate: Promise<void> | null = null
   const real = browserImageDecode()
-  const imageDecode: CreatorImageDecode = async (bytes) => { if (gate) await gate; return real(bytes) }
+  const imageDecode: CreatorImageDecode = async (bytes) => {
+    ;(window as unknown as { __decodeCount?: number }).__decodeCount =
+      ((window as unknown as { __decodeCount?: number }).__decodeCount ?? 0) + 1
+    if (gate) await gate
+    return real(bytes)
+  }
 
   const rootRef: { root: Root | null } = { root: null }
   const render = () => {
@@ -190,6 +199,12 @@ function harness(lang: Language): Harness {
     restartRecipient: () => { recipient.restart(); render() },
     holdDecode: () => { gate = new Promise<void>((resolve) => { gateRelease = resolve }) },
     releaseDecode: () => { gate = null; gateRelease?.() },
+    signIn: () => { store.signIn(SIGN_IN); store.unlock() },
+    unmount: () => {
+      rootRef.root?.unmount()
+      rootRef.root = null
+      for (const host of [...document.querySelectorAll('[data-testid="create-host"]')]) host.remove()
+    },
   } as Harness
 }
 
@@ -224,11 +239,13 @@ async function main(): Promise<void> {
       await gradientJpeg(600, 800, 90),
       await gradientJpeg(1000, 1000, 150),
     ]
+    const spare = await gradientJpeg(700, 500, 210)
     const h = harness(lang)
     h.create()
-    await runChecks(h, files, status)
+    await runChecks(h, files, spare, status)
     status.textContent = 'capture-ready'
     await waitFor(() => (window as unknown as { __createRelease?: boolean }).__createRelease === true, 'runner release')
+    await runTeardown(h)
     status.textContent = 'done'
   } catch (error) {
     fail('journey harness', String(error))
@@ -236,7 +253,7 @@ async function main(): Promise<void> {
   }
 }
 
-async function runChecks(h: Harness, files: File[], status: HTMLElement): Promise<void> {
+async function runChecks(h: Harness, files: File[], spare: File, status: HTMLElement): Promise<void> {
   void status
   // 0. The real Create component commits asynchronously; wait for the
   //    confirmed recipient surface before using the actual file input.
@@ -278,7 +295,9 @@ async function runChecks(h: Harness, files: File[], status: HTMLElement): Promis
   h.trim()
   await waitFor(() => document.querySelector('[data-testid="creator-canvas"]') === null, 'two-photo composer unmount')
   assert('two photos remove the composer honestly', document.querySelector('[data-testid="creator-canvas"]') === null)
-  h.pick([files[2] as File])
+  // A DISTINCT third file keeps three distinct cached handles for the
+  // teardown counts below (re-picking an existing file would duplicate one).
+  h.pick([spare])
   await waitFor(() => canvasState() === 'ready', 'restored composer paint')
   assert('re-adding to 3 restores the composer', canvasState() === 'ready')
 
@@ -300,37 +319,84 @@ async function runChecks(h: Harness, files: File[], status: HTMLElement): Promis
   await waitFor(() => canvasState() === 'ready', 'reorder repaint')
   assert('reorder keeps a ready composer', canvasState() === 'ready')
 
-  // 8. Held decode across a lock: stale completion closed, nothing leaked.
-  //    (Lock intentionally drops the confirmed recipient, so the composer
-  //    stays detached — the preview is not resurrected from stale state.)
-  const closedBefore = closedBitmaps()
+  // 8. Prompt owned teardown: the PUBLISHED decoded handles are closed on
+  //    lock / recipient loss / account boundary; recovery re-decodes from
+  //    the current draft, never reusing pre-lock plaintext.
+  const confirmRecipient = (): void => {
+    const ticket = h.recipient.nextTicket(ACCOUNT)
+    h.recipient.offer(ticket, ACCOUNT, snapshot())
+    h.recipient.confirm()
+    h.create()
+  }
+  const pickThree = async (): Promise<void> => {
+    await waitFor(() => document.querySelector('.photo-draft input[type="file"]') !== null, 'create flow')
+    h.pick(files)
+    await waitFor(() => canvasState() === 'ready', 'composer paint')
+  }
   h.setMusic(false)
   h.setNote('Probe note text.')
-  h.trim()
-  await waitFor(() => document.querySelector('[data-testid="creator-canvas"]') === null, 'held trim unmounts')
+
+  const decodesBefore = decodeCount()
+  let closesBefore = closedBitmaps()
+  h.session.lock()
+  await waitFor(() => document.querySelector('[data-testid="creator-canvas"]') === null, 'lock detaches composer')
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert('lock closes every published decoded handle', closedBitmaps() - closesBefore >= 3, `${closedBitmaps()} - ${closesBefore}`)
+
+  h.session.unlock()
+  confirmRecipient()
+  await pickThree()
+  assert('recovered composer paints after lock teardown', canvasState() === 'ready')
+  assert('recovery re-decodes instead of reusing pre-lock plaintext', decodeCount() > decodesBefore, `${decodeCount()} vs ${decodesBefore}`)
+
+  // Recipient loss releases the published decoded handles too.
+  closesBefore = closedBitmaps()
+  h.recipient.restart()
+  h.create()
+  await waitFor(() => document.querySelector('[data-testid="creator-canvas"]') === null, 'recipient loss detaches composer')
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert('recipient loss closes the published decoded handles', closedBitmaps() - closesBefore >= 3, `${closedBitmaps()} - ${closesBefore}`)
+
+  // Re-confirm restores the composer from the retained photo draft (no
+  // re-pick), then the account boundary (signOut) releases it.
+  confirmRecipient()
+  await waitFor(() => canvasState() === 'ready', 're-confirmed composer paint')
+  closesBefore = closedBitmaps()
+  h.session.signOut()
+  await waitFor(() => document.querySelector('[data-testid="creator-canvas"]') === null, 'signOut detaches composer')
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert('account boundary closes the published decoded handles', closedBitmaps() - closesBefore >= 3, `${closedBitmaps()} - ${closesBefore}`)
+
+  // 9. Held decode across a lock: the LATE owned success is closed and the
+  //    composer is not republished for the stale context.
+  h.signIn()
+  confirmRecipient()
+  await pickThree()
+  const heldCloses = closedBitmaps()
   h.holdDecode()
-  h.pick([files[0] as File])
+  h.pick([spare])
   await new Promise((resolve) => setTimeout(resolve, 200))
-  assert('held decode never publishes a composer before release', document.querySelector('[data-testid="creator-canvas"]') === null)
   h.session.lock()
   await new Promise((resolve) => setTimeout(resolve, 100))
   h.releaseDecode()
   await new Promise((resolve) => setTimeout(resolve, 250))
-  assert('held decode closed its owned bitmaps after the stale lock', closedBitmaps() > closedBefore)
-  assert('lock keeps the composer detached (no stale publish)', document.querySelector('[data-testid="creator-canvas"]') === null)
+  assert('held decode closed its late owned handle after the stale lock', closedBitmaps() > heldCloses, `${closedBitmaps()} vs ${heldCloses}`)
+  assert('stale context keeps the composer detached', document.querySelector('[data-testid="creator-canvas"]') === null)
 
-  // 9. Recovery: lock dropped the recipient + photo draft, so a fresh
-  //    confirm + pick restores the connected composer (real draft kept).
-  h.session.unlock()
-  const ticket = h.recipient.nextTicket(ACCOUNT)
-  h.recipient.offer(ticket, ACCOUNT, snapshot())
-  h.recipient.confirm()
-  h.create()
-  await waitFor(() => document.querySelector('.photo-draft input[type="file"]') !== null, 'recovered create flow')
-  h.pick(files)
-  await waitFor(() => canvasState() === 'ready', 'recovered composer paint')
-  assert('re-confirmed recipient + fresh photos restore the connected composer', canvasState() === 'ready')
-  assert('recovered composer still renders a candidate', __textOf('creator-branch').length > 0)
+  // 10. Leave a mounted, ready composer for the capture-ready screenshot
+  //     (unmount teardown runs after the runner releases, below).
+  h.signIn()
+  confirmRecipient()
+  await pickThree()
+  assert('capture-ready frame shows the mounted connected composer', canvasState() === 'ready')
+}
+
+async function runTeardown(h: Harness): Promise<void> {
+  const closesBefore = closedBitmaps()
+  h.unmount()
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert('unmount releases the connected composer', document.querySelector('[data-testid="creator-canvas"]') === null)
+  assert('unmount closes the published decoded handles', closedBitmaps() - closesBefore >= 3, `${closedBitmaps()} - ${closesBefore}`)
 }
 
 function __click(testid: string): void {
@@ -344,6 +410,9 @@ function __disabled(testid: string): boolean {
 }
 function closedBitmaps(): number {
   return (window as unknown as { __bitmapCloses?: number }).__bitmapCloses ?? 0
+}
+function decodeCount(): number {
+  return (window as unknown as { __decodeCount?: number }).__decodeCount ?? 0
 }
 
 void main()

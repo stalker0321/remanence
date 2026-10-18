@@ -95,13 +95,17 @@ export class CreatorImageBridge {
       return { ok: false, stale }
     }
     const images: ImageBitmap[] = []
+    // Within ONE load, a repeated content hash must decode ONCE and share a
+    // single owned handle; otherwise the per-slot duplicates would never be
+    // adopted into `#cache` and would leak on dispose.
+    const freshByHash = new Map<string, ImageBitmap>()
     for (const photo of accepted) {
       if (!alive() || epoch !== this.#epoch) return fail(true)
       if (photo.width < 1 || photo.height < 1 || photo.contentHash === '') return fail(false)
-      const cached = this.#cache.get(photo.contentHash)
-      if (cached) {
-        if (cached.width !== photo.width || cached.height !== photo.height) return fail(false)
-        images.push(cached)
+      const resolved = this.#cache.get(photo.contentHash) ?? freshByHash.get(photo.contentHash)
+      if (resolved) {
+        if (resolved.width !== photo.width || resolved.height !== photo.height) return fail(false)
+        images.push(resolved)
         continue
       }
       let image: ImageBitmap
@@ -119,10 +123,12 @@ export class CreatorImageBridge {
         return fail(false)
       }
       fresh.push(image)
+      freshByHash.set(photo.contentHash, image)
       images.push(image)
     }
     if (!alive() || epoch !== this.#epoch) return fail(true)
-    // Commit: evict bitmaps no longer referenced, adopt the fresh ones.
+    // Commit: evict bitmaps no longer referenced, adopt every fresh handle
+    // (one per distinct hash) so dispose closes all of them.
     const hashes = new Set(accepted.map((photo) => photo.contentHash))
     for (const [hash, bitmap] of [...this.#cache]) {
       if (hashes.has(hash)) continue
@@ -133,10 +139,9 @@ export class CreatorImageBridge {
       }
       this.#cache.delete(hash)
     }
-    accepted.forEach((photo, index) => {
-      const image = images[index] as ImageBitmap
-      if (!this.#cache.has(photo.contentHash)) this.#cache.set(photo.contentHash, image)
-    })
+    for (const [hash, image] of freshByHash) {
+      if (!this.#cache.has(hash)) this.#cache.set(hash, image)
+    }
     this.#key = key
     this.#current = accepted.map((photo, index) => ({
       contentId: photo.id,

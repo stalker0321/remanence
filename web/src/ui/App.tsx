@@ -476,6 +476,11 @@ export function Create({
     const bridge = imageBridge.current
     frozenRef.current = null
     if (!open || confirmed === null || accepted === null || !noteFits || bridge === null) {
+      // Sensitive teardown: lock / account-context loss / recipient loss /
+      // over-limit note must close the published decoded plaintext now, not
+      // only at component unmount. The bridge is reusable; the next accepted
+      // load re-decodes from the current draft.
+      bridge?.dispose()
       setCreatorImages(null)
       setCreatorImageState('idle')
       return

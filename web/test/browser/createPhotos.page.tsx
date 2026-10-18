@@ -217,6 +217,9 @@ async function untilInput(harness: Harness): Promise<void> {
     if (Date.now() > deadline) throw new Error('photo input missing')
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
+  // The mount effect (which constructs the intake) runs before paint;
+  // waiting a frame guarantees it has flushed, not just the DOM.
+  await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)))
 }
 
 async function main(): Promise<void> {

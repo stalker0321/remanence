@@ -163,6 +163,25 @@ const copy: Record<CreatorLang, Copy> = {
 
 const IDENTITY_CROP: CropTransform = { z: 1, xPercent: 0, yPercent: 0 }
 
+/**
+ * T247 R2: a stable local id per measurer object. The rendered binding key is
+ * otherwise blind to the measurer: two measurers can produce the SAME plan
+ * region/state/branch/slots yet different wrapped note rows (same line count),
+ * which would leave a held freeze valid while the canvas shows new rows.
+ * Binding the key to the measurer's identity (local UI revision only — never a
+ * wire/epoch/protocol value) makes replacing the measurer void the held render.
+ * Production memoizes one measurer, so this id is stable across renders.
+ */
+const measurerIds = new WeakMap<TextMeasurer, number>()
+let measurerIdSeq = 0
+function measurerIdOf(measurer: TextMeasurer): number {
+  const existing = measurerIds.get(measurer)
+  if (existing !== undefined) return existing
+  const next = ++measurerIdSeq
+  measurerIds.set(measurer, next)
+  return next
+}
+
 export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element {
   const t = copy[props.lang]
   const styleId = props.styleId ?? 'press'
@@ -285,6 +304,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     if (view === null || senderHandle === null) return null
     const style = styleById(styleId)
     return JSON.stringify({
+      measurer: measurerIdOf(props.measurer),
       view,
       styleId,
       styleVersion: style?.version ?? '',
@@ -298,7 +318,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
           : [props.recipient.userId, props.recipient.keyBundleId, props.recipient.directoryVersion],
       musicSelected: props.musicSelected,
     })
-  }, [view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.musicSelected])
+  }, [props.measurer, view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.musicSelected])
 
   const currentFreeze: FreezeCurrent | null = useMemo(() => {
     if (view === null) return null

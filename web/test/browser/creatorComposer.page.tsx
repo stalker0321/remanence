@@ -18,6 +18,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { useState } from 'react'
 import { CreatorComposer, type CreatorComposerPhoto } from '../../src/collage/CreatorComposer'
 import { creatorScene, plannerFromTextMeasurer, previewCandidates, type CreatorCandidateView } from '../../src/collage/creatorPreview'
+import { layoutCreatorNote } from '../../src/collage/creatorNote'
 import type { CreatorFreeze } from '../../src/create/creatorFreeze'
 import { SessionStore } from '../../src/session/session'
 import type { Scene, TextMeasurer } from '../../src/collage/prepare'
@@ -62,6 +63,15 @@ const WRAPPED_NOTE =
   'Тихий вечір біля моря, довга дорога додому, і всі маленькі речі, які ми хотіли зберегти на потім, у пам’яті про цей день.'
 /** One unbreakable over-wide token — must refuse, never clip as ready. */
 const UNBREAKABLE_NOTE = 'x'.repeat(400)
+
+/**
+ * T247 R2: the note the measurer-swap regression runs on. `runChecks`
+ * overwrites this with a note it PROVES (via the real wrap) keeps the same
+ * plan view/line count under measurers A and B while producing different
+ * wrapped rows, so the component's binding must depend on the measurer
+ * itself, not the plan region. The literal is only a safe fallback.
+ */
+let AB_NOTE = 'hknq orux vybe cfil jmps qtwz xadg ehkn'
 
 const NOTES = [
   'Probe note text.',
@@ -116,6 +126,25 @@ function canvasMeasurer(): TextMeasurer {
         ? width > request.maxWidth || height > request.maxHeight
         : width > request.maxWidth * Math.max(1, Math.floor(request.maxHeight / request.line)) || height > request.maxHeight
       return { width: Math.ceil(width), height, hasVisualOverflow }
+    },
+  }
+}
+
+/**
+ * T247 R2: measurer B shares A's per-character metrics but widens every
+ * measured line by a fixed amount per word, so the greedy wrap can break on
+ * different words while (for a chosen note) keeping the same line count and
+ * therefore the SAME plan region/state/branch/slots. That is exactly the
+ * blind spot the rendered binding must close.
+ */
+function perturbMeasurer(base: TextMeasurer, extraPerWord: number): TextMeasurer {
+  return {
+    measure(request) {
+      const result = base.measure(request)
+      const words = request.text
+        .split('\n')
+        .reduce((count, line) => count + line.split(/\s+/).filter((word) => word.length > 0).length, 0)
+      return { ...result, width: result.width + extraPerWord * words }
     },
   }
 }
@@ -217,7 +246,8 @@ function installFillTextTrace(): FillTextCall[] {
 function App(props: {
   photos: CreatorComposerPhoto[]
   session: SessionStore
-  measurer: TextMeasurer
+  measurerA: TextMeasurer
+  measurerB: TextMeasurer
   noteIndex: number
   noteOverride: string | null
   senderOverride: string | undefined
@@ -230,6 +260,9 @@ function App(props: {
   onSetNote: (note: string | null) => void
 }): React.JSX.Element {
   const [musicSelected, setMusicSelected] = useState(false)
+  // Held in state so toggling swaps the measurer prop WITHOUT remounting the
+  // component (same root, same element position → state and canvas persist).
+  const [measurer, setMeasurer] = useState<TextMeasurer>(props.measurerA)
   const lang = new URLSearchParams(window.location.search).get('lang')
   return (
     <div>
@@ -263,6 +296,16 @@ function App(props: {
       <button type="button" data-testid="page-note-clear" onClick={() => props.onSetNote(null)}>
         clearnote
       </button>
+      <button type="button" data-testid="page-note-ab" onClick={() => props.onSetNote(AB_NOTE)}>
+        abnote
+      </button>
+      <button
+        type="button"
+        data-testid="page-measurer-toggle"
+        onClick={() => setMeasurer((current) => (current === props.measurerA ? props.measurerB : props.measurerA))}
+      >
+        measurer:{measurer === props.measurerB ? 'B' : 'A'}
+      </button>
       <span data-testid="page-photos">{props.photos.map((photo) => photo.contentId).join(',')}</span>
       <CreatorComposer
         photos={props.photos}
@@ -274,7 +317,7 @@ function App(props: {
         ownerId={ACCOUNT}
         session={props.session}
         lang={lang === 'ru' ? 'ru' : lang === 'uk' ? 'uk' : 'en'}
-        measurer={props.measurer}
+        measurer={measurer}
         onFrozenChange={props.onFrozenChange}
       />
     </div>
@@ -385,6 +428,10 @@ async function main(): Promise<void> {
       refreshExpiresAt: '2026-11-17T00:00:00Z',
     })
     session.unlock()
+    // T247 R2: stable measurer identities. `render()` re-renders the SAME App
+    // root, so these objects persist; only the explicit toggle swaps A↔B.
+    const measurerA = canvasMeasurer()
+    const measurerB = perturbMeasurer(canvasMeasurer(), 9)
     const render = () => {
       if (rootRef.root === null) {
         const host = document.createElement('div')
@@ -396,7 +443,8 @@ async function main(): Promise<void> {
         <App
           photos={photos}
           session={session}
-          measurer={canvasMeasurer()}
+          measurerA={measurerA}
+          measurerB={measurerB}
           noteIndex={noteIndex}
           noteOverride={noteOverride}
           senderOverride={senderOverride}
@@ -971,6 +1019,135 @@ function lastFrozen(): { frozen: boolean; branch: string | null; snapshot: Creat
   click('creator-freeze')
   await waitFor(() => textOf('creator-frozen').length > 0, 'freeze after generation bump')
   assert('explicit freeze works after the new generation paints', true)
+
+  // --- t247 r2: replacing the measurer must void a held render (one mount) ---
+  // Two measurers share per-character metrics; B widens every measured line by
+  // a fixed per-word amount. We PROVE (with the real wrap) a note they wrap to
+  // the SAME plan view/line count but DIFFERENT rows, so the plan
+  // region/state/branch/slots are byte-identical and only the measured render
+  // differs. That is the exact blind spot a plan-derived key misses.
+  const measuredRows = (m: TextMeasurer, view: CreatorCandidateView): string[] => {
+    const scene = creatorScene({
+      view,
+      styleId: 'press',
+      senderHandle: SENDER_HANDLE,
+      noteText: AB_NOTE,
+      photos: new Map(getPhotos().map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
+    })
+    if (!scene.note) return []
+    const face = {
+      font: scene.note.family,
+      weight: scene.note.weight,
+      italic: scene.note.italic,
+      size: scene.note.size,
+      line: scene.note.line,
+    }
+    const layout = layoutCreatorNote(scene.note.text, face, scene.note.region, (lineText) =>
+      m.measure({
+        text: lineText,
+        family: face.font,
+        size: face.size,
+        weight: face.weight,
+        italic: face.italic,
+        line: face.line,
+        maxWidth: Number.POSITIVE_INFINITY,
+        maxHeight: Number.POSITIVE_INFINITY,
+        softWrap: false,
+      }).width,
+    )
+    return layout.overflow ? [] : layout.lines.map((row) => row.text)
+  }
+  const abMeasurerA = canvasMeasurer()
+  const abMeasurerB = perturbMeasurer(canvasMeasurer(), 9)
+  const abPhotos = getPhotos().map((photo) => ({ contentId: photo.contentId, width: photo.width, height: photo.height, contentHash: photo.contentHash }))
+  const abViews = (m: TextMeasurer): CreatorCandidateView[] =>
+    previewCandidates({ id: 'browser', sender: SENDER_HANDLE, photos: abPhotos, note: AB_NOTE }, undefined, plannerFromTextMeasurer(m, 640, 640, NOTE_FACE))
+  let abRowsA: string[] = []
+  let abRowsB: string[] = []
+  ;(() => {
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz'
+    for (let k = 3; k <= 9; k += 1) {
+      for (let len = 3; len <= 11; len += 1) {
+        AB_NOTE = Array.from({ length: k }, (_, i) => alphabet[(i * 5 + len) % 26].repeat(len)).join(' ')
+        const viewsA = abViews(abMeasurerA)
+        const viewsB = abViews(abMeasurerB)
+        if (viewsA.length === 0 || viewsB.length === 0) continue
+        if (JSON.stringify(viewsA[0]) !== JSON.stringify(viewsB[0])) continue
+        const rowsA = measuredRows(abMeasurerA, viewsA[0]!)
+        const rowsB = measuredRows(abMeasurerB, viewsB[0]!)
+        if (rowsA.length === 0 || rowsB.length === 0 || rowsA.length !== rowsB.length || rowsA.length > 3) continue
+        if (JSON.stringify(rowsA) === JSON.stringify(rowsB)) continue
+        abRowsA = rowsA
+        abRowsB = rowsB
+        return
+      }
+    }
+  })()
+  assert(
+    'measurer A/B wrap the ab note to the same line count but different rows',
+    abRowsA.length > 0 && abRowsA.length === abRowsB.length && JSON.stringify(abRowsA) !== JSON.stringify(abRowsB),
+    JSON.stringify({ note: AB_NOTE, abRowsA, abRowsB }),
+  )
+  assert(
+    'measurer A/B produce an identical plan view (region/state/branch/slots)',
+    JSON.stringify(abViews(abMeasurerA)[0]) === JSON.stringify(abViews(abMeasurerB)[0]),
+  )
+
+  traced().length = 0
+  click('page-note-ab')
+  // Wait for the CURRENT render (not a possibly stale enabled Freeze button):
+  // the painted rows must be the measured A rows before we arm.
+  await waitFor(
+    () => JSON.stringify(noteRows().map((row) => row.text)) === JSON.stringify(abRowsA),
+    'ab note paints its measurer-A rows',
+  )
+  await armFreeze('ab note repaints and arms freeze')
+  assert('ab note paints ready under measurer A', canvasState() === 'ready')
+  click('creator-freeze')
+  await waitFor(() => textOf('creator-frozen').length > 0, 'freeze under measurer A')
+  const snapA = lastFrozen()?.snapshot ?? null
+  const keyA = snapA?.renderedKey ?? ''
+  assert('measurer A freeze holds a keyed render', snapA !== null && typeof keyA === 'string' && keyA.length > 0)
+  assert(
+    'measurer A freeze carries the A rows',
+    JSON.stringify(snapA?.renderedPlan?.note?.rows?.map((row) => row.text) ?? []) === JSON.stringify(abRowsA),
+    JSON.stringify(snapA?.renderedPlan?.note?.rows?.map((row) => row.text) ?? []),
+  )
+
+  // Swap the measurer on the SAME mounted component: the plan view is
+  // unchanged but the measured rows change, so the held freeze must be voided
+  // BEFORE any new freeze is requested. Nothing is unmounted or re-rooted.
+  const frozenBeforeSwap = frozenLog.length
+  traced().length = 0
+  click('page-measurer-toggle')
+  await waitFor(
+    () => JSON.stringify(noteRows().map((row) => row.text)) === JSON.stringify(abRowsB),
+    'measurer swap paints the B rows',
+  )
+  await waitFor(() => lastFrozen()?.frozen === false, 'measurer swap voids the held freeze')
+  assert('parent sees the measurer-change null', lastFrozen()?.frozen === false)
+  assert(
+    'the swap emitted no non-null freeze of its own',
+    frozenLog.slice(frozenBeforeSwap).every((entry) => entry.frozen === false),
+    JSON.stringify(frozenLog.slice(frozenBeforeSwap)),
+  )
+  assert('the frozen chip cleared on the swap', document.querySelector('[data-testid="creator-frozen"]') === null)
+  assert(
+    'canvas paints the measurer B rows after the swap',
+    JSON.stringify(noteRows().map((row) => row.text)) === JSON.stringify(abRowsB),
+    JSON.stringify(noteRows().map((row) => row.text)),
+  )
+
+  await armFreeze('measurer B re-arms freeze')
+  click('creator-freeze')
+  await waitFor(() => textOf('creator-frozen').length > 0, 're-freeze under measurer B')
+  const snapB = lastFrozen()?.snapshot ?? null
+  assert('fresh freeze under measurer B holds a NEW key', snapB !== null && snapB.renderedKey !== keyA)
+  assert(
+    'fresh freeze under measurer B holds the B rows',
+    JSON.stringify(snapB?.renderedPlan?.note?.rows?.map((row) => row.text) ?? []) === JSON.stringify(abRowsB),
+    JSON.stringify(snapB?.renderedPlan?.note?.rows?.map((row) => row.text) ?? []),
+  )
 }
 
 async function runTeardown(session: SessionStore): Promise<void> {

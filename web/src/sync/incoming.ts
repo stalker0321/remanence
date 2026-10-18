@@ -306,14 +306,17 @@ function readBlob(value: unknown): IncomingBlob {
 }
 
 function bindStatement(statement: Uint8Array, item: DraftItem): void {
-  const fields = walk(statement, [1, 2, 3, 4, 5, 6, 7, 8], 8)
+  // T283: root field 7 (`created_at_epoch_seconds`, proto int64) is read with the
+  // scoped signed64 reader below. An omitted field is the proto3 default 0. The
+  // parsed value is intentionally unused and never exposed via `IncomingCapsule`;
+  // it is NOT a client clock/date policy.
+  const fields = walk(statement, [1, 2, 3, 4, 5, 6, 7, 8], 8, 7)
   if (fields.numbers.get(1) !== 1) throw new SyncError('SYNC_REJECTED')
   if (uuidText(fields.bytes.get(2)) !== item.capsuleId) throw new SyncError('SYNC_REJECTED')
   if (uuidText(fields.bytes.get(3)) !== item.senderUserId) throw new SyncError('SYNC_REJECTED')
   if (uuidText(fields.bytes.get(4)) !== item.recipientUserId) throw new SyncError('SYNC_REJECTED')
   if (uuidText(fields.bytes.get(5)) !== item.senderKeyBundleId) throw new SyncError('SYNC_REJECTED')
   if (uuidText(fields.bytes.get(6)) !== item.recipientKeyBundleId) throw new SyncError('SYNC_REJECTED')
-  if (fields.numbers.get(7) === undefined) throw new SyncError('SYNC_REJECTED')
   if (fields.repeated.length !== item.blobs.length) throw new SyncError('SYNC_REJECTED')
   const bindings = fields.repeated.map(readBinding)
   for (const blob of item.blobs) {
@@ -358,10 +361,12 @@ function walk(
   bytes: Uint8Array,
   allowed: number[],
   repeatedField: number | null,
-): { numbers: Map<number, number>; bytes: Map<number, Uint8Array>; repeated: Uint8Array[] } {
+  int64Field: number | null = null,
+): { numbers: Map<number, number>; bytes: Map<number, Uint8Array>; repeated: Uint8Array[]; int64s: Map<number, bigint> } {
   const numbers = new Map<number, number>()
   const byteFields = new Map<number, Uint8Array>()
   const repeated: Uint8Array[] = []
+  const int64s = new Map<number, bigint>()
   let pos = 0
   const integer = (): number => {
     let value = 0
@@ -378,11 +383,42 @@ function walk(
     }
     throw new SyncError('SYNC_REJECTED')
   }
+  /**
+   * T283 scoped signed64 reader for the ROOT timestamp only. Reads at most 10
+   * bytes, rejects a 10th-byte payload > 1 (overflow beyond 64 bits) or an
+   * unterminated/truncated varint, and converts the uint64 wire value to
+   * two's-complement signed64. Every other scalar still uses `integer()`
+   * (uint32) above; this does NOT loosen any non-timestamp field.
+   */
+  const signed64 = (): bigint => {
+    let value = 0n
+    let factor = 1n
+    for (let i = 0; i < 10; i++) {
+      const piece = bytes[pos++]
+      if (piece === undefined) throw new SyncError('SYNC_REJECTED')
+      value += BigInt(piece & 127) * factor
+      if ((piece & 128) === 0) {
+        if (i === 9 && piece > 1) throw new SyncError('SYNC_REJECTED')
+        return value >= (1n << 63n) ? value - (1n << 64n) : value
+      }
+      factor *= 128n
+    }
+    throw new SyncError('SYNC_REJECTED')
+  }
   while (pos < bytes.length) {
     const tag = integer()
     const field = Math.floor(tag / 8)
     const wire = tag % 8
     if (!allowed.includes(field)) throw new SyncError('SYNC_REJECTED')
+    if (int64Field !== null && field === int64Field) {
+      // Root scalar wire0 only; any other wire and any repeat (including a
+      // cross-wire repeat) is malformed.
+      if (wire !== 0 || int64s.has(field) || numbers.has(field) || byteFields.has(field)) {
+        throw new SyncError('SYNC_REJECTED')
+      }
+      int64s.set(field, signed64())
+      continue
+    }
     if (wire === 0) {
       if (numbers.has(field)) throw new SyncError('SYNC_REJECTED')
       numbers.set(field, integer())
@@ -398,7 +434,7 @@ function walk(
       throw new SyncError('SYNC_REJECTED')
     }
   }
-  return { numbers, bytes: byteFields, repeated }
+  return { numbers, bytes: byteFields, repeated, int64s }
 }
 
 function unzigzag(value: number): number {

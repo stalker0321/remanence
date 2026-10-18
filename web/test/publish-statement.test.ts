@@ -286,18 +286,27 @@ describe('actual receiver boundary (unchanged fetchIncoming)', () => {
     await expect(fetchIncoming(session, incomingTransport(page))).rejects.toMatchObject({ code: 'SYNC_REJECTED' })
   })
 
-  it('EXISTING RECEIVER GAP (FOLLOW-UP): zero/negative/>uint32 timestamps are rejected by the unchanged receiver', async () => {
-    // The unchanged incoming.ts `walk.integer()` reads at most 5 bytes and caps
-    // at uint32, and `bindStatement` requires field 7 present. The encoder is
-    // still correct for the full signed64 range; this is a pre-existing receiver
-    // compatibility gap, recorded as a follow-up, NOT a sender timestamp policy.
-    for (const timestamp of [0n, -1n, 2n ** 32n]) {
+  it('accepts the full signed64 timestamp range at the real receiver (absent = 0)', async () => {
+    // T283: root field 7 is read as signed64; absent (protobuf default 0) is
+    // admitted. This is reader conformance, not a client clock/backend policy.
+    const timestamps = [
+      -(2n ** 63n),
+      -1n,
+      0n,
+      1n,
+      BigInt(publishVector.created_at_epoch_seconds),
+      2n ** 32n,
+      (2n ** 63n) - 1n,
+    ]
+    for (const timestamp of timestamps) {
       const statement = buildPublishStatement(fixtureInput(timestamp))
       const signature = await signPublishStatement(PRIVATE_KEYSET, statement)
       const page = await signedPageFor(statement, signature)
       const session = new SessionStore()
       signIn(session)
-      await expect(fetchIncoming(session, incomingTransport(page))).rejects.toMatchObject({ code: 'SYNC_REJECTED' })
+      const catalog = await fetchIncoming(session, incomingTransport(page))
+      expect(catalog.items).toHaveLength(1)
+      expect(catalog.items[0]?.capsuleId).toBe(publishVector.capsule_id)
     }
   })
 })

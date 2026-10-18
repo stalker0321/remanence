@@ -61,7 +61,8 @@ await writeFile(
 )
 await writeFile(
   join(work, 'vite.config.mjs'),
-  `export default { root: ${JSON.stringify(work)}, logLevel: 'warn', esbuild: { jsx: 'automatic' }, build: { outDir: ${JSON.stringify(join(work, 'dist'))}, emptyOutDir: true, minify: false, sourcemap: false, rollupOptions: { input: { index: ${JSON.stringify(join(work, 'index.html'))}, create: ${JSON.stringify(join(work, 'create.html'))} }, onwarn() {} } } }\n`,
+  `import react from ${JSON.stringify(requireTool.resolve('@vitejs/plugin-react', { paths: [web] }))}\n` +
+    `export default { root: ${JSON.stringify(work)}, logLevel: 'warn', plugins: [react()], esbuild: { jsx: 'automatic' }, build: { outDir: ${JSON.stringify(join(work, 'dist'))}, emptyOutDir: true, minify: false, sourcemap: false, rollupOptions: { input: { index: ${JSON.stringify(join(work, 'index.html'))}, create: ${JSON.stringify(join(work, 'create.html'))} }, onwarn() {} } } }\n`,
 )
 const built = spawnSync('npx', ['vite', 'build', '--config', join(work, 'vite.config.mjs')], {
   cwd: web,

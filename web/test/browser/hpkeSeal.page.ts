@@ -8,11 +8,19 @@
  * envelope-plaintext builder; no secret bytes are logged or screenshotted.
  */
 import vector from '../../../protocol/fixtures/recipient-envelope-v1.json'
+import publishVector from '../../../protocol/fixtures/publish-statement-v1.json'
+import { decryptArtifact } from '../../src/crypto/artifact'
+import { encryptArtifact } from '../../src/crypto/artifactEncrypt'
+import { generateCapsuleKeyset } from '../../src/crypto/capsuleKeyset'
 import { openRecipientEnvelope } from '../../src/crypto/hpke'
 import { sealRecipientEnvelope } from '../../src/crypto/hpkeSeal'
-import { hexToBytes, readUint32 } from '../../src/protocol/bytes'
+import { buildRecipientEnvelopePlaintext } from '../../src/crypto/recipientEnvelope'
+import { arrayBuffer, hexToBytes, readUint32, utf8 } from '../../src/protocol/bytes'
+import { artifactAad, recipientEnvelopeInfo } from '../../src/protocol/context'
 import { ProtocolError } from '../../src/protocol/errors'
 import { limits } from '../../src/protocol/limits'
+import { fieldBytes, fieldNumber, readMessage } from '../../src/protocol/proto'
+import { uuidToBytes } from '../../src/protocol/uuid'
 import { keysetFromJson } from '../keysetJson'
 
 interface CheckResult { name: string; ok: boolean; detail?: string }
@@ -91,6 +99,64 @@ async function main(): Promise<void> {
       wrongInfoRefused = error instanceof ProtocolError
     }
     assert('wrong info is refused', wrongInfoRefused)
+
+    // Real RecipientEnvelopePlaintext payload: build -> seal -> existing open ->
+    // bounded proto decode, then use the decoded capsule keyset as a real AEAD.
+    const statementBytes = hexToBytes(publishVector.expected_deterministic_hex)
+    const statementHash = new Uint8Array(await crypto.subtle.digest('SHA-256', arrayBuffer(statementBytes)))
+    const ids = {
+      capsuleId: uuidToBytes(publishVector.capsule_id),
+      senderUserId: uuidToBytes(publishVector.sender_user_id),
+      recipientUserId: uuidToBytes(publishVector.recipient_user_id),
+      senderKeyBundleId: uuidToBytes(publishVector.sender_key_bundle_id),
+      recipientKeyBundleId: uuidToBytes(publishVector.recipient_key_bundle_id),
+    }
+    const capsuleKeyset = generateCapsuleKeyset()
+    const envelopePlaintext = buildRecipientEnvelopePlaintext({
+      ...ids,
+      capsuleAeadKeyset: capsuleKeyset,
+      publishStatementSha256: statementHash,
+    })
+    const payloadInfo = recipientEnvelopeInfo({
+      capsuleId: publishVector.capsule_id,
+      senderUserId: publishVector.sender_user_id,
+      recipientUserId: publishVector.recipient_user_id,
+      recipientKeyBundleId: publishVector.recipient_key_bundle_id,
+    })
+    const payloadFrame = await sealRecipientEnvelope(PUBLIC_KEYSET, payloadInfo, envelopePlaintext)
+    const openedPayload = await openRecipientEnvelope(PRIVATE_KEYSET, payloadInfo, payloadFrame)
+    const fields = readMessage(openedPayload, [1, 2, 3, 4, 5, 6, 7, 8])
+    assert(
+      'real envelope payload decodes to its exact fields',
+      fieldNumber(fields, 1) === 1 &&
+        sameBytes(fieldBytes(fields, 2), ids.capsuleId) &&
+        sameBytes(fieldBytes(fields, 3), ids.senderUserId) &&
+        sameBytes(fieldBytes(fields, 4), ids.recipientUserId) &&
+        sameBytes(fieldBytes(fields, 5), ids.senderKeyBundleId) &&
+        sameBytes(fieldBytes(fields, 6), ids.recipientKeyBundleId),
+    )
+    assert('decoded envelope statement hash matches the raw statement', sameBytes(fieldBytes(fields, 8), statementHash))
+    const decodedKeyset = fieldBytes(fields, 7)
+    assert('decoded envelope keyset equals the generated keyset', sameBytes(decodedKeyset, capsuleKeyset))
+    const payloadAad = artifactAad({
+      capsuleId: publishVector.capsule_id,
+      blobId: '00000000-0000-0000-0000-0000000000b2',
+      kind: 'PHOTO',
+      ordinal: 0,
+      senderUserId: publishVector.sender_user_id,
+      recipientUserId: publishVector.recipient_user_id,
+    })
+    const payloadPlain = utf8('browser envelope keyset usable')
+    const payloadCipher = await encryptArtifact(decodedKeyset, payloadAad, payloadPlain, 'PHOTO')
+    assert(
+      'decoded envelope keyset is a usable AEAD key',
+      sameBytes(await decryptArtifact(decodedKeyset, payloadAad, payloadCipher, 'PHOTO'), payloadPlain),
+    )
+    envelopePlaintext.fill(0)
+    openedPayload.fill(0)
+    capsuleKeyset.fill(0)
+    decodedKeyset.fill(0)
+    statementHash.fill(0)
   } catch (error) {
     assert('hpke seal browser harness', false, String(error))
   }

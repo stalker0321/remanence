@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import hpkeVector from '../../protocol/fixtures/recipient-envelope-v1.json'
 import signatureVector from '../../protocol/fixtures/publish-signature-v1.json'
 import { b64 } from '../../server/src/remanence/recovery/web/crypto.mjs'
@@ -46,7 +46,9 @@ const DIRECTORY_VERSION = '0'.repeat(16)
 const CANDIDATE = 'cand-1'
 const CREATED_AT = 1_755_000_000n
 const EPOCH = 17n
-const FP = Uint8Array.from({ length: 32 }, (_value, index) => index + 1)
+/** Canonical fingerprint bytes; `FP` is a per-test mutable copy reset in beforeEach. */
+const FP0 = Uint8Array.from({ length: 32 }, (_value, index) => index + 1)
+const FP = FP0.slice()
 const SUITE = 'HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519'
 
 const HPKE_PUBLIC = keysetFromJson(hpkeVector.fixed_public_keyset_json as JsonKeyset)
@@ -275,6 +277,25 @@ async function openSealed(sealed: Awaited<ReturnType<typeof sealCapsule>>) {
   const opened = await openGrantedPostcard(received.session, received.keys, ScanGrant.issue(RECIPIENT_ID, CAPSULE_UUID), item, content, sealedPhotos, measurer)
   return { opened, received }
 }
+
+/** Re-sign-in helper for the bounded lifecycle transitions (no new policy). */
+function signIn(session: SessionStore, accountId: string, bundleId: string): void {
+  session.signIn({
+    accountId,
+    bundleId,
+    handle: SENDER_HANDLE,
+    accessToken: 'sender-access',
+    refreshToken: 'sender-refresh',
+    accessExpiresAt: '2026-10-17T00:00:00Z',
+    refreshExpiresAt: '2026-11-17T00:00:00Z',
+  })
+}
+
+beforeEach(() => {
+  // Isolate the shared fingerprint copy: any in-test mutation cannot leak into
+  // the next test (avoids vacuous "mutation was a no-op" proofs).
+  FP.set(FP0)
+})
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -510,31 +531,49 @@ describe('production sealCapsule', () => {
     }) as typeof crypto.subtle.digest)
     const pending = seal(sender, { recipient: mutableRecipient, frontFingerprint: FP })
     FP.fill(0xcc)
+    // The mutation must be REAL (not a no-op): the caller buffer changed after
+    // the await, yet the authenticated recovered FP equals the pre-await bytes.
+    expect(bytesToHex(FP)).not.toBe(bytesToHex(originalFp))
     mutableRecipient.encryptionPublicKeyset = b64(SIGNING_PUBLIC)
     const sealed = await pending
 
-    const envelopePlain = await openRecipientEnvelope(
-      HPKE_PRIVATE,
-      recipientEnvelopeInfo({ capsuleId: CAPSULE_UUID, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID, recipientKeyBundleId: RECIPIENT_BUNDLE }),
-      sealed.envelopeCiphertext,
-    )
-    const keyset = fieldBytes(readMessage(envelopePlain, [1, 2, 3, 4, 5, 6, 7, 8]), 7)
-    const recognitionBlob = sealed.blobs.find((blob) => blob.kind === 'RECOGNITION_MANIFEST')!
-    const recognitionPlain = await decryptArtifact(
-      keyset,
-      artifactAad({ capsuleId: CAPSULE_UUID, blobId: recognitionBlob.blobId, kind: 'RECOGNITION_MANIFEST', ordinal: -1, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID }),
-      recognitionBlob.ciphertext,
-      'RECOGNITION_MANIFEST',
-    )
-    const recoveredFp = fieldBytes(readMessage(recognitionPlain, [1, 2, 3, 4]), 4)
-    expect(bytesToHex(recoveredFp)).toBe(bytesToHex(originalFp))
-    envelopePlain.fill(0)
-    keyset.fill(0)
-    recognitionPlain.fill(0)
+    // Test-owned recovered secret buffers are wiped even if an assertion fails.
+    let envelopePlain: Uint8Array | null = null
+    let keyset: Uint8Array | null = null
+    let recognitionPlain: Uint8Array | null = null
+    try {
+      envelopePlain = await openRecipientEnvelope(
+        HPKE_PRIVATE,
+        recipientEnvelopeInfo({ capsuleId: CAPSULE_UUID, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID, recipientKeyBundleId: RECIPIENT_BUNDLE }),
+        sealed.envelopeCiphertext,
+      )
+      keyset = fieldBytes(readMessage(envelopePlain, [1, 2, 3, 4, 5, 6, 7, 8]), 7)
+      const recognitionBlob = sealed.blobs.find((blob) => blob.kind === 'RECOGNITION_MANIFEST')!
+      recognitionPlain = await decryptArtifact(
+        keyset,
+        artifactAad({ capsuleId: CAPSULE_UUID, blobId: recognitionBlob.blobId, kind: 'RECOGNITION_MANIFEST', ordinal: -1, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID }),
+        recognitionBlob.ciphertext,
+        'RECOGNITION_MANIFEST',
+      )
+      const recoveredFp = fieldBytes(readMessage(recognitionPlain, [1, 2, 3, 4]), 4)
+      expect(bytesToHex(recoveredFp)).toBe(bytesToHex(originalFp))
+    } finally {
+      envelopePlain?.fill(0)
+      keyset?.fill(0)
+      recognitionPlain?.fill(0)
+    }
   })
 
-  it('fails closed when the session locks/signs out or the caps are replaced during async', async () => {
-    for (const transition of ['lock', 'signout', 'caps'] as const) {
+  it('fails closed with a typed stale and no result across distinct session/account/bundle/caps transitions during async', async () => {
+    const transitions: Array<{ name: string; mutate: (sender: SenderFixture) => void }> = [
+      { name: 'session.lock -> authenticated', mutate: (sender) => sender.session.lock() },
+      { name: 'signout -> signed-out', mutate: (sender) => sender.session.signOut() },
+      { name: 'same-account relogin (generation)', mutate: (sender) => { sender.session.signOut(); signIn(sender.session, SENDER_ID, SENDER_BUNDLE); sender.session.unlock() } },
+      { name: 'account move', mutate: (sender) => { sender.session.signOut(); signIn(sender.session, '99999999-9999-4999-8999-999999999999', SENDER_BUNDLE); sender.session.unlock() } },
+      { name: 'bundle move', mutate: (sender) => { sender.session.signOut(); signIn(sender.session, SENDER_ID, '99999999-9999-4999-8999-999999999999'); sender.session.unlock() } },
+      { name: 'same-account caps replacement', mutate: (sender) => sender.keys.hold(sender.session.getSnapshot(), { ...sender.caps }) },
+    ]
+    for (const { name, mutate } of transitions) {
       const sender = await senderFixture()
       const realDigest = crypto.subtle.digest.bind(crypto.subtle)
       let first = true
@@ -543,15 +582,13 @@ describe('production sealCapsule', () => {
           first = false
           return (async () => {
             await new Promise((resolve) => setTimeout(resolve, 15))
-            if (transition === 'lock') sender.session.lock()
-            else if (transition === 'signout') sender.session.signOut()
-            else sender.keys.hold(sender.session.getSnapshot(), { ...sender.caps })
+            mutate(sender)
             return realDigest(algorithm, data)
           })()
         }
         return realDigest(algorithm, data)
       }) as typeof crypto.subtle.digest)
-      await expect(seal(sender)).rejects.toMatchObject({ code: 'stale' })
+      await expect(seal(sender), name).rejects.toMatchObject({ code: 'stale' })
       vi.restoreAllMocks()
     }
   })

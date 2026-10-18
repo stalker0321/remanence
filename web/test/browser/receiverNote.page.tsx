@@ -13,6 +13,11 @@ import type { ResolvedExpression } from '../../src/collage/model'
 import { paintScene, type PaintImage } from '../../src/collage/paint'
 import { prepare, type Scene } from '../../src/collage/prepare'
 import { pressSheet } from '../sheets'
+// T243 R3: register the SAME real bundled faces as the accepted creator
+// fixture (loopback-served by the runner's /fonts route). Without this the
+// note is painted with the browser fallback and the font requirement is
+// vacuous.
+import './composerFonts.css'
 
 interface CheckResult { name: string; ok: boolean; detail?: string }
 const assertions: CheckResult[] = []
@@ -61,6 +66,62 @@ async function ensureFaces(): Promise<void> {
     document.fonts.load('normal 400 64px StudySerif'),
     document.fonts.load('italic 400 20px StudySerif'),
   ])
+  await document.fonts.ready
+}
+
+interface FontEvidence {
+  registered: Array<{ family: string; style: string; weight: string; status: string }>
+  studySansLoaded: number
+  studySansStatuses: string[]
+  studySansCheck: boolean
+  studySansWidth: number
+  missingWidth: number
+  studySerifWidth: number
+  fontRequests: Array<{ name: string; status: number; initiatorType: string }>
+}
+
+/**
+ * Real-font proof: `document.fonts.check` alone is vacuous (it returns true
+ * for an unregistered family too). We require non-empty `load()` results with
+ * a `loaded` FontFace, a registered `FontFaceSet` entry, a measured width that
+ * differs from a missing-family fallback, and the actual `/fonts/*` fetches.
+ */
+async function collectFontEvidence(): Promise<FontEvidence> {
+  const sans = await document.fonts.load(`normal 400 ${SIZE}px StudySans`)
+  await document.fonts.load('normal 400 64px StudySerif')
+  await document.fonts.ready
+  const probe = document.createElement('canvas').getContext('2d')
+  const widthOf = (font: string): number => {
+    if (!probe) return -1
+    probe.font = font
+    return probe.measureText('Wg').width
+  }
+  const fontRequests = performance
+    .getEntriesByType('resource')
+    .filter((entry) => entry.name.includes('/fonts/'))
+    .map((entry) => {
+      const resource = entry as PerformanceResourceTiming & { responseStatus?: number }
+      return {
+        name: resource.name.replace(location.origin, ''),
+        status: resource.responseStatus ?? 0,
+        initiatorType: resource.initiatorType,
+      }
+    })
+  return {
+    registered: Array.from(document.fonts).map((face) => ({
+      family: face.family,
+      style: face.style,
+      weight: face.weight,
+      status: face.status,
+    })),
+    studySansLoaded: sans.length,
+    studySansStatuses: sans.map((face) => face.status),
+    studySansCheck: document.fonts.check(`normal 400 ${SIZE}px StudySans`),
+    studySansWidth: widthOf(`normal 400 ${SIZE}px StudySans`),
+    missingWidth: widthOf(`normal 400 ${SIZE}px __remanence_missing_family__`),
+    studySerifWidth: widthOf('normal 400 64px StudySerif'),
+    fontRequests,
+  }
 }
 
 function installFillTextTrace(): Array<{ text: string; x: number; y: number; font: string }> {
@@ -90,8 +151,36 @@ async function main(): Promise<void> {
   if (!context) throw new Error('no 2d context')
   const images = new Map<string, PaintImage>()
   for (const id of ['p1', 'p2', 'p3']) images.set(id, { source: twoTone(120, 213), width: 120, height: 213 })
+  let fonts: FontEvidence | null = null
   try {
     await ensureFaces()
+    fonts = await collectFontEvidence()
+    ;(window as unknown as { __receiverFonts?: unknown }).__receiverFonts = fonts
+    assert(
+      'bundled faces registered in the FontFaceSet',
+      fonts.registered.length > 0,
+      JSON.stringify(fonts.registered),
+    )
+    assert(
+      'StudySans face is registered and loaded',
+      fonts.registered.some((face) => face.family === 'StudySans' && face.status === 'loaded'),
+      JSON.stringify(fonts.registered),
+    )
+    assert(
+      'document.fonts.load(StudySans) returned a loaded face (non-empty)',
+      fonts.studySansLoaded >= 1 && fonts.studySansStatuses.includes('loaded'),
+      `loaded=${fonts.studySansLoaded} statuses=${JSON.stringify(fonts.studySansStatuses)}`,
+    )
+    assert(
+      'StudySans measures differently from a missing-family fallback (real face, not fallback)',
+      fonts.studySansWidth > 0 && fonts.studySansWidth !== fonts.missingWidth,
+      `sans=${fonts.studySansWidth} missing=${fonts.missingWidth}`,
+    )
+    assert(
+      'a bundled /fonts face was actually fetched over the wire (2xx)',
+      fonts.fontRequests.some((request) => request.status >= 200 && request.status < 400),
+      JSON.stringify(fonts.fontRequests),
+    )
     const measurer = canvasTextMeasurer(document)
     const sources = new Map<string, { width: number; height: number }>()
     for (const id of ['p1', 'p2', 'p3']) sources.set(id, { width: 120, height: 213 })
@@ -177,7 +266,7 @@ async function main(): Promise<void> {
   } catch (error) {
     assert('receiver note harness', false, String(error))
   }
-  ;(window as unknown as { __receiverNote?: unknown }).__receiverNote = { assertions, failures }
+  ;(window as unknown as { __receiverNote?: unknown }).__receiverNote = { assertions, failures, fonts }
   status.textContent = failures.length === 0 ? 'done' : 'failed'
 }
 

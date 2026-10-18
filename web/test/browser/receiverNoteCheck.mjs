@@ -124,6 +124,9 @@ try {
       status,
       assertions: result?.assertions ?? [],
       failures: result?.failures ?? [],
+      // T243 R3: real-font evidence (registered faces, load results, actual
+      // /fonts requests + statuses) captured from the running page.
+      fonts: result?.fonts ?? null,
     }
     try {
       await page.locator('#receiver-note-sheet').screenshot({ path: join(outDir, 'receiver-note-chromium.png') })

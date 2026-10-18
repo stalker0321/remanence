@@ -9,7 +9,7 @@
  *
  * Orientation reference: the stored (unoriented) bitmap is read with
  * `imageOrientation: 'none'` and mapped to upright with the standard
- * per-orientation transform; the `fromImage` bitmap must match it at
+ * per-orientation transform; the `from-image` bitmap must match it at
  * sampled points (dims + dominant colour class, JPEG-tolerant). This
  * proves the platform applies EXIF exactly once — the adapter itself
  * never transforms.
@@ -100,7 +100,7 @@ async function storedFixture(): Promise<Uint8Array> {
   return canvasJpeg(element, 0.95)
 }
 
-async function bitmapOf(bytes: Uint8Array, orientation: 'fromImage' | 'none'): Promise<ImageBitmap> {
+async function bitmapOf(bytes: Uint8Array, orientation: 'from-image' | 'none'): Promise<ImageBitmap> {
   const copy = bytes.slice()
   return createImageBitmap(new Blob([copy.buffer as ArrayBuffer], { type: 'image/jpeg' }), {
     imageOrientation: orientation,
@@ -108,7 +108,7 @@ async function bitmapOf(bytes: Uint8Array, orientation: 'fromImage' | 'none'): P
 }
 
 function pixels(bitmap: ImageBitmap): ImageData {
-  const [element, context] = canvas(bitmap.width, bitmap.height)
+  const [, context] = canvas(bitmap.width, bitmap.height)
   context.drawImage(bitmap, 0, 0)
   return context.getImageData(0, 0, bitmap.width, bitmap.height)
 }
@@ -226,7 +226,7 @@ async function main(): Promise<void> {
     // manual-transform reference (proves exactly-once application).
     for (let orientation = 1; orientation <= 8; orientation += 1) {
       const bytes = injectExifOrientation(stored, orientation)
-      const seen = await bitmapOf(bytes, 'fromImage')
+      const seen = await bitmapOf(bytes, 'from-image')
       const swap = orientation >= 5
       const ew = swap ? 4 : 6
       const eh = swap ? 6 : 4
@@ -260,7 +260,7 @@ async function main(): Promise<void> {
         size !== null && size.width === normal.photo.width && size.height === normal.photo.height,
       )
       assert('encoded metadata stripped (no Exif)', !hasExifSegment(normal.photo.bytes))
-      const redecoded = await bitmapOf(normal.photo.bytes, 'fromImage')
+      const redecoded = await bitmapOf(normal.photo.bytes, 'from-image')
       assert('normalized output re-decodes upright', redecoded.width === 4 && redecoded.height === 6)
       redecoded.close()
     }

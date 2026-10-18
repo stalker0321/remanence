@@ -7,7 +7,7 @@ import type { DecodedUpright, PhotoCodec } from './normalize'
  * - https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html
  * - https://developer.mozilla.org/en-US/docs/Web/API/Window/createImageBitmap
  *
- * `createImageBitmap` with `imageOrientation: 'fromImage'` decodes the JPEG
+ * `createImageBitmap` with `imageOrientation: 'from-image'` decodes the JPEG
  * and applies the EXIF orientation exactly once — the returned bitmap is
  * already upright, so the canvas stage must NOT transform it again (doing
  * so would double-rotate mirrored orientations). Re-encoding from pixels
@@ -21,7 +21,9 @@ export function browserPhotoCodec(doc: Document): PhotoCodec {
       try {
         bitmap = await createImageBitmap(
           new Blob([copy.buffer as ArrayBuffer], { type: 'image/jpeg' }),
-          { imageOrientation: 'fromImage' },
+          // Explicit default: decode and apply EXIF. TS DOM lib spells the
+          // enum member 'from-image' (spec IDL); behavior is the default.
+          { imageOrientation: 'from-image' },
         )
       } catch {
         throw new Error('decode failed')

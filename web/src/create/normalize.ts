@@ -119,7 +119,13 @@ export class PhotoNormalizer {
     this.ladder = ladder
   }
 
-  async normalize(input: Uint8Array): Promise<NormalizeOutcome> {
+  async normalize(input: Uint8Array, options: NormalizerOptions = {}): Promise<NormalizeOutcome> {
+    const maxLongEdge = options.maxLongEdge ?? this.maxLongEdge
+    const maxBytes = options.maxBytes ?? this.maxBytes
+    const ladder = options.ladder ?? this.ladder
+    if (!Number.isInteger(maxLongEdge) || maxLongEdge < 1) return { ok: false, reason: 'decode' }
+    if (!Number.isInteger(maxBytes) || maxBytes < 1) return { ok: false, reason: 'decode' }
+    if (!validLadder(ladder)) return { ok: false, reason: 'decode' }
     if (input.byteLength > SOURCE_PHOTO_MAX_BYTES) {
       return { ok: false, reason: 'oversize' }
     }
@@ -133,16 +139,16 @@ export class PhotoNormalizer {
       return { ok: false, reason: 'decode' }
     }
     try {
-      const plan = planNormalization(decoded.width, decoded.height, this.maxLongEdge)
+      const plan = planNormalization(decoded.width, decoded.height, maxLongEdge)
       if (!plan) return { ok: false, reason: 'decode' }
-      for (const quality of this.ladder) {
+      for (const quality of ladder) {
         let bytes: Uint8Array
         try {
           bytes = await decoded.encodeJpeg(plan.width, plan.height, quality)
         } catch {
           return { ok: false, reason: 'decode' }
         }
-        if (bytes.byteLength === 0 || bytes.byteLength > this.maxBytes) continue
+        if (bytes.byteLength === 0 || bytes.byteLength > maxBytes) continue
         if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return { ok: false, reason: 'decode' }
         const digest = await crypto.subtle.digest('SHA-256', arrayBuffer(bytes))
         return {
@@ -248,7 +254,7 @@ export class PhotoIntake {
     )
   }
 
-  private async #drain(
+  async #drain(
     files: ArrayLike<IntakeFile>,
     guard: () => IntakeFence,
     fence: IntakeFence,

@@ -1,4 +1,4 @@
-import fixture from '../../protocol/fixtures/limits-v1.json'
+import fixture from '../../../protocol/fixtures/limits-v1.json'
 
 /**
  * protocol/fixtures/limits-v1.json. Ciphertext caps live in `limits`; the

@@ -508,8 +508,8 @@ export function Create({
     }
   }
 
-  async function addPhotos(list: FileList | null) {
-    if (!list || !confirmed) return
+  async function addPhotos(list: File[] | FileList | null) {
+    if (!list || list.length === 0 || !confirmed) return
     const intakePort = intake.current
     if (!intakePort) return
     // Capture the FULL tuple up front. The intake fences internally too,
@@ -701,7 +701,10 @@ export function Create({
                 accept="image/jpeg,.jpg,.jpeg"
                 multiple
                 onChange={(event) => {
-                  const list = event.target.files
+                  // Snapshot the picked files FIRST: input.files is a live
+                  // FileList — resetting the input below would empty the
+                  // same object before addPhotos reads it.
+                  const list = event.target.files ? Array.from(event.target.files) : null
                   event.target.value = ''
                   void addPhotos(list)
                 }}

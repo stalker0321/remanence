@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { layoutCreatorNote } from '../src/collage/creatorNote'
 import { creatorScene, plannerFromTextMeasurer, previewCandidates } from '../src/collage/creatorPreview'
-import { projectionHash } from '../src/collage/codec'
+import { projectionBytes, projectionHash } from '../src/collage/codec'
 import { captureFrozenRenderedPlan } from '../src/collage/frozenRenderedPlan'
 import { buildFrozenExpression } from '../src/collage/frozenExpression'
 import { encodeContentManifest, type ContentManifestRefusal } from '../src/collage/manifest'
@@ -9,7 +9,7 @@ import { prepare } from '../src/collage/prepare'
 import { parseContentManifest } from '../src/collage/wire'
 import { styleById } from '../src/collage/styles'
 import { freezeSelection } from '../src/create/creatorFreeze'
-import type { ResolvedExpression } from '../src/collage/model'
+import { validateResolved, type ResolvedExpression } from '../src/collage/model'
 import type { TextMeasurer } from '../src/collage/prepare'
 
 const SENDER = 'sergio'
@@ -310,5 +310,76 @@ describe('content manifest encoder', () => {
 
     // Existing parser frame limit: a >65536-byte buffer refuses OVERSIZED.
     await expect(parseContentManifest(new Uint8Array(65537))).rejects.toMatchObject({ code: 'OVERSIZED' })
+  })
+
+  it('refuses a contract-valid manifest whose final plaintext exceeds 65536', async () => {
+    const varintLength = (value: number): number => {
+      let rest = value
+      let length = 1
+      while (rest > 127) {
+        rest = Math.floor(rest / 128)
+        length += 1
+      }
+      return length
+    }
+    const withLongId = (expression: ResolvedExpression, index: number, id: string): ResolvedExpression => {
+      const next = clone(expression)
+      const previous = next.input.photos[index]!.contentId
+      next.input.photos[index]!.contentId = id
+      const placement = next.placements.find((item) => item.contentId === previous)
+      if (!placement) throw new Error('missing placement for long-id counterexample')
+      placement.contentId = id
+      return next
+    }
+    const blobsOf = (expression: ResolvedExpression): Map<string, Uint8Array> =>
+      new Map(expression.input.photos.map((photo, index) => [photo.contentId, Uint8Array.from({ length: 16 }, () => index + 1)]))
+
+    const base = await expressionFor(null)
+    // One probe (long opaque contentId, no note) derives the over-cap case from
+    // real bytes: both BEXPR03 and the manifest grow by exactly 2 bytes per id
+    // character (the contentId appears in source + placement), so a single
+    // fixed-width measurement is enough — no fuzz, no tuning loop.
+    const probeLength = 20000
+    const probe = withLongId(base, 0, 'a'.repeat(probeLength))
+    const probeBlobs = blobsOf(probe)
+    expect(validateResolved(probe).ok).toBe(true)
+    const probeProjection = projectionBytes(probe, CANDIDATE, probeBlobs).length
+    expect(probeProjection).toBeLessThanOrEqual(65536)
+    const probeEncode = await encodeContentManifest({ expression: probe, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: probeBlobs })
+    expect(probeEncode.ok).toBe(true)
+    if (!probeEncode.ok) return
+    const probeManifest = probeEncode.bytes.length
+    expect(probeManifest).toBeLessThanOrEqual(65536)
+
+    // Put the projection just under the parser cap (same parity, same varint
+    // bucket) and add a near-limit note (the manifest carries the note text;
+    // BEXPR03 never does). Exactly 65536 is inside the plaintext cap.
+    const target = probeProjection % 2 === 0 ? 65536 : 65535
+    const step = (target - probeProjection) / 2
+    const over = withLongId(base, 0, 'a'.repeat(probeLength + step))
+    const note = 'n'.repeat(1000)
+    over.input.note = note
+    const overBlobs = blobsOf(over)
+    const noteField = 1 + varintLength(note.length) + note.length
+    const derivedManifest = probeManifest + 2 * step + noteField
+    expect(validateResolved(over).ok).toBe(true)
+    expect(projectionBytes(over, CANDIDATE, overBlobs).length).toBe(target)
+    expect(projectionBytes(over, CANDIDATE, overBlobs).length).toBeLessThanOrEqual(65536)
+    expect(derivedManifest).toBeGreaterThan(65536)
+
+    const refused = await encodeContentManifest({ expression: over, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: overBlobs })
+    expect(refused.ok).toBe(false)
+    if (refused.ok) return
+    expect(refused.reason).toBe('manifest-size')
+    expect(Number(refused.detail?.split(' ')[0])).toBeGreaterThan(65536)
+
+    // Near-edge WITHIN-bound variant is not bogusly rejected.
+    const okStep = Math.floor((65536 - 8 - probeManifest) / 2)
+    const within = withLongId(base, 0, 'a'.repeat(probeLength + okStep))
+    const withinBlobs = blobsOf(within)
+    expect(projectionBytes(within, CANDIDATE, withinBlobs).length).toBeLessThanOrEqual(65536)
+    const withinResult = await encodeContentManifest({ expression: within, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: withinBlobs })
+    expect(withinResult.ok).toBe(true)
+    if (withinResult.ok) expect(withinResult.bytes.length).toBeLessThanOrEqual(65536)
   })
 })

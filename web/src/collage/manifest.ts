@@ -52,6 +52,7 @@ export type ContentManifestRefusal =
   | 'photo-dimensions'
   | 'note-size'
   | 'fraction'
+  | 'manifest-size'
   | 'contract'
 
 export type ContentManifestResult =
@@ -67,6 +68,8 @@ const MAX_CANDIDATE_ID_CHARS = 256
 const BLOB_ID_BYTES = 16
 const MEDIA_TYPE_JPEG = 'image/jpeg'
 const ARTIFACT_V4 = 3
+/** Existing parser `MAX_BYTES` / manifest plaintext contract limit (inclusive). */
+const MANIFEST_MAX_BYTES = 65536
 
 const textEncoder = new TextEncoder()
 
@@ -293,7 +296,13 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
     }
     if (note !== null) chunks.push(protoBytes(4, utf8(note)))
     chunks.push(protoBytes(6, expressionMessage(snapshotExpression, candidateId, expressionHash, snapshotBlobs)))
-    return { ok: true, bytes: concat(chunks) }
+    const bytes = concat(chunks)
+    // Explicit plaintext-output bound: the existing parser's `MAX_BYTES` (and
+    // the manifest contract) cap the FINAL manifest at 65536. The projection
+    // cap does not bound this serialization (it omits the root note/capsule/
+    // PhotoEntry framing), so refuse rather than emit unparseable bytes.
+    if (bytes.length > MANIFEST_MAX_BYTES) return refuse('manifest-size', `${bytes.length} bytes`)
+    return { ok: true, bytes }
   } catch (error) {
     if (error instanceof ProtocolError) return refuse('contract', error.code)
     if (error instanceof CollageError) return refuse('contract', error.code)

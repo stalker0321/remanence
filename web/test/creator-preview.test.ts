@@ -85,6 +85,67 @@ describe('creator preview adapter', () => {
     expect(slots).toBeGreaterThan(300)
   })
 
+  it('mounts every fractional plan rect to the Android integer floor before crop', () => {
+    const cases = loadCases().filter((spec) => spec.music === 'none')
+    let fractionalTiles = 0
+    for (const spec of cases) {
+      const photos = photosFor(spec.aspects)
+      const note = spec.note ? 'Probe note text.' : null
+      const plans = grammar5Plans({
+        id: spec.id,
+        sender: 'T236',
+        photos: photos.map((photo) => ({ id: photo.contentId, width: photo.width, height: photo.height })),
+        note,
+      })
+      const views = previewCandidates({ id: spec.id, sender: 'T236', photos, note })
+      expect(views.map((view) => view.branch)).toEqual(plans.map((plan) => plan.branch))
+      plans.forEach((plan, pi) => {
+        const view = views[pi]!
+        plan.tiles.forEach((tile, si) => {
+          if (![tile.rect.x, tile.rect.y, tile.rect.width, tile.rect.height].every(Number.isInteger)) fractionalTiles += 1
+          const destination = view.slots[si]!.destination
+          expect(destination).toEqual({
+            x: Math.floor(tile.rect.x),
+            y: Math.floor(tile.rect.y),
+            width: Math.floor(tile.rect.width),
+            height: Math.floor(tile.rect.height),
+          })
+          // The mounted geometry is integer canvas units the wire `.int` accepts,
+          // and its source window is derived from that same integer cell.
+          expect([destination.x, destination.y, destination.width, destination.height].every(Number.isInteger)).toBe(true)
+          const source = view.slots[si]!.sourcePx
+          expect([source.x, source.y, source.width, source.height].every(Number.isInteger)).toBe(true)
+          const sourceAspect = source.width / source.height
+          const destinationAspect = destination.width / destination.height
+          expect(Math.abs(sourceAspect - destinationAspect) / destinationAspect).toBeLessThanOrEqual(CROP_ASPECT_TOLERANCE)
+        })
+        if (plan.note && view.note) {
+          expect(view.note.region).toEqual({
+            x: Math.floor(plan.note.rect.x),
+            y: Math.floor(plan.note.rect.y),
+            width: Math.floor(plan.note.rect.width),
+            height: Math.floor(plan.note.rect.height),
+          })
+          expect([view.note.region.x, view.note.region.y, view.note.region.width, view.note.region.height].every(Number.isInteger)).toBe(true)
+        } else {
+          expect(view.note).toBeNull()
+        }
+        plan.provenance.forEach((mark, mi) => {
+          const region = view.provenance[mi]!.region
+          expect(region).toEqual({
+            x: Math.floor(mark.rect.x),
+            y: Math.floor(mark.rect.y),
+            width: Math.floor(mark.rect.width),
+            height: Math.floor(mark.rect.height),
+          })
+          expect([region.x, region.y, region.width, region.height].every(Number.isInteger)).toBe(true)
+        })
+      })
+    }
+    // The grammar really does emit fractional geometry, so the mount is exercised.
+    expect(fractionalTiles).toBeGreaterThan(0)
+  })
+
   it('is deterministic plan-for-plan', () => {
     const input = {
       id: 'det',

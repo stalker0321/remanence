@@ -11,6 +11,7 @@ import type { PhotoShape, Rect } from './model'
 import { sourceRect, type TextMeasurer } from './prepare'
 import { grammar5Plans, type Grammar5Input, type Grammar5Measure, type Grammar5Plan } from './planGrammar5'
 import { markLine } from './model'
+import { mountRect } from './mount'
 import { wrapNoteLines } from './creatorNote'
 import { opaqueColor, styleById } from './styles'
 import type { Scene } from './prepare'
@@ -225,29 +226,40 @@ export function previewCandidate(
   byId: ReadonlyMap<string, CreatorPhoto>,
   transforms?: ReadonlyMap<string, CropTransform>,
 ): CreatorCandidateView {
+  // T252: mount T233's fractional plan rects to canonical INT canvas units at
+  // this boundary FIRST — the very same component-wise floor the Android
+  // producer uses (`AllFamilyCandidateProducer.kt:245-248` /
+  // `AllFamilyV4Adapter.kt:90-93,118-121`). The mounted rect is then handed to
+  // `previewSlot`, so the crop/source window is derived from the exact integer
+  // cell that is painted and captured, never from a fractional rect.
   const slots = plan.tiles.map((tile) => {
     const photo = byId.get(tile.photoId)
     if (!photo) fail(`creator plan needs photo ${tile.photoId}`)
+    const destination = mountRect({ x: tile.rect.x, y: tile.rect.y, width: tile.rect.width, height: tile.rect.height })
     return previewSlot(
-      { photoId: tile.photoId, rect: { x: tile.rect.x, y: tile.rect.y, width: tile.rect.width, height: tile.rect.height }, shape: tile.shape },
+      { photoId: tile.photoId, rect: destination, shape: tile.shape },
       photo as CreatorPhoto,
       transforms?.get(tile.photoId) ?? null,
     )
   })
+  const noteRegion =
+    plan.note === null
+      ? null
+      : mountRect({ x: plan.note.rect.x, y: plan.note.rect.y, width: plan.note.rect.width, height: plan.note.rect.height })
   return {
     branch: plan.branch,
     slots,
     note:
-      plan.note === null
+      plan.note === null || noteRegion === null
         ? null
         : {
-            region: { x: plan.note.rect.x, y: plan.note.rect.y, width: plan.note.rect.width, height: plan.note.rect.height },
+            region: noteRegion,
             state: plan.note.state,
           },
     provenance: plan.provenance.map((mark) => ({
       kind: mark.role === 'sender' ? ('sender' as const) : ('brand' as const),
       text: '',
-      region: { x: mark.rect.x, y: mark.rect.y, width: mark.rect.width, height: mark.rect.height },
+      region: mountRect({ x: mark.rect.x, y: mark.rect.y, width: mark.rect.width, height: mark.rect.height }),
       family: mark.font,
       size: mark.size,
       weight: mark.weight,

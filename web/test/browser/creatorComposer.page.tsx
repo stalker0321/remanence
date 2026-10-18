@@ -243,6 +243,33 @@ function installFillTextTrace(): FillTextCall[] {
   return calls
 }
 
+interface DrawImageCall {
+  dx: number
+  dy: number
+  dw: number
+  dh: number
+}
+
+/**
+ * Trace real `drawImage` photo destinations on the mounted canvas (the 9-arg
+ * form `paintScene` uses) so the test proves the destination actually painted
+ * is the integer-mounted geometry, not a fractional plan rect.
+ */
+function installDrawImageTrace(): DrawImageCall[] {
+  const calls: DrawImageCall[] = []
+  const proto = CanvasRenderingContext2D.prototype as unknown as {
+    drawImage: (...args: unknown[]) => void
+  }
+  const real = proto.drawImage
+  proto.drawImage = function (this: CanvasRenderingContext2D, ...args: unknown[]): void {
+    if (args.length >= 9) {
+      calls.push({ dx: args[5] as number, dy: args[6] as number, dw: args[7] as number, dh: args[8] as number })
+    }
+    ;(real as (...values: unknown[]) => void).apply(this, args)
+  }
+  return calls
+}
+
 function App(props: {
   photos: CreatorComposerPhoto[]
   session: SessionStore
@@ -417,6 +444,8 @@ async function main(): Promise<void> {
     let senderOverride: string | undefined
     const fillTextCalls = installFillTextTrace()
     ;(window as unknown as { __fillTextCalls?: unknown }).__fillTextCalls = fillTextCalls
+    const drawImageCalls = installDrawImageTrace()
+    ;(window as unknown as { __drawImageCalls?: unknown }).__drawImageCalls = drawImageCalls
     const session = new SessionStore('en')
     session.signIn({
       accountId: ACCOUNT,
@@ -717,6 +746,30 @@ function lastFrozen(): { frozen: boolean; branch: string | null; snapshot: Creat
             slot.source.height === source.sourcePx.height
           )
         }),
+    )
+    // T252: the destination actually painted (real `drawImage`) is the
+    // integer-mounted geometry, and every frozen/wire rect is integral.
+    const drawCalls = (window as unknown as { __drawImageCalls?: Array<{ dx: number; dy: number; dw: number; dh: number }> }).__drawImageCalls ?? []
+    const paintedDestinations = drawCalls.slice(-view.slots.length).map((call) => [call.dx, call.dy, call.dw, call.dh])
+    assert(
+      'painted drawImage destinations are the integer-mounted plan slots',
+      paintedDestinations.length === view.slots.length &&
+        paintedDestinations.every((rect, index) => {
+          const slot = view.slots[index]!
+          return rect[0] === slot.destination.x && rect[1] === slot.destination.y && rect[2] === slot.destination.width && rect[3] === slot.destination.height
+        }),
+      JSON.stringify(paintedDestinations),
+    )
+    assert(
+      'every painted/frozen destination, source, note and provenance rect is integral',
+      view.slots.every((slot) =>
+        [slot.destination.x, slot.destination.y, slot.destination.width, slot.destination.height, slot.sourcePx.x, slot.sourcePx.y, slot.sourcePx.width, slot.sourcePx.height].every(Number.isInteger),
+      ) &&
+        plan.slots.every((slot) =>
+          [slot.destination.x, slot.destination.y, slot.destination.width, slot.destination.height, slot.source.x, slot.source.y, slot.source.width, slot.source.height].every(Number.isInteger),
+        ) &&
+        (plan.note === null || [plan.note.region.x, plan.note.region.y, plan.note.region.width, plan.note.region.height].every(Number.isInteger)) &&
+        plan.provenance.every((mark) => [mark.region.x, mark.region.y, mark.region.width, mark.region.height].every(Number.isInteger)),
     )
     const trace = (window as unknown as { __fillTextCalls?: Array<{ text: string; x: number; y: number; font: string }> }).__fillTextCalls ?? []
     const paintedRows = trace

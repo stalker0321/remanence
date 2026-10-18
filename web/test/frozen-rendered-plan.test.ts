@@ -90,6 +90,17 @@ describe('frozen rendered plan', () => {
       expect(slot.destination).toEqual(source.destination)
       expect(slot.source).toEqual(source.sourcePx)
       expect(slot.shape).toBe(source.shape)
+      // T252: every frozen rect is the integer-mounted canvas geometry the
+      // wire `CanonicalWriter.int` accepts, not a fractional plan rect.
+      expect([slot.destination.x, slot.destination.y, slot.destination.width, slot.destination.height].every(Number.isInteger)).toBe(true)
+      expect([slot.source.x, slot.source.y, slot.source.width, slot.source.height].every(Number.isInteger)).toBe(true)
+    })
+    if (plan.note) {
+      expect([plan.note.region.x, plan.note.region.y, plan.note.region.width, plan.note.region.height].every(Number.isInteger)).toBe(true)
+      plan.note.rows.forEach((row) => expect(Number.isInteger(row.x)).toBe(true))
+    }
+    plan.provenance.forEach((mark) => {
+      expect([mark.region.x, mark.region.y, mark.region.width, mark.region.height].every(Number.isInteger)).toBe(true)
     })
     expect(plan.decor).toEqual([])
   })

@@ -429,10 +429,13 @@ describe('photo intake fencing and order', () => {
       ).toBeNull()
     }
     const intake = new PhotoIntake(normalizer, draft)
+    // Stable guard identity: fresh objects per read would compare unequal
+    // to themselves and drop before encode ever runs (hanging untilStarted).
+    const confirmed = { id: 1 }
     const pending = intake.addFiles([immediateFile()], () => ({
       owner: 'owner-a',
       generation: 1,
-      confirmed: { id: 1 },
+      confirmed,
       mounted: true,
     }))
     await untilStarted(mid.started)

@@ -7,6 +7,7 @@ import {
   type CreatorCandidateView,
 } from './creatorPreview'
 import { freezeSelection, freezeValid, type CreatorFreeze, type CreatorSlotFreeze, type FreezeCurrent } from '../create/creatorFreeze'
+import { captureFrozenRenderedPlan, type FrozenRenderedPlan } from './frozenRenderedPlan'
 import { layoutCreatorNote, paintCreatorNote, type CreatorNoteFace, type CreatorNoteLayout } from './creatorNote'
 import { paintScene, type PaintImage } from './paint'
 import type { TextMeasurer } from './prepare'
@@ -179,6 +180,12 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const fontsEpochRef = useRef(0)
   const frozenRef = useRef<CreatorFreeze | null>(null)
+  /**
+   * T247: the exact plan captured for the last successful paint, paired with
+   * the signature it was painted for. Freeze consumes THIS — it never rebuilds
+   * a scene from changed inputs at click time.
+   */
+  const renderedRef = useRef<{ key: string; plan: FrozenRenderedPlan } | null>(null)
   const onFrozenChangeRef = useRef(props.onFrozenChange)
   onFrozenChangeRef.current = props.onFrozenChange
   const notifyFrozen = (value: CreatorFreeze | null): void => {
@@ -269,6 +276,30 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const planError = fontsError ?? (planned !== null && 'error' in planned ? planned.error : null)
   const view = views !== null ? views[Math.min(planIndex, views.length - 1)] ?? null : null
 
+  // T247 binding key: the full rendered geometry + choice/context that was
+  // painted. The whole `view` is included, so a measurer/font change (which
+  // changes the note region), a crop edit (effective/sourcePx/crop), a
+  // destination/provenance change, or any owner/recipient/session/music/note
+  // change all produce a new key and void a previously painted render.
+  const renderedKey = useMemo(() => {
+    if (view === null || senderHandle === null) return null
+    const style = styleById(styleId)
+    return JSON.stringify({
+      view,
+      styleId,
+      styleVersion: style?.version ?? '',
+      senderHandle,
+      note: props.note && props.note.trim() !== '' ? props.note : null,
+      ownerId: props.ownerId,
+      generation: snap.generation,
+      recipient:
+        props.recipient === null
+          ? null
+          : [props.recipient.userId, props.recipient.keyBundleId, props.recipient.directoryVersion],
+      musicSelected: props.musicSelected,
+    })
+  }, [view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.musicSelected])
+
   const currentFreeze: FreezeCurrent | null = useMemo(() => {
     if (view === null) return null
     return {
@@ -277,6 +308,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       styleVersion: styleById(styleId)?.version ?? '',
       senderHandle,
       musicSelected: props.musicSelected,
+      renderedKey,
       slots: view.slots.map((slot, index) => {
         const meta = props.photos.find((photo) => photo.contentId === slot.photoId)
         return {
@@ -300,9 +332,9 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
               directoryVersion: props.recipient.directoryVersion,
             },
     }
-  }, [view, styleId, senderHandle, props.musicSelected, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
+  }, [view, styleId, senderHandle, props.musicSelected, renderedKey, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
 
-  const signature = useMemo(() => (currentFreeze === null ? null : JSON.stringify(currentFreeze)), [currentFreeze])
+  const signature = renderedKey
 
   // Explicit parent-visible invalidation: the holder's snapshot becomes
   // unusable on any listed input/context change (checked with the same
@@ -322,6 +354,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   // fonts gate below owns the only async step with its own epoch.
   useEffect(() => {
     if (!tornDown) return
+    renderedRef.current = null
     setReadySig(null)
     setFreezeError(null)
     const canvas = canvasRef.current
@@ -411,6 +444,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         noteFace = face
         setNoteFits(!layout.overflow)
         if (layout.overflow) {
+          renderedRef.current = null
           setReadySig(null)
           context.setTransform(1, 0, 0, 1, 0, 0)
           context.clearRect(0, 0, canvas.width, canvas.height)
@@ -426,11 +460,33 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       }
       setPaintError(null)
       canvas.dataset['painted'] = painted ? 'ready' : 'refused'
-      if (painted && signature !== null) setReadySig(signature)
-      else setReadySig(null)
+      // T247: only a completed paint of the current inputs captures a plan.
+      // Freeze later consumes exactly this, never a re-built scene.
+      if (painted && signature !== null) {
+        try {
+          const plan = captureFrozenRenderedPlan({
+            scene,
+            noteLayout,
+            branchId: view.branch,
+            styleId,
+            styleVersion: style.version,
+          })
+          renderedRef.current = { key: signature, plan }
+          setReadySig(signature)
+        } catch (captureError) {
+          renderedRef.current = null
+          setPaintError(captureError instanceof Error ? captureError.message : String(captureError))
+          canvas.dataset['painted'] = 'refused'
+          setReadySig(null)
+        }
+      } else {
+        renderedRef.current = null
+        setReadySig(null)
+      }
     } catch (error) {
       setPaintError(error instanceof Error ? error.message : String(error))
       canvas.dataset['painted'] = 'refused'
+      renderedRef.current = null
       setReadySig(null)
     }
   }, [view, props.photos, props.note, props.measurer, styleId, tornDown, senderHandle, signature])
@@ -440,6 +496,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   useEffect(() => {
     const notify = notifyFrozen
     return () => {
+      renderedRef.current = null
       if (frozenRef.current !== null) {
         frozenRef.current = null
         notify(null)
@@ -502,6 +559,15 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
 
   const handleFreeze = (): void => {
     if (freezeBlocked.disabled || view === null || senderHandle === null) return
+    // T247: freeze captures the EXACT plan painted for the current binding
+    // (never a re-built scene). Missing/stale captured render is an honest
+    // refusal, never a silently absent note or geometry.
+    const prepared = renderedRef.current
+    if (renderedKey === null || prepared === null || prepared.key !== renderedKey) {
+      setFreezeError(t.notReady)
+      dropIfStale()
+      return
+    }
     // Re-check live owner/session context at click time: never freeze
     // from a stale render, and never emit a non-null callback torn down.
     const live = props.session.getSnapshot()
@@ -547,6 +613,8 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
               keyBundleId: props.recipient.keyBundleId,
               directoryVersion: props.recipient.directoryVersion,
             },
+      renderedKey: prepared.key,
+      renderedPlan: prepared.plan,
     })
     if (!result.ok) {
       setFreezeError(result.reason)

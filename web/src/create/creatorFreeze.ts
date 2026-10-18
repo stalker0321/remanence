@@ -1,4 +1,5 @@
 import { CollageError } from '../collage/errors'
+import type { FrozenRenderedPlan } from '../collage/frozenRenderedPlan'
 
 /**
  * Immutable LOCAL creator freeze — a snapshot of the creator's explicit
@@ -40,6 +41,13 @@ export interface CreatorFreeze {
   readonly sessionGeneration: number;
   readonly recipient: CreatorFreezeRecipient;
   readonly createdAtMs: number;
+  /**
+   * T247: the exact successfully painted local render, deep-frozen. Bound to
+   * `renderedKey` (the signature of the inputs/context it was painted for).
+   * Local presentation data only — never a sealed expression or send grant.
+   */
+  readonly renderedKey: string;
+  readonly renderedPlan: FrozenRenderedPlan;
 }
 
 export type FreezeRefusal =
@@ -64,6 +72,9 @@ export interface FreezeInput {
   ownerId: string
   sessionGeneration: number
   recipient: CreatorFreezeRecipient | null
+  /** T247: the exact painted render + the signature it was painted for. */
+  renderedKey: string
+  renderedPlan: FrozenRenderedPlan
   createdAtMs?: number
 }
 
@@ -91,6 +102,15 @@ export function freezeSelection(input: FreezeInput): FreezeResult {
   if (input.slots.length < 3 || input.slots.length > 5) {
     throw new CollageError('REJECTED')
   }
+  // T247: the frozen value must reference the exact render that was painted
+  // for these slots/this branch. Missing or incoherent rendered data is an
+  // honest refusal, never a silently absent note/geometry.
+  if (input.renderedKey.trim() === '') throw new CollageError('REJECTED')
+  if (input.renderedPlan.branchId !== input.branchId) throw new CollageError('REJECTED')
+  if (input.renderedPlan.slots.length !== input.slots.length) throw new CollageError('REJECTED')
+  input.slots.forEach((slot, index) => {
+    if (input.renderedPlan.slots[index]?.contentId !== slot.contentId) throw new CollageError('REJECTED')
+  })
   const frozen: CreatorFreeze = {
     grammarId: 'g5',
     branchId: input.branchId,
@@ -116,6 +136,8 @@ export function freezeSelection(input: FreezeInput): FreezeResult {
     sessionGeneration: input.sessionGeneration,
     recipient: Object.freeze({ ...input.recipient }),
     createdAtMs: input.createdAtMs ?? Date.now(),
+    renderedKey: input.renderedKey,
+    renderedPlan: input.renderedPlan,
   }
   return { ok: true, frozen: Object.freeze(frozen) }
 }
@@ -126,6 +148,8 @@ export interface FreezeCurrent {
   styleVersion: string
   senderHandle: string | null
   musicSelected: boolean
+  /** T247: signature of the exact rendered geometry/inputs (null when no view). */
+  renderedKey: string | null
   slots: CreatorSlotFreeze[]
   note: string | null
   ownerId: string
@@ -147,6 +171,10 @@ export function freezeValid(frozen: CreatorFreeze, current: FreezeCurrent): { ok
   const bad = (invalidated: string) => ({ ok: false as const, invalidated })
   if (current.branchId !== frozen.branchId) return bad('branch changed')
   if (current.styleId !== frozen.styleId || current.styleVersion !== frozen.styleVersion) return bad('style changed')
+  // T247: any change to the rendered geometry/inputs (measurer, crop, note
+  // face/layout, provenance, destination/source) changes this key and voids
+  // the frozen render even if the photo count/branch are unchanged.
+  if (current.renderedKey !== frozen.renderedKey) return bad('render changed')
   if (current.senderHandle !== frozen.senderHandle) return bad('sender changed')
   if (current.musicSelected) return bad('music selected')
   if (current.note !== frozen.note) return bad('note changed')

@@ -17,9 +17,10 @@
 import { createRoot, type Root } from 'react-dom/client'
 import { useState } from 'react'
 import { CreatorComposer, type CreatorComposerPhoto } from '../../src/collage/CreatorComposer'
-import { creatorScene, plannerFromTextMeasurer, previewCandidates } from '../../src/collage/creatorPreview'
+import { creatorScene, plannerFromTextMeasurer, previewCandidates, type CreatorCandidateView } from '../../src/collage/creatorPreview'
+import type { CreatorFreeze } from '../../src/create/creatorFreeze'
 import { SessionStore } from '../../src/session/session'
-import type { TextMeasurer } from '../../src/collage/prepare'
+import type { Scene, TextMeasurer } from '../../src/collage/prepare'
 import '../../src/collage/creatorComposer.css'
 import './composerFonts.css'
 
@@ -31,7 +32,7 @@ export interface CheckResult {
 
 const assertions: CheckResult[] = []
 const failures: string[] = []
-const frozenLog: Array<{ frozen: boolean; branch: string | null }> = []
+const frozenLog: Array<{ frozen: boolean; branch: string | null; snapshot: CreatorFreeze | null }> = []
 
 function pass(name: string): void {
   assertions.push({ name, ok: true })
@@ -220,7 +221,7 @@ function App(props: {
   noteIndex: number
   noteOverride: string | null
   senderOverride: string | undefined
-  onFrozenChange: (frozen: boolean, branch: string | null) => void
+  onFrozenChange: (frozen: CreatorFreeze | null) => void
   onCyclePhotos: () => void
   onTrimPhotos: () => void
   onRestorePhotos: () => void
@@ -274,7 +275,7 @@ function App(props: {
         session={props.session}
         lang={lang === 'ru' ? 'ru' : lang === 'uk' ? 'uk' : 'en'}
         measurer={props.measurer}
-        onFrozenChange={(frozen) => props.onFrozenChange(frozen !== null, frozen === null ? null : frozen.branchId)}
+        onFrozenChange={props.onFrozenChange}
       />
     </div>
   )
@@ -399,7 +400,7 @@ async function main(): Promise<void> {
           noteIndex={noteIndex}
           noteOverride={noteOverride}
           senderOverride={senderOverride}
-          onFrozenChange={(hasFrozen, branch) => frozenLog.push({ frozen: hasFrozen, branch })}
+          onFrozenChange={(frozen) => frozenLog.push({ frozen: frozen !== null, branch: frozen === null ? null : frozen.branchId, snapshot: frozen })}
           onSetNote={(note) => {
             noteOverride = note
             render()
@@ -471,7 +472,7 @@ async function main(): Promise<void> {
   }
 }
 
-function lastFrozen(): { frozen: boolean; branch: string | null } | null {
+function lastFrozen(): { frozen: boolean; branch: string | null; snapshot: CreatorFreeze | null } | null {
   return frozenLog.length === 0 ? null : frozenLog[frozenLog.length - 1]!
 }
 
@@ -583,6 +584,8 @@ function lastFrozen(): { frozen: boolean; branch: string | null } | null {
   await waitFor(() => sameReadout(readout(), IDENTITY_READOUT), 'reset repaint')
   await waitFor(() => canvasState() === 'ready', 'reset paint')
   assert('reset restores the starting crop', true)
+  let expectedView: CreatorCandidateView | null = null
+  let expectedScene: Scene | null = null
   ;(() => {
     const views = previewCandidates(
       {
@@ -616,6 +619,8 @@ function lastFrozen(): { frozen: boolean; branch: string | null } | null {
     assert('sender and recipient are distinct handles', SENDER_HANDLE !== RECIPIENT_HANDLE)
     assert('provenance binds the live session sender, not the recipient', senderMark?.text === `From ${SENDER_HANDLE}`, senderMark?.text ?? 'missing')
     assert('brand mark carries the house text', scene.provenance.some((mark) => mark.kind === 'brand' && mark.text === 'Remanence'))
+    expectedView = views[0] ?? null
+    expectedScene = scene
   })()
   await waitFor(() => { try { return !(document.querySelector('[data-testid="creator-freeze"]') as HTMLButtonElement | null)?.disabled } catch { return false } }, 'freeze enabled');
   click('creator-freeze')
@@ -628,6 +633,68 @@ function lastFrozen(): { frozen: boolean; branch: string | null } | null {
   }, 'freeze snapshot')
   assert('explicit freeze snapshots the selection', textOf('creator-frozen').length > 0)
   assert('parent sees the non-null freeze', lastFrozen()?.frozen === true)
+  ;(() => {
+    // T247: the parent-held freeze must carry the EXACT render that was
+    // painted. Compare the frozen DTO against the independently derived
+    // view/scene for the same inputs AND the real note fillText trace.
+    const snapshot = lastFrozen()?.snapshot ?? null
+    const view = expectedView
+    const scene = expectedScene
+    assert(
+      'frozen snapshot carries a keyed rendered plan',
+      snapshot !== null && typeof snapshot.renderedKey === 'string' && snapshot.renderedKey.length > 0 && snapshot.renderedPlan !== undefined,
+    )
+    if (!snapshot || !view || !scene) return
+    const plan = snapshot.renderedPlan
+    assert(
+      'rendered plan is the g5 canvas for this branch/style',
+      plan.grammarId === 'g5' && plan.branchId === snapshot.branchId && plan.branchId === view.branch && plan.style.styleId === 'press',
+    )
+    assert(
+      'rendered plan slots match the painted destinations/sources/shapes',
+      plan.slots.length === view.slots.length &&
+        plan.slots.every((slot, index) => {
+          const source = view.slots[index]!
+          return (
+            slot.contentId === source.photoId &&
+            slot.ordinal === index &&
+            slot.shape === source.shape &&
+            slot.destination.x === source.destination.x &&
+            slot.destination.y === source.destination.y &&
+            slot.destination.width === source.destination.width &&
+            slot.destination.height === source.destination.height &&
+            slot.source.x === source.sourcePx.x &&
+            slot.source.y === source.sourcePx.y &&
+            slot.source.width === source.sourcePx.width &&
+            slot.source.height === source.sourcePx.height
+          )
+        }),
+    )
+    const trace = (window as unknown as { __fillTextCalls?: Array<{ text: string; x: number; y: number; font: string }> }).__fillTextCalls ?? []
+    const paintedRows = trace
+      .filter((call) => call.font.includes('StudySans'))
+      .slice(-(plan.note?.rows.length ?? 0))
+      .map((row) => row.text)
+      .join('|')
+    assert(
+      'rendered plan note matches the painted note face/region/rows',
+      plan.note !== null &&
+        scene.note !== null &&
+        plan.note.text === scene.note.text &&
+        plan.note.region.x === scene.note.region.x &&
+        plan.note.region.y === scene.note.region.y &&
+        plan.note.family === scene.note.family &&
+        plan.note.size === scene.note.size &&
+        plan.note.line === scene.note.line &&
+        plan.note.rows.map((row) => row.text).join('|') === paintedRows,
+    )
+    assert(
+      'rendered plan provenance binds the sender text + regions',
+      plan.provenance.map((mark) => mark.text).join('|') === scene.provenance.map((mark) => mark.text).join('|') &&
+        plan.provenance.map((mark) => mark.region.x).join('|') === scene.provenance.map((mark) => mark.region.x).join('|'),
+    )
+    assert('rendered plan carries no image/DOM capability', !JSON.stringify(plan).includes('ImageBitmap') && !JSON.stringify(plan).includes('Uint8Array'))
+  })()
   click('page-sender-toggle')
   await waitFor(() => document.querySelector('[data-testid="creator-frozen"]') === null, 'sender invalidation')
   assert('explicit sender edit invalidates the freeze', true)

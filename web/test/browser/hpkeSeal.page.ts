@@ -15,6 +15,7 @@ import { generateCapsuleKeyset } from '../../src/crypto/capsuleKeyset'
 import { openRecipientEnvelope } from '../../src/crypto/hpke'
 import { sealRecipientEnvelope } from '../../src/crypto/hpkeSeal'
 import { buildRecipientEnvelopePlaintext } from '../../src/crypto/recipientEnvelope'
+import { buildPublishStatement } from '../../src/protocol/publishStatement'
 import { arrayBuffer, hexToBytes, readUint32, utf8 } from '../../src/protocol/bytes'
 import { artifactAad, recipientEnvelopeInfo } from '../../src/protocol/context'
 import { ProtocolError } from '../../src/protocol/errors'
@@ -103,7 +104,23 @@ async function main(): Promise<void> {
     // Real RecipientEnvelopePlaintext payload: build -> seal -> existing open ->
     // bounded proto decode, then use the decoded capsule keyset as a real AEAD.
     const statementBytes = hexToBytes(publishVector.expected_deterministic_hex)
-    const statementHash = new Uint8Array(await crypto.subtle.digest('SHA-256', arrayBuffer(statementBytes)))
+    const builtStatement = buildPublishStatement({
+      capsuleId: uuidToBytes(publishVector.capsule_id),
+      senderUserId: uuidToBytes(publishVector.sender_user_id),
+      recipientUserId: uuidToBytes(publishVector.recipient_user_id),
+      senderKeyBundleId: uuidToBytes(publishVector.sender_key_bundle_id),
+      recipientKeyBundleId: uuidToBytes(publishVector.recipient_key_bundle_id),
+      createdAtEpochSeconds: BigInt(publishVector.created_at_epoch_seconds),
+      artifacts: publishVector.artifacts.map((artifact) => ({
+        blobId: uuidToBytes(artifact.blob_id),
+        kind: artifact.kind as 'RECOGNITION_MANIFEST' | 'CONTENT_MANIFEST' | 'PHOTO',
+        ordinal: artifact.ordinal,
+        ciphertextSize: artifact.ciphertext_size,
+        ciphertextSha256: hexToBytes(artifact.ciphertext_sha256_hex),
+      })),
+    })
+    assert('builder reproduces the publish-statement golden in the browser', sameBytes(builtStatement, statementBytes))
+    const statementHash = new Uint8Array(await crypto.subtle.digest('SHA-256', arrayBuffer(builtStatement)))
     const ids = {
       capsuleId: uuidToBytes(publishVector.capsule_id),
       senderUserId: uuidToBytes(publishVector.sender_user_id),

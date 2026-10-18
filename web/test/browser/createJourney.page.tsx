@@ -21,12 +21,60 @@ import { browserImageDecode, type CreatorImageDecode } from '../../src/create/cr
 import { catalog, type MessageKey, type Language } from '../../src/i18n/catalog'
 import type { ApiTransport } from '../../src/auth/http'
 import type { CameraPort } from '../../src/scan/camera'
+import '../../src/design/tokens.css'
 
 interface CheckResult { name: string; ok: boolean; detail?: string }
 const assertions: CheckResult[] = []
 const failures: string[] = []
 const frozenLog: Array<{ frozen: boolean }> = []
 const notices: string[] = []
+
+interface FontFact { request: string; family: string | null; status: string | null; faces: number }
+interface LayoutFact {
+  tokenColumn: string
+  tokenLilac: string
+  thumbHeight: number | null
+  scrollWidth: number
+  innerWidth: number
+  composerWidth: number | null
+  freezeRight: number | null
+}
+const fontFacts: FontFact[] = []
+const layoutFacts: LayoutFact[] = []
+const FACES = [
+  { request: '400 16px StudySans', family: 'StudySans' },
+  { request: '400 20px StudySerif', family: 'StudySerif' },
+] as const
+
+// Real bundle-font proof: production `tokens.css` registers the StudySans/
+// StudySerif `@font-face` rules; the runner serves the actual `.otf` bytes.
+// A NON-EMPTY `document.fonts.load` result with `status === 'loaded'` proves a
+// real face was registered and fetched — `document.fonts.check`/`ctx.font`
+// alone can pass against an unregistered fallback family.
+async function assertRealFonts(): Promise<void> {
+  for (const { request, family } of FACES) {
+    const faces = await document.fonts.load(request)
+    await Promise.all(faces.map((face) => face.load()))
+    const fact: FontFact = {
+      request,
+      family: faces[0]?.family ?? null,
+      status: faces[0]?.status ?? null,
+      faces: faces.length,
+    }
+    fontFacts.push(fact)
+    assert(
+      `production ${family} face is registered and loads real bytes`,
+      faces.length > 0 && faces.every((face) => face.family.includes(family)),
+      JSON.stringify(fact),
+    )
+    assert(
+      `loaded ${family} faces report status=loaded`,
+      faces.length > 0 && faces.every((face) => face.status === 'loaded'),
+      JSON.stringify(fact),
+    )
+  }
+  assert('font face set reports the registered families loaded', document.fonts.check('400 16px StudySans') && document.fonts.check('400 20px StudySerif'))
+}
 
 function pass(name: string): void { assertions.push({ name, ok: true }) }
 function fail(name: string, detail = ''): void { assertions.push({ name, ok: false, detail }); failures.push(`${name}: ${detail}`) }
@@ -148,6 +196,9 @@ function harness(lang: Language): Harness {
     if (rootRef.root === null) {
       const host = document.createElement('div')
       host.setAttribute('data-testid', 'create-host')
+      // Production `App` renders views inside `<main className="shell">`; mirror
+      // that column so the fixture exercises the real production layout.
+      host.className = 'shell'
       document.body.appendChild(host)
       rootRef.root = createRoot(host)
     }
@@ -223,7 +274,7 @@ async function main(): Promise<void> {
     fail('unhandled rejection', String(event.reason))
     status.textContent = 'failed'
   })
-  ;(window as unknown as { __createJourney?: unknown }).__createJourney = { assertions, failures, frozen: frozenLog }
+  ;(window as unknown as { __createJourney?: unknown }).__createJourney = { assertions, failures, frozen: frozenLog, fonts: fontFacts, layout: layoutFacts }
   const realClose = ImageBitmap.prototype.close
   ;(window as unknown as { __bitmapCloses?: number }).__bitmapCloses = 0
   ImageBitmap.prototype.close = function (this: ImageBitmap): void {
@@ -234,6 +285,7 @@ async function main(): Promise<void> {
   const langParam = new URLSearchParams(window.location.search).get('lang')
   const lang: Language = langParam === 'ru' ? 'ru' : langParam === 'uk' ? 'uk' : 'en'
   try {
+    await assertRealFonts()
     const files = [
       await gradientJpeg(800, 600, 40),
       await gradientJpeg(600, 800, 90),
@@ -389,6 +441,34 @@ async function runChecks(h: Harness, files: File[], spare: File, status: HTMLEle
   confirmRecipient()
   await pickThree()
   assert('capture-ready frame shows the mounted connected composer', canvasState() === 'ready')
+
+  // 11. Styled/responsive acceptance at the intended viewport: production
+  //     tokens.css is applied, photo controls are constrained, the connected
+  //     composer fits, and the page has no horizontal overflow.
+  const rootStyle = getComputedStyle(document.documentElement)
+  // Production `tokens.css` sets `:root { font-size: 18px }` and
+  // `.photo-draft img { max-height: 12rem }`, so the constrained thumbnail cap
+  // is 12rem = 12 × root font size (216px) — not a 16px-root assumption.
+  const rootFont = Number.parseFloat(rootStyle.fontSize) || 16
+  const thumb = document.querySelector('.photo-draft img') as HTMLImageElement | null
+  const composer = document.querySelector('[data-testid="creator-composer"]') as HTMLElement | null
+  const freeze = document.querySelector('[data-testid="creator-freeze"]') as HTMLElement | null
+  const freezeRect = freeze?.getBoundingClientRect() ?? null
+  const layoutFact: LayoutFact = {
+    tokenColumn: rootStyle.getPropertyValue('--column').trim(),
+    tokenLilac: rootStyle.getPropertyValue('--lilac').trim(),
+    thumbHeight: thumb ? Math.round(thumb.getBoundingClientRect().height) : null,
+    scrollWidth: document.documentElement.scrollWidth,
+    innerWidth: window.innerWidth,
+    composerWidth: composer ? Math.round(composer.getBoundingClientRect().width) : null,
+    freezeRight: freezeRect ? Math.round(freezeRect.right) : null,
+  }
+  layoutFacts.push(layoutFact)
+  assert('production tokens.css is applied (design token present)', layoutFact.tokenColumn === '28rem' && layoutFact.tokenLilac === '#d6cce9', JSON.stringify(layoutFact))
+  assert('photo controls are constrained by production styles', layoutFact.thumbHeight !== null && layoutFact.thumbHeight > 0 && layoutFact.thumbHeight <= 12 * rootFont + 1, JSON.stringify(layoutFact))
+  assert('no horizontal overflow at the intended viewport', layoutFact.scrollWidth <= layoutFact.innerWidth + 1, JSON.stringify(layoutFact))
+  assert('connected composer fits the intended viewport width', layoutFact.composerWidth !== null && layoutFact.composerWidth <= layoutFact.innerWidth + 1, JSON.stringify(layoutFact))
+  assert('critical composer controls are reachable in the viewport', layoutFact.freezeRight !== null && layoutFact.freezeRight > 0 && layoutFact.freezeRight <= layoutFact.innerWidth + 1, JSON.stringify(layoutFact))
 }
 
 async function runTeardown(h: Harness): Promise<void> {

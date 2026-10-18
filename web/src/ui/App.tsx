@@ -23,6 +23,8 @@ import { receivePostcard } from '../scan/receive'
 import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
 import { canvasTextMeasurer } from '../collage/measure'
 import { FrontHold } from '../create/front'
+import { browserPhotoCodec } from '../create/browserPhoto'
+import { PhotoIntake, PhotoNormalizer } from '../create/normalize'
 import { MUSIC_QUERY_MAX_CODE_POINTS, MUSIC_SEARCH_DEBOUNCE_MS, musicCoverKey, musicLine, MusicDraft, searchMusic } from '../create/music'
 import { NOTE_MAX_UTF8_BYTES, type NoteDraft } from '../create/note'
 import { PHOTO_COUNT_MAX, type PhotoDraft } from '../create/photos'
@@ -356,6 +358,8 @@ function Create({
   const front = useRef(new FrontHold())
   const host = useRef<HTMLDivElement>(null)
   const urls = useRef(new Map<string, string>())
+  const mounted = useRef(true)
+  const intake = useRef<PhotoIntake | null>(null)
   const open = view.phase !== 'signed-out' && view.phase !== 'authenticated' && view.accountId !== null
   const pending = open ? recipient.pending() : null
   const confirmed = open ? recipient.confirmed() : null
@@ -381,12 +385,22 @@ function Create({
     }
   }
 
-  useEffect(() => () => {
-    abort.current?.abort()
-    musicAbort.current?.abort()
-    if (musicTimer.current !== null) clearTimeout(musicTimer.current)
-    front.current.close()
-    forgetPhotos()
+  // Owned Create mount only: the intake is bound to this draft for the visit;
+  // a StrictMode remount disposes the old intake and builds a fresh one.
+  useEffect(() => {
+    mounted.current = true
+    const next = new PhotoIntake(new PhotoNormalizer(browserPhotoCodec(document)), photos)
+    intake.current = next
+    return () => {
+      mounted.current = false
+      next.dispose()
+      if (intake.current === next) intake.current = null
+      abort.current?.abort()
+      musicAbort.current?.abort()
+      if (musicTimer.current !== null) clearTimeout(musicTimer.current)
+      front.current.close()
+      forgetPhotos()
+    }
   }, [])
 
   useEffect(() => {
@@ -486,16 +500,18 @@ function Create({
 
   async function addPhotos(list: FileList | null) {
     if (!list || !confirmed) return
-    let refused = false
-    for (const file of list) {
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      const reason = photos.add(bytes)
-      bytes.fill(0)
-      if (reason) refused = true
-    }
+    const intakePort = intake.current
+    if (!intakePort) return
+    onNotice('photoLoading')
+    const outcome = await intakePort.addFiles(list, () => ({
+      owner: store.getSnapshot().accountId,
+      generation: store.getSnapshot().generation,
+      confirmed: recipient.confirmed(),
+      mounted: mounted.current,
+    }))
     rememberPhotos()
     setStamp((value) => value + 1)
-    onNotice(refused ? 'photoRejected' : 'errorRegion')
+    onNotice(outcome.completed ? (outcome.refused ? 'photoRejected' : 'errorRegion') : 'errorRegion')
   }
 
   function onMusicInput(value: string) {
@@ -675,7 +691,6 @@ function Create({
             </ul>
             <p>{photos.photos().length} / {PHOTO_COUNT_MAX}</p>
             <p>{t('photoCount')}</p>
-            <p>{t('photoNotNormalized')}</p>
           </div>
           <div className="music-draft">
             <label className="handle-form">

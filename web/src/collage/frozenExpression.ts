@@ -1,4 +1,5 @@
 import type { CreatorFreeze } from '../create/creatorFreeze'
+import { ProtocolError } from '../protocol/errors'
 import { CollageError } from './errors'
 import { encodeExpression } from './codec'
 import { FONT_VERSION } from './fonts'
@@ -64,6 +65,8 @@ export interface FrozenExpressionRefused {
 export type FrozenExpressionResult = FrozenExpressionOk | FrozenExpressionRefused
 
 const INT64_MAX = (2n ** 63n) - 1n
+/** Max value `CanonicalWriter.int` accepts (signed int32). */
+const INT32_MAX = 0x7fffffff
 
 function refuse(reason: FrozenExpressionRefusal, detail?: string): FrozenExpressionRefused {
   return detail === undefined ? { ok: false, reason } : { ok: false, reason, detail }
@@ -118,6 +121,17 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
   if (style.version !== frozen.styleVersion) {
     return refuse('style-mismatch', `bundled ${style.version} != frozen ${frozen.styleVersion}`)
   }
+  // The painted render carries the style it was actually painted with; the
+  // outer freeze must name THAT style, never another legitimate bundled style.
+  if (
+    frozen.renderedPlan.style.styleId !== frozen.styleId ||
+    frozen.renderedPlan.style.styleVersion !== frozen.styleVersion
+  ) {
+    return refuse(
+      'render-mismatch',
+      `rendered style ${frozen.renderedPlan.style.styleId}@${frozen.renderedPlan.style.styleVersion} != ${frozen.styleId}@${frozen.styleVersion}`,
+    )
+  }
   const digest = await styleDigest(frozen.styleId)
   if (!digest || digest.length !== 32) return refuse('style-unknown', `${frozen.styleId} has no bundled digest`)
 
@@ -137,8 +151,10 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
     if (slot.contentId !== planSlot.contentId) return refuse('slot-mismatch', `slot ${index} id ${slot.contentId} != ${planSlot.contentId}`)
     if (typeof slot.contentId !== 'string' || slot.contentId.trim() === '') return refuse('content-mismatch', `slot ${index} blank id`)
     if (!/^[0-9a-f]{64}$/.test(slot.contentHash)) return refuse('content-mismatch', `slot ${index} hash`)
-    if (!isInt(slot.widthPx) || !isInt(slot.heightPx) || slot.widthPx <= 0 || slot.heightPx <= 0) {
-      return refuse('content-mismatch', `slot ${index} dimensions`)
+    // Dimensions are written by `CanonicalWriter.int`: positive signed int32,
+    // not merely integral/positive (2147483648 would throw ProtocolError).
+    if (!isInt(slot.widthPx) || !isInt(slot.heightPx) || slot.widthPx < 1 || slot.heightPx < 1 || slot.widthPx > INT32_MAX || slot.heightPx > INT32_MAX) {
+      return refuse('content-mismatch', `slot ${index} dimensions out of int32 range`)
     }
     if (seenIds.has(slot.contentId)) return refuse('content-mismatch', `duplicate id ${slot.contentId}`)
     if (seenHashes.has(slot.contentHash)) return refuse('content-mismatch', `duplicate hash for ${slot.contentId}`)
@@ -187,6 +203,9 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
   let noteType: TextType
   if (frozen.note !== null) {
     if (frozen.noteRegion === null || frozenNote === null) return refuse('note-mismatch', 'note text without a frozen region/face')
+    // The outer note text must be the text that was actually painted; never send
+    // a different note than the captured render wrapped.
+    if (frozen.note !== frozenNote.text) return refuse('note-mismatch', 'outer note text differs from the painted note')
     const planRegion = copyRect(frozenNote.region)
     if (!intRect(planRegion) || !intRect(frozen.noteRegion)) return refuse('fraction', 'note region is not integral')
     if (
@@ -271,7 +290,10 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
   try {
     bytes = encodeExpression(expression)
   } catch (error) {
+    // Known typed encoding failures (a wire field outside its contract) become
+    // a typed refusal; anything else is a programming error and still throws.
     if (error instanceof CollageError) return refuse('contract', error.code)
+    if (error instanceof ProtocolError) return refuse('contract', error.code)
     throw error
   }
   return { ok: true, expression, bytes }

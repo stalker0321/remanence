@@ -268,6 +268,33 @@ describe('frozen expression adapter', () => {
     expect(await refusalReason(draftOf(frozen, (draft) => { draft.slots[1].contentHash = draft.slots[0].contentHash }), 17n)).toBe('content-mismatch')
   })
 
+  it('refuses outer metadata that disagrees with the captured render (T255 R2)', async () => {
+    const { frozen } = makeFrozen('Probe note text.')
+    // Outer note TEXT changed only (region/face unchanged).
+    expect(await refusalReason(draftOf(frozen, (draft) => { draft.note = 'A different outer note.' }), 17n)).toBe('note-mismatch')
+    // Outer style changed to a DIFFERENT LEGITIMATE bundled style (same version).
+    expect(await refusalReason(draftOf(frozen, (draft) => { draft.styleId = 'blue-letter' }), 17n)).toBe('render-mismatch')
+    // Captured rendered style identity / version changed.
+    expect(await refusalReason(draftOf(frozen, (draft) => { draft.renderedPlan.style.styleId = 'blue-letter' }), 17n)).toBe('render-mismatch')
+    expect(await refusalReason(draftOf(frozen, (draft) => { draft.renderedPlan.style.styleVersion = 'style-study-9' }), 17n)).toBe('render-mismatch')
+  })
+
+  it('bounds photo dimensions to signed int32 with a typed refusal', async () => {
+    const { frozen } = makeFrozen('Probe note text.')
+    expect(await refusalReason(draftOf(frozen, (draft) => { draft.slots[0].widthPx = 2147483648 }), 17n)).toBe('content-mismatch')
+    expect(await refusalReason(draftOf(frozen, (draft) => { draft.slots[1].heightPx = 2147483648 }), 17n)).toBe('content-mismatch')
+    expect(await refusalReason(draftOf(frozen, (draft) => { draft.slots[2].widthPx = 0 }), 17n)).toBe('content-mismatch')
+  })
+
+  it('turns a known ProtocolError from encodeExpression into a typed refusal', async () => {
+    const { frozen } = makeFrozen('Probe note text.')
+    // A fractional note-type value passes validateResolved (size 8..96, line
+    // 8..120) but the wire `CanonicalWriter.int` rejects it: the adapter must
+    // return a typed refusal, not rethrow an uncaught ProtocolError.
+    expect(await refusalReason(draftOf(frozen, (draft) => { draft.renderedPlan.note.size = 27.5 }), 17n)).toBe('contract')
+    expect(await refusalReason(draftOf(frozen, (draft) => { draft.renderedPlan.note.line = 30.5 }), 17n)).toBe('contract')
+  })
+
   it('refuses fractional wire geometry with no send-time flooring', async () => {
     const { frozen } = makeFrozen('Probe note text.')
     expect(await refusalReason(draftOf(frozen, (draft) => { draft.renderedPlan.slots[0].destination.width += 0.5 }), 17n)).toBe('fraction')

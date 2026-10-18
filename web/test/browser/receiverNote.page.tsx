@@ -1,11 +1,12 @@
 /**
  * T243 receiver frozen-note browser fixture (Chromium-only gate).
  *
- * Runs the REAL production `prepare` -> `paintScene` on VALID frozen V4
- * expression fixtures with multi-line notes and traces actual `fillText`
- * calls. There is no plan regeneration and no admission bypass: the note
- * region/type come from the frozen expression payload. Sources are synthetic
- * canvases (no camera/provider), reported via `window.__receiverNote`.
+ * Runs the REAL production `prepare` -> `paintScene` on VALID frozen V3
+ * expression fixtures (`sheets.pressSheet`, the committed Android codec
+ * golden shape) with multi-line notes and traces actual `fillText` calls.
+ * There is no plan regeneration and no admission bypass: the note region/type
+ * come from the frozen expression payload. Sources are synthetic canvases (no
+ * camera/provider), reported via `window.__receiverNote`.
  */
 import { canvasTextMeasurer } from '../../src/collage/measure'
 import type { ResolvedExpression } from '../../src/collage/model'
@@ -96,7 +97,7 @@ async function main(): Promise<void> {
     for (const id of ['p1', 'p2', 'p3']) sources.set(id, { width: 120, height: 213 })
 
     const traced = installFillTextTrace()
-    const noteRows = (): Array<{ text: string; x: number; y: number }> =>
+    const noteRows = (): Array<{ text: string; x: number; y: number; font: string }> =>
       traced.filter((call) => call.font.includes('StudySans'))
 
     // Frozen explicit-break note: rows are the input's non-empty lines in order.
@@ -117,7 +118,20 @@ async function main(): Promise<void> {
         rows.length === 3 && Math.abs(rows[1]!.y - rows[0]!.y - LINE) < 1e-6 && Math.abs(rows[2]!.y - rows[1]!.y - 2 * LINE) < 1e-6,
         JSON.stringify(rows.map((row) => row.y)),
       )
-      assert('explicit rows use the frozen note face/type', rows.every((row) => row.font === `normal 400 ${SIZE}px StudySans`))
+      // Compare against the browser's OWN serialization of the intended
+      // computed face (family/weight/size/italic), not a magic string: the
+      // assertion still proves the painter set the frozen note's real face.
+      const fontProbe = document.createElement('canvas').getContext('2d')
+      const expectedFont = (() => {
+        if (!fontProbe) return ''
+        fontProbe.font = `normal 400 ${SIZE}px StudySans`
+        return fontProbe.font
+      })()
+      assert(
+        'explicit rows use the frozen note face/type',
+        expectedFont !== '' && rows.length === 3 && rows.every((row) => row.font === expectedFont),
+        `expected="${expectedFont}" got=${JSON.stringify(rows.map((row) => row.font))}`,
+      )
       assert('explicit rows stay inside the frozen region', rows.every((row) => row.x === RX && row.y >= RY && row.y <= RY + 120))
     }
 

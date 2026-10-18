@@ -95,6 +95,7 @@ await new Promise((ok, fail) => {
   server.listen(4177, '127.0.0.1', ok)
 })
 
+let failure = null
 try {
   const browser = await chromium.launch({ headless: true, executablePath: executable })
   try {
@@ -111,20 +112,47 @@ try {
       }
     })
     await page.goto('http://127.0.0.1:4177/index.html')
-    await page.waitForFunction(() => document.querySelector('#receiver-note-status')?.textContent === 'done', undefined, { timeout: 60000 })
+    // The page sets a terminal `done` OR `failed`; accept both so an
+    // already-failed page reports its actual assertions instead of hanging.
+    await page.waitForFunction(() => {
+      const status = document.querySelector('#receiver-note-status')?.textContent
+      return status === 'done' || status === 'failed'
+    }, undefined, { timeout: 60000 })
+    const status = await page.textContent('#receiver-note-status')
     const result = await page.evaluate(() => window.__receiverNote)
-    report.pages['index'] = { assertions: result.assertions, failures: result.failures }
-    for (const item of result.assertions) assert.equal(item.ok, true, `receiver-note :: ${item.name} ${item.detail ?? ''}`)
-    assert.ok(result.assertions.length >= 12, `expected >=12 assertions, got ${result.assertions.length}`)
-    assert.deepEqual(result.failures, [])
-    await page.locator('#receiver-note-sheet').screenshot({ path: join(outDir, 'receiver-note-chromium.png') })
+    report.pages['index'] = {
+      status,
+      assertions: result?.assertions ?? [],
+      failures: result?.failures ?? [],
+    }
+    try {
+      await page.locator('#receiver-note-sheet').screenshot({ path: join(outDir, 'receiver-note-chromium.png') })
+    } catch (error) {
+      report.errors.push(`screenshot: ${String(error)}`)
+    }
     await page.close()
+    try {
+      assert.equal(status, 'done', `page status "${status}"`)
+      assert.ok(result, 'window.__receiverNote missing')
+      for (const item of result.assertions) assert.equal(item.ok, true, `receiver-note :: ${item.name} ${item.detail ?? ''}`)
+      assert.ok(result.assertions.length >= 12, `expected >=12 assertions, got ${result.assertions.length}`)
+      assert.deepEqual(result.failures, [])
+    } catch (error) {
+      failure = error
+    }
   } finally {
     await browser.close()
   }
 } finally {
   server.close()
+  // Persist the structured result (incl. console/pageerrors and the actual
+  // per-assertion details) BEFORE throwing.
+  report.shots = ['receiver-note-chromium.png']
+  await writeFile(join(outDir, 'receiver-note-report.json'), JSON.stringify(report, null, 2))
 }
-report.shots = ['receiver-note-chromium.png']
-await writeFile(join(outDir, 'receiver-note-report.json'), JSON.stringify(report, null, 2))
+if (failure) {
+  const page = report.pages['index']
+  if (page) console.error('PAGE-FAILURES', JSON.stringify(page.failures, null, 2))
+  throw failure
+}
 console.log(`receiver note browser check PASS: ${report.pages['index'].assertions.length} assertions`)

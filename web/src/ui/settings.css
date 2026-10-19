@@ -1,0 +1,93 @@
+/*
+ * T332 — scoped styles for the header language popover and the Settings screen.
+ * Uses only the existing design tokens; every selector is namespaced to the new
+ * `.language-*` / `.settings-*` classes so Create/Scan/Account are untouched.
+ */
+.language-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.language-trigger {
+  gap: 0.4rem;
+}
+
+/* Decorative caret (no glyph): a rotated square border box. */
+.language-trigger::after {
+  content: "";
+  width: 0.42em;
+  height: 0.42em;
+  margin-bottom: 0.18em;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.language-list {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  min-width: 9.5rem;
+  padding: 0.35rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  box-shadow: 0 12px 28px var(--shadow);
+}
+
+.language-option {
+  justify-content: flex-start;
+  width: 100%;
+  border-color: transparent;
+  border-radius: 0.7rem;
+  text-decoration: none;
+}
+
+.language-option[aria-selected="true"] {
+  background: var(--lilac);
+  font-weight: 700;
+}
+
+.language-option:focus-visible {
+  outline: 2px solid var(--lilac-deep);
+  outline-offset: 2px;
+}
+
+.settings-group h2 {
+  margin: 0 0 0.6rem;
+  font-weight: 500;
+  font-size: 1.2rem;
+}
+
+.settings-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 1rem;
+  margin: 0;
+}
+
+.settings-facts dt {
+  color: var(--lilac-deep);
+}
+
+.settings-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 360px) {
+  .language-list {
+    right: auto;
+    left: 0;
+    min-width: 8.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .language-trigger::after {
+    transition: none;
+  }
+}

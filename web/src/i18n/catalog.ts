@@ -109,6 +109,8 @@ export const messageKeys = [
   'sendNotConfirmed',
   'settingsTitle',
   'settingsBody',
+  'settingsSession',
+  'settingsSignedOut',
 ] as const
 
 export type MessageKey = (typeof messageKeys)[number]
@@ -221,6 +223,8 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     sendNotConfirmed: 'not confirmed. the send may have started; do not retry here.',
     settingsTitle: 'settings',
     settingsBody: 'language stays on this page. opening settings does not sign in, unlock keys, or open a postcard.',
+    settingsSession: 'session',
+    settingsSignedOut: 'not signed in on this device.',
   },
   ru: {
     homeOpenTitle: 'вам пришла открытка?',
@@ -329,6 +333,8 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     sendNotConfirmed: 'не подтверждено. отправка могла начаться; не повторяйте здесь.',
     settingsTitle: 'настройки',
     settingsBody: 'язык остаётся на этой странице. открытие настроек не выполняет вход, не открывает ключи и не открывает открытку.',
+    settingsSession: 'сеанс',
+    settingsSignedOut: 'на этом устройстве вход не выполнен.',
   },
   uk: {
     homeOpenTitle: 'вам надійшла листівка?',
@@ -437,5 +443,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     sendNotConfirmed: 'не підтверджено. надсилання могло розпочатися; не повторюйте тут.',
     settingsTitle: 'налаштування',
     settingsBody: 'мова лишається на цій сторінці. відкриття налаштувань не входить в акаунт, не відкриває ключі і не відкриває листівку.',
+    settingsSession: 'сеанс',
+    settingsSignedOut: 'на цьому пристрої вхід не виконано.',
   },
 }

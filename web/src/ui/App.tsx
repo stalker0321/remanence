@@ -9,10 +9,12 @@ import { apiOrigin, fetchTransport, type ApiTransport, type ByteTransport } from
 import { MemoryKeys } from '../auth/memoryKeys'
 import { browserPasskey, type PasskeyPort } from '../auth/passkey'
 import { restoreSignedInAccount } from '../auth/restore'
-import { languages, type Language, type MessageKey } from '../i18n/catalog'
+import { type Language, type MessageKey } from '../i18n/catalog'
 import { phaseKey, translate } from '../i18n/translate'
 import { writeLanguage, type PreferencePort } from '../preferences/language'
 import { href, parseRoute, type RouteName } from '../router/route'
+import { LanguageMenu } from './LanguageMenu'
+import { Settings } from './Settings'
 import { CollageStage } from '../collage/stage'
 import type { PresentationMemory } from '../collage/memory'
 import { browserCamera, type CameraPort, type CameraSession, type StillCapture } from '../scan/camera'
@@ -100,19 +102,7 @@ export function App({
     <main className="shell">
       <div className="bar">
         <p className="mark">remanence</p>
-        <nav aria-label={t('language')}>
-          {languages.map((language) => (
-            <button
-              key={language}
-              type="button"
-              className="quiet"
-              aria-pressed={view.language === language}
-              onClick={() => chooseLanguage(language)}
-            >
-              {language}
-            </button>
-          ))}
-        </nav>
+        <LanguageMenu language={view.language} onSelect={chooseLanguage} t={t} />
       </div>
       {route === 'home' ? <Home t={t} /> : null}
       {route === 'scan' ? (
@@ -133,7 +123,16 @@ export function App({
       {view.phase === 'presentation-admitted' && held ? (
         <CollageStage held={held} t={t} onClose={() => store.lock()} />
       ) : null}
-      {route === 'settings' ? <Settings t={t} /> : null}
+      {route === 'settings' ? (
+        <Settings
+          t={t}
+          language={view.language}
+          onSelectLanguage={chooseLanguage}
+          handle={view.handle}
+          signedIn={view.phase !== 'signed-out'}
+          sessionState={t(phaseKey(view.phase))}
+        />
+      ) : null}
       {route === 'account' ? (
         <Account
           store={store}
@@ -174,19 +173,6 @@ function Home({ t }: { t: (key: MessageKey) => string }) {
         <a href={href('settings')}>{t('settingsTitle')}</a>
       </div>
     </>
-  )
-}
-
-function Settings({ t }: { t: (key: MessageKey) => string }) {
-  return (
-    <section className="card">
-      <h1>{t('settingsTitle')}</h1>
-      <p>{t('settingsBody')}</p>
-      <div className="actions">
-        <a href={href('account')}>{t('account')}</a>
-        <a href={href('home')}>{t('back')}</a>
-      </div>
-    </section>
   )
 }
 

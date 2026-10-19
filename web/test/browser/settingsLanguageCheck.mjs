@@ -100,19 +100,51 @@ try {
     const status = await page.textContent('#settings-language-status')
     const result = await page.evaluate(() => window.__settingsLanguage)
     report.pages['index'] = { status, assertions: result?.assertions ?? [], failures: result?.failures ?? [], prefWrites: result?.prefWrites ?? [], language: result?.language ?? null, docLang: result?.docLang ?? null }
-    // Real UI screenshots (desktop + narrow 320px) of the settings screen for
-    // independent visual review. Taken regardless of assertion outcome.
+    // Real UI screenshots + OPEN-menu bounds at the 320px narrow viewport.
+    report.narrow = []
+    report.screenshots = []
     try {
-      await page.evaluate(() => { window.location.hash = '#/settings' })
-      await page.waitForTimeout(400)
+      // Desktop settings view (closed menu) for visual review.
       await page.setViewportSize({ width: 800, height: 600 })
+      await page.evaluate(() => { window.location.hash = '#/settings' })
+      await page.waitForTimeout(300)
       await page.screenshot({ path: join(outDir, 'settings-desktop.png'), fullPage: true })
-      await page.setViewportSize({ width: 320, height: 640 })
-      await page.waitForTimeout(150)
-      await page.screenshot({ path: join(outDir, 'settings-narrow.png'), fullPage: true })
-      report.screenshots = ['settings-desktop.png', 'settings-narrow.png']
+      report.screenshots.push('settings-desktop.png')
+
+      // Narrow 320px: the OPEN header popover must stay in the frame for every
+      // supported language, and the OPEN Settings popover must too. This is the
+      // regression for the header-vs-Settings anchor defect.
+      const width = 320
+      await page.setViewportSize({ width, height: 640 })
+      await page.evaluate(() => { window.location.hash = '#/' })
+      await page.waitForTimeout(300)
+      const langs = [['en', 'English'], ['ru', 'Русский'], ['uk', 'Українська']]
+      for (const [code, name] of langs) {
+        await page.locator('.bar .language-trigger').click()
+        await page.locator('.bar .language-list').waitFor({ state: 'visible' })
+        const box = await page.locator('.bar .language-list').boundingBox()
+        const ok = !!box && box.width > 0 && box.x >= 0 && box.x + box.width <= width
+        report.narrow.push({ where: 'header', lang: code, box, ok })
+        await page.screenshot({ path: join(outDir, `header-open-320-${code}.png`), fullPage: true })
+        report.screenshots.push(`header-open-320-${code}.png`)
+        await page.locator('.bar .language-option', { hasText: name }).click()
+        await page.waitForTimeout(120)
+      }
+
+      await page.evaluate(() => { window.location.hash = '#/settings' })
+      await page.waitForTimeout(300)
+      const settingsTrigger = page.locator('.settings-group .language-trigger')
+      await settingsTrigger.click()
+      await page.locator('.settings-group .language-list').waitFor({ state: 'visible' })
+      const settingsBox = await page.locator('.settings-group .language-list').boundingBox()
+      const settingsOk = !!settingsBox && settingsBox.width > 0 && settingsBox.x >= 0 && settingsBox.x + settingsBox.width <= width
+      report.narrow.push({ where: 'settings', lang: (await settingsTrigger.textContent())?.trim() ?? '', box: settingsBox, ok: settingsOk })
+      await page.screenshot({ path: join(outDir, 'settings-open-320.png'), fullPage: true })
+      report.screenshots.push('settings-open-320.png')
+      await page.locator('.settings-group .language-option').first().click()
+      await page.waitForTimeout(120)
     } catch (error) {
-      report.errors.push(`screenshot failed: ${String(error)}`)
+      report.errors.push(`narrow/screenshot phase failed: ${String(error)}`)
     }
     await page.close()
     try {
@@ -121,6 +153,10 @@ try {
       for (const item of result.assertions) assert.equal(item.ok, true, `settings-language :: ${item.name} ${item.detail ?? ''}`)
       assert.ok(result.assertions.length >= 20, `expected >=20 assertions, got ${result.assertions.length}`)
       assert.deepEqual(result.failures, [])
+      assert.equal((report.narrow ?? []).length, 4, `expected 4 narrow OPEN-menu bounds checks, got ${(report.narrow ?? []).length}`)
+      for (const check of report.narrow ?? []) {
+        assert.equal(check.ok, true, `narrow OPEN-menu bounds ${check.where}/${check.lang}: ${JSON.stringify(check.box)}`)
+      }
     } catch (error) {
       failure = error
     }

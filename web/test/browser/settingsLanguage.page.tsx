@@ -75,9 +75,12 @@ function t(key: MessageKey, language: Language = store.getSnapshot().language): 
   return catalog[language][key]
 }
 function bodyText(): string { return document.body.textContent ?? '' }
-function trigger(): HTMLButtonElement | null { return document.querySelector('.language-trigger') }
-function options(): HTMLButtonElement[] { return Array.from(document.querySelectorAll('.language-option')) }
-function list(): HTMLElement | null { return document.querySelector('.language-list') }
+// Scope-aware menu helpers: the header menu is `.bar`, the Settings menu is
+// `.settings-group`. Using one global selector made the Settings test silently
+// re-exercise the header menu (both triggers exist on the settings route).
+function trigger(scope = '.bar'): HTMLButtonElement | null { return document.querySelector(`${scope} .language-trigger`) }
+function options(scope = '.bar'): HTMLButtonElement[] { return Array.from(document.querySelectorAll(`${scope} .language-option`)) }
+function list(scope = '.bar'): HTMLElement | null { return document.querySelector(`${scope} .language-list`) }
 function click(el: Element): void { (el as HTMLElement).click() }
 function navigate(route: string): void { window.location.hash = `#/${route}` }
 
@@ -193,12 +196,13 @@ async function run(): Promise<void> {
   assert('settings account link points at the existing account route', document.querySelector('a[href="#/account"]') !== null)
   assert('settings back link points home', document.querySelector('a[href="#/"]') !== null)
 
-  // --- Settings: language menu works here too ----------------------------
-  const settingsTrigger = trigger()
-  assert('settings renders the reusable language menu', settingsTrigger !== null)
+  // --- Settings: language menu works here too (scoped to the settings group) --
+  const settingsTrigger = trigger('.settings-group')
+  assert('settings renders its own language menu, not the header', settingsTrigger !== null && settingsTrigger !== trigger())
   click(settingsTrigger!)
-  await waitFor(() => list() !== null, 'settings language menu opens')
-  click(options().find((element) => element.textContent === 'Русский')!)
+  await waitFor(() => list('.settings-group') !== null, 'settings language menu opens')
+  assert('opening the settings menu does not open the header menu', list('.bar') === null)
+  click(options('.settings-group').find((element) => element.textContent === 'Русский')!)
   await waitFor(() => store.getSnapshot().language === 'ru', 'RU selected from settings')
   assert('selecting from settings updates language + document.lang', document.documentElement.lang === 'ru')
 

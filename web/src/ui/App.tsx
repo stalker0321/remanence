@@ -21,6 +21,7 @@ import { unavailableRecognition, type RecognitionEngine } from '../scan/grant'
 import { explainScan } from '../scan/notice'
 import { receivePostcard } from '../scan/receive'
 import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
+import { buildRecognitionIndex, type RecognitionIndex } from '../scan/recognitionIndex'
 import { canvasTextMeasurer } from '../collage/measure'
 import { CreatorComposer, type CreatorComposerPhoto } from '../collage/CreatorComposer'
 import type { CreatorFreeze } from '../create/creatorFreeze'
@@ -189,7 +190,7 @@ function Settings({ t }: { t: (key: MessageKey) => string }) {
   )
 }
 
-function Scan({
+export function Scan({
   t,
   camera,
   onNotice,
@@ -287,17 +288,34 @@ function Scan({
         onNotice('emptyIndex')
         return
       }
-      await receivePostcard(
-        store,
-        keys,
-        memory,
-        engine,
-        picture,
-        incoming,
-        { read: (item, blobId, signal) => downloadCiphertext(store, transport, item, blobId, signal) },
-        canvasTextMeasurer(document),
-        controller.signal,
-      )
+      // T328: one transient pre-grant recognition index per match attempt,
+      // built after the verified incoming page and always disposed in finally
+      // (match consumption or refusal alike). Keys-unlocked only; no admission.
+      let index: RecognitionIndex | null = null
+      try {
+        index = await buildRecognitionIndex({
+          session: store,
+          keys,
+          transport,
+          catalog: incoming,
+          signal: controller.signal,
+        })
+        if (controller.signal.aborted) return
+        await receivePostcard(
+          store,
+          keys,
+          memory,
+          engine,
+          picture,
+          incoming,
+          { read: (item, blobId, signal) => downloadCiphertext(store, transport, item, blobId, signal) },
+          canvasTextMeasurer(document),
+          controller.signal,
+          index,
+        )
+      } finally {
+        index?.dispose()
+      }
       if (!controller.signal.aborted) onNotice('errorRegion')
     } catch (error) {
       if (!controller.signal.aborted) onNotice(explainScan(error))

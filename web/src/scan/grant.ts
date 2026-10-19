@@ -2,14 +2,20 @@ import type { StillCapture } from './camera'
 import { ScanError } from './errors'
 import type { IncomingCatalog } from '../sync/incoming'
 import type { PublicSession, SessionStore } from '../session/session'
+import type { RecognitionIndex } from './recognitionIndex'
 
 export interface MatchResult {
   kind: 'none' | 'many' | 'one'
   capsuleId?: string
 }
 
+/** T328 — optional pre-grant recognition context for a genuine engine. */
+export interface MatchContext {
+  readonly index: RecognitionIndex
+}
+
 export interface RecognitionEngine {
-  match(capture: StillCapture, catalog: IncomingCatalog): Promise<MatchResult>
+  match(capture: StillCapture, catalog: IncomingCatalog, context?: MatchContext): Promise<MatchResult>
 }
 
 /** No SIFT implementation is wired. A missing engine is not a match. */
@@ -44,11 +50,12 @@ export async function considerCapture(
   engine: RecognitionEngine,
   capture: StillCapture,
   catalog: IncomingCatalog,
+  context?: MatchContext,
 ): Promise<ScanGrant> {
   if (view.phase === 'signed-out' || view.phase === 'authenticated' || view.accountId === null) {
     throw new ScanError('GRANT_MISMATCH')
   }
-  const result = await engine.match(capture, catalog)
+  const result = await engine.match(capture, catalog, context)
   if (result.kind === 'none') throw new ScanError('NO_MATCH')
   if (result.kind !== 'one' || result.capsuleId === undefined) throw new ScanError('AMBIGUOUS')
   const item = catalog.items.find((candidate) => candidate.capsuleId === result.capsuleId)

@@ -9,6 +9,7 @@ import type { IncomingBlob, IncomingCapsule, IncomingCatalog } from '../sync/inc
 import type { StillCapture } from './camera'
 import { ScanError } from './errors'
 import { admitScan, considerCapture, type RecognitionEngine } from './grant'
+import type { RecognitionIndex } from './recognitionIndex'
 
 export interface CiphertextPort {
   read(item: IncomingCapsule, blobId: string, signal: AbortSignal): Promise<Uint8Array>
@@ -29,13 +30,14 @@ export async function receivePostcard(
   blobs: CiphertextPort,
   measurer: TextMeasurer,
   signal: AbortSignal,
+  index?: RecognitionIndex,
 ): Promise<void> {
   if (signal.aborted) throw new ScanError('CANCELLED')
   const view = session.getSnapshot()
   const generation = view.generation
   if (view.phase !== 'keys-unlocked' || view.accountId === null) throw new ScanError('GRANT_MISMATCH')
   if (catalog.items.length === 0) throw new ScanError('EMPTY')
-  const grant = await considerCapture(view, engine, capture, catalog)
+  const grant = await considerCapture(view, engine, capture, catalog, index ? { index } : undefined)
   if (signal.aborted) throw new ScanError('CANCELLED')
   stillUnlocked(session, generation)
   const item = catalog.items.find((candidate) => candidate.capsuleId === grant.capsuleId)

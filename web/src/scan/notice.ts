@@ -2,8 +2,14 @@ import type { MessageKey } from '../i18n/catalog'
 import { CollageError } from '../collage/errors'
 import { SyncError } from '../sync/errors'
 import { ScanError } from './errors'
+import { RecognitionIndexError } from './recognitionIndex'
 
 export function explainScan(error: unknown): MessageKey {
+  if (error instanceof RecognitionIndexError) {
+    if (error.code === 'unavailable') return 'recognitionUnavailable'
+    if (error.code === 'stale') return 'scanCancelled'
+    return 'integrityFailed'
+  }
   if (error instanceof ScanError) {
     switch (error.code) {
       case 'EMPTY':

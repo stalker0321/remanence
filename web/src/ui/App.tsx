@@ -27,6 +27,14 @@ import type { CreatorFreeze } from '../create/creatorFreeze'
 import { CreatorImageBridge, browserImageDecode, type CreatorImageDecode } from '../create/creatorImages'
 import { FrontHold, type FrontStill } from '../create/front'
 import { FrontFingerprintHold } from '../create/frontFingerprint'
+import {
+  SendAttemptController,
+  nextCreateVisitEpoch,
+  type SendOutcome,
+  type SendPortsFull,
+  type SendPhase,
+  type SendVisit,
+} from '../create/sendAttempt'
 import { FrontStillError } from '../scan/frontStillProducer'
 import { browserPhotoCodec } from '../create/browserPhoto'
 import { PhotoIntake, PhotoNormalizer, type PhotoCodec } from '../create/normalize'
@@ -118,7 +126,7 @@ export function App({
         />
       ) : null}
       {route === 'create' ? (
-        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} note={note} photos={photos} music={music} onNotice={setNotice} />
+        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} note={note} photos={photos} music={music} onNotice={setNotice} keys={keys} />
       ) : null}
       {view.phase === 'presentation-admitted' && held ? (
         <CollageStage held={held} t={t} onClose={() => store.lock()} />
@@ -340,6 +348,7 @@ export function Create({
   photos,
   music,
   onNotice,
+  keys,
   photoCodec = browserPhotoCodec(document),
   imageDecode = browserImageDecode(),
 }: {
@@ -352,6 +361,12 @@ export function Create({
   photos: PhotoDraft
   music: MusicDraft
   onNotice: (notice: MessageKey) => void
+  /**
+   * Accepted MemoryKeys for the real Send path. API-only test callers may
+   * omit it: Send then reports an explicit unavailable capability instead
+   * of faking upload success.
+   */
+  keys?: MemoryKeys
   /**
    * Injectable codec seam for connected tests (default: real browser
    * decoder). Production always uses the default; tests inject a gated
@@ -388,12 +403,60 @@ export function Create({
   const [creatorImages, setCreatorImages] = useState<CreatorComposerPhoto[] | null>(null)
   const [creatorImageState, setCreatorImageState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const measurer = useMemo(() => canvasTextMeasurer(document), [])
+
   const open = view.phase !== 'signed-out' && view.phase !== 'authenticated' && view.accountId !== null
   const pending = open ? recipient.pending() : null
   const confirmed = open ? recipient.confirmed() : null
   const selectedMusic = confirmed ? music.selected() : null
   const bound = confirmed ? `${confirmed.userId}:${confirmed.keyBundleId}:${confirmed.directoryVersion}` : ''
   void stamp
+  // ---- T326 in-memory Send (one admitted attempt per mounted Create visit) ----
+  // Epoch + capsuleId are allocated lazily ONCE per mount (a new Create visit
+  // gets new values; re-renders/language changes keep them).
+  const visitEpochRef = useRef<bigint | undefined>(undefined)
+  if (visitEpochRef.current === undefined) visitEpochRef.current = nextCreateVisitEpoch()
+  const capsuleIdRef = useRef<string | undefined>(undefined)
+  if (capsuleIdRef.current === undefined) capsuleIdRef.current = crypto.randomUUID()
+  const [sendPhase, setSendPhase] = useState<SendPhase>('idle')
+  const [sendOutcome, setSendOutcome] = useState<SendOutcome | null>(null)
+  const sendControllerRef = useRef<SendAttemptController | null>(null)
+  const sendPortsRef = useRef<SendPortsFull | null>(null)
+  const sendUploadCapable = typeof (transport as { uploadBytes?: unknown }).uploadBytes === 'function'
+  sendPortsRef.current = {
+    session: store,
+    // Type is the runtime fetchTransport object (Api+Byte+Upload); API-only
+    // test callers without uploadBytes never pass the capability gate.
+    keys: keys as MemoryKeys,
+    transport: transport as SendPortsFull['transport'],
+    recipientCurrent: () => recipient.confirmed(),
+    photosCurrent: () => photos.photos(),
+    noteTextCurrent: () => note.accepted() ?? '',
+    musicSelectedCurrent: () => music.selected() !== null,
+    freezeCurrent: () => frozenRef.current,
+    stillCurrent: () => front.current.still(),
+    fingerprintCurrent: () => frontFp.current.current(),
+    mountedCurrent: () => mounted.current,
+  }
+  if (sendControllerRef.current === null && keys !== undefined) {
+    sendControllerRef.current = new SendAttemptController(
+      () => sendPortsRef.current as SendPortsFull,
+      () => mounted.current,
+      (phase) => setSendPhase(phase),
+    )
+  }
+  // Render-time availability (no attempt consumed on an unready click).
+  const sendReady = (() => {
+    if (!sendUploadCapable || keys === undefined || sendPhase !== 'idle') return false
+    const snap = store.getSnapshot()
+    if (snap.phase !== 'keys-unlocked' || snap.accountId === null || !confirmed) return false
+    if (frozenRef.current === null) return false
+    if (front.current.still() === null) return false
+    if (frontFp.current.current() === null) return false
+    if (selectedMusic !== null) return false
+    if (photos.photos().length < 3 || photos.photos().length > PHOTO_COUNT_MAX) return false
+    if (note.accepted() === null) return false
+    return true
+  })()
 
   function forgetPhotos() {
     for (const url of urls.current.values()) URL.revokeObjectURL(url)
@@ -436,6 +499,7 @@ export function Create({
       fpAttempt.current += 1
       frontFp.current.clear()
       front.current.close()
+      sendControllerRef.current?.abort()
       forgetPhotos()
     }
   }, [])
@@ -445,6 +509,8 @@ export function Create({
     fpAttempt.current += 1
     frontFp.current.clear()
     setFpState('idle')
+    // Visit death also invalidates an in-flight Send (fences + best-effort abort).
+    sendControllerRef.current?.invalidate()
     // Release a stuck busy so lock-during-work followed by unlock/reconfirm
     // can take again; the bumped attempt keeps a stale finally from clearing
     // a newer operation's busy state.
@@ -588,6 +654,52 @@ export function Create({
     } finally {
       if (abort.current === controller) setBusy(false)
     }
+  }
+
+  /** ONE admitted Send: capture the coherent visit synchronously at click. */
+  function handleSend(): void {
+    const controller = sendControllerRef.current
+    if (!controller || !sendReady || sendPhase !== 'idle') return
+    const freeze = frozenRef.current
+    const still = front.current.still()
+    const fingerprint = frontFp.current.current()
+    const rec = recipient.confirmed()
+    if (!freeze || !still || !fingerprint || !rec) return // unready: no attempt
+    const snap = store.getSnapshot()
+    const visit: Omit<SendVisit, 'mounted'> = {
+      epoch: visitEpochRef.current as bigint,
+      capsuleId: capsuleIdRef.current as string,
+      account: snap.accountId,
+      bundleId: snap.bundleId,
+      generation: snap.generation,
+      keysReady: snap.phase === 'keys-unlocked',
+      recipient: rec,
+      photos: photos.photos(),
+      noteText: note.accepted() ?? '',
+      musicSelected: selectedMusic !== null,
+      freeze,
+      still,
+      fingerprint,
+    }
+    if (!controller.begin(visit)) return
+    const localGeneration = snap.generation
+    const localRecipient = rec
+    const localFreeze = freeze
+    const visitStillCurrent = (): boolean =>
+      mounted.current &&
+      store.getSnapshot().generation === localGeneration &&
+      recipient.confirmed() === localRecipient &&
+      frozenRef.current === localFreeze
+    void (async () => {
+      const outcome = await controller.run()
+      setSendOutcome(outcome)
+      // Never show stale success/failure: drop the notice if the captured
+      // visit died while publishing (lock/recipient/unmount/edits).
+      if (!visitStillCurrent()) return
+      if (outcome.kind === 'sent') onNotice('sendSent')
+      else if (outcome.kind === 'refused') onNotice('sendNotSent')
+      else if (outcome.kind === 'unknown') onNotice('sendNotConfirmed')
+    })()
   }
 
   async function takeFront() {
@@ -839,6 +951,7 @@ export function Create({
             <textarea
               value={note.text()}
               rows={4}
+              disabled={sendPhase === 'working'}
               onChange={(event) => {
                 note.edit(event.target.value)
                 setStamp((value) => value + 1)
@@ -854,6 +967,7 @@ export function Create({
                 type="file"
                 accept="image/jpeg,.jpg,.jpeg"
                 multiple
+                disabled={sendPhase === 'working'}
                 onChange={(event) => {
                   // Snapshot the picked files FIRST: input.files is a live
                   // FileList — resetting the input below would empty the
@@ -938,18 +1052,38 @@ export function Create({
                 </li>
               ))}
             </ul>
-            <p>{t('musicNotSent')}</p>
-          </div>
+              <p>{t('musicNotSent')}</p>
+            </div>
+            <div className="send-block">
+              <button
+                type="button"
+                className="primary"
+                data-testid="send_button"
+                disabled={!sendReady}
+                onClick={handleSend}
+              >
+                {t('sendAction')}
+              </button>
+              {sendPhase === 'working' ? (
+                <p data-testid="send_state">{t('sendWorking')}</p>
+              ) : sendOutcome?.kind === 'sent' ? (
+                <p data-testid="send_state">{t('sendSent')}</p>
+              ) : sendOutcome?.kind === 'refused' ? (
+                <p data-testid="send_state" role="alert">{t('sendNotSent')}</p>
+              ) : sendOutcome?.kind === 'unknown' ? (
+                <p data-testid="send_state" role="alert">{t('sendNotConfirmed')}</p>
+              ) : null}
+            </div>
           <div className="actions">
             {live ? (
               <>
-                <button type="button" className="primary" disabled={busy} onClick={() => { void takeFront() }}>{t('takePicture')}</button>
+                <button type="button" className="primary" disabled={busy || sendPhase === 'working'} onClick={() => { void takeFront() }}>{t('takePicture')}</button>
                 <button type="button" disabled={busy} onClick={closeCamera}>{t('closeCamera')}</button>
               </>
             ) : (
               <button type="button" className="primary" disabled={busy} onClick={() => { void openCamera() }}>{t('useCamera')}</button>
             )}
-            <button type="button" disabled={busy} onClick={changeRecipient}>{t('recipientChange')}</button>
+            <button type="button" disabled={busy || sendPhase === 'working'} onClick={changeRecipient}>{t('recipientChange')}</button>
             <a href={href('home')}>{t('back')}</a>
           </div>
         </>

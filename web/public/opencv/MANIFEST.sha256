@@ -1,0 +1,12 @@
+# T312 vendored OpenCV.js WASM asset manifest
+#
+# Custom build of official OpenCV 4.12.0 (tag commit 49486f61fb25722cbcf586b7f4320921d46fb38e)
+# with the JS whitelist extended by features2d SIFT + core dct. Built with emsdk 4.0.10
+# and CMake 3.31.6: `--build_wasm --disable_single_file`, Emscripten `-s WASM=1
+# -s USE_PTHREADS=0`. Build recipe: web/tools/opencv/build_opencv_sift.sh; whitelist:
+# web/tools/opencv/opencv_js_sift.config.py; full provenance: web/tools/opencv/PROVENANCE.md.
+#
+# These are the only committed runtime artifacts (no toolchains/archives/build trees).
+44f5c78f56d4a760a6dab81ddf5efd2c9fce17f273866a3b2204a95ad7530366  opencv.js
+e569091b890a6464aa77c1e3945ff0012352fd47067c491774f9c149388fc924  opencv_js.wasm
+cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  LICENSE.txt

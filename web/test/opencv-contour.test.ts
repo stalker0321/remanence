@@ -16,6 +16,7 @@ interface Controls {
   cannyThrows?: boolean
   warpThrows?: boolean
   findThrows?: boolean
+  poisonTransformDelete?: boolean
 }
 
 /** Minimal fake `cv` module recording handle lifetimes for the contour path. */
@@ -44,6 +45,7 @@ function buildCv(controls: Controls = {}): { cv: Parameters<typeof wrapOpenCvRun
       return this.typeId
     }
     delete(): void {
+      if (controls.poisonTransformDelete && this.label === 'transform') throw new Error('delete failed')
       log.deleted.push(this.label)
     }
   }
@@ -114,12 +116,16 @@ function buildCv(controls: Controls = {}): { cv: Parameters<typeof wrapOpenCvRun
     isContourConvex: () => true,
     contourArea: () => 1200,
     arcLength: () => 140,
-    getPerspectiveTransform: () => new FakeMat(),
+    getPerspectiveTransform: () => {
+      const mat = new FakeMat()
+      mat.label = 'transform'
+      return mat
+    },
     warpPerspective: (_src: unknown, dst: FakeMat, _t: unknown, size: { width: number; height: number }): void => {
       if (controls.warpThrows) throw new Error('warp failed')
       dst.rows = size.height
       dst.cols = size.width
-      dst.data = new Uint8Array(size.width * size.height * 4)
+      dst.data = new Uint8Array(size.width * size.height * 4).fill(7)
     },
     KeyPointVector: FakeVec,
     SIFT: class {},
@@ -200,5 +206,51 @@ describe('T316 contour bridge ownership', () => {
     ] as const
     expect(() => runtime.warpRgbaQuad(rgba, [...quad], [...quad], 10, 10)).toThrow()
     expect(log.deleted.length).toBe(log.created.length)
+  })
+
+  it('wipes the copied warp output when a native release fails after the copy', () => {
+    const { cv, log } = buildCv({ poisonTransformDelete: true })
+    const runtime = wrapOpenCvRuntime(cv)
+    const rgba = { rows: 60, cols: 80, type: () => CV_8UC4, data: new Uint8Array(80 * 60 * 4), data32F: new Float32Array(0), delete: () => undefined }
+    const quad = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ] as const
+    interface FillRecord {
+      before: Uint8Array
+      after: Uint8Array
+    }
+    const records: FillRecord[] = []
+    const originalFill = Uint8Array.prototype.fill
+    const installFill = originalFill as unknown as (value: number, start?: number, end?: number) => Uint8Array
+    ;(Uint8Array.prototype as { fill: unknown }).fill = function (
+      this: Uint8Array,
+      value: number,
+      start?: number,
+      end?: number,
+    ): Uint8Array {
+      records.push({ before: this.slice(), after: this })
+      return installFill.call(this, value, start, end)
+    }
+    try {
+      // The transform delete throws during strict release AFTER dst.data was
+      // copied; the caller never receives the copy, so the bridge must wipe it.
+      expect(() => runtime.warpRgbaQuad(rgba, [...quad], [...quad], 10, 10)).toThrow()
+      // All remaining handles were still attempted: src/dst points + dst.
+      expect(log.deleted).toEqual(['mat', 'mat', 'mat'])
+      // Both the 400-byte nonzero dst buffer AND the 400-byte nonzero copy
+      // were zeroed (R2 code wipes only dst: exactly one such record there).
+      const zeroedCopies = records.filter(
+        (entry) =>
+          entry.before.length === 400 &&
+          entry.before.some((byte) => byte !== 0) &&
+          entry.after.every((byte) => byte === 0),
+      )
+      expect(zeroedCopies).toHaveLength(2)
+    } finally {
+      ;(Uint8Array.prototype as { fill: unknown }).fill = originalFill
+    }
   })
 })

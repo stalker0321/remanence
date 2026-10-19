@@ -180,7 +180,13 @@ export async function decodeJpegUpright(doc: Document, jpeg: Uint8Array): Promis
       context.drawImage(bitmap, 0, 0, target.width, target.height)
       const imageData = context.getImageData(0, 0, target.width, target.height)
       const rgba = new Uint8Array(imageData.data)
-      if (rgba.length !== target.width * target.height * 4) throw refuse('decode')
+      // The exposed ImageData buffer is wiped once its pixels are copied;
+      // only the independently owned copy transfers out.
+      imageData.data.fill(0)
+      if (rgba.length !== target.width * target.height * 4) {
+        rgba.fill(0)
+        throw refuse('decode')
+      }
       return { rgba, width: target.width, height: target.height }
     } finally {
       canvas.width = 0
@@ -337,6 +343,9 @@ function extractLocalized(
   }
   let warpedBytes: Uint8Array | null = null
   let domainRows: Uint8Array[] | null = null
+  // The freshly serialized wire is owned from allocation until transfer; a
+  // refusal between serialization and transfer must wipe it (see `finally`).
+  let wireBytes: Uint8Array | null = null
   let cleanupAttempted = false
   let returned = false
   try {
@@ -391,6 +400,7 @@ function extractLocalized(
       throw refuse('internal')
     }
     const wire = serializeSiftFingerprint(fingerprint)
+    wireBytes = wire
     for (const row of domainRows) row.fill(0)
     domainRows = null
     throwIfFence(fence)
@@ -419,6 +429,7 @@ function extractLocalized(
     throw error
   } finally {
     if (warpedBytes) warpedBytes.fill(0)
+    if (!returned && wireBytes) wireBytes.fill(0)
     if (!cleanupAttempted) {
       cleanupAttempted = true
       runReleases(false)

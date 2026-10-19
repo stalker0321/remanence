@@ -292,6 +292,10 @@ export function wrapOpenCvRuntime(cv: RawCv): CvContourRuntime {
         quad[0]!.x, quad[0]!.y, quad[1]!.x, quad[1]!.y, quad[2]!.x, quad[2]!.y, quad[3]!.x, quad[3]!.y,
       ]
       const owned: RawMat[] = []
+      // The copied output is owned from `slice()` until transfer; a refusal
+      // after the copy (shape check or cleanup failure) must wipe it, since
+      // the caller never receives it to wipe. Success transfers it unwiped.
+      let copied: Uint8Array | null = null
       try {
         const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, flat(srcQuad))
         owned.push(srcPts)
@@ -305,11 +309,13 @@ export function wrapOpenCvRuntime(cv: RawCv): CvContourRuntime {
         if (dst.rows !== dstHeight || dst.cols !== dstWidth) throw unavailable('warp shape mismatch')
         const bytes = dst.data.slice()
         if (bytes.length !== dstWidth * dstHeight * 4) throw unavailable('warp shape mismatch')
+        copied = bytes
         const result: CvWarpedRgba = { bytes, width: dstWidth, height: dstHeight }
         releaseTracked(owned, true)
         return result
       } catch (error) {
         releaseTracked(owned, false)
+        if (copied) copied.fill(0)
         throw error
       }
     },

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  decodeJpegUpright,
   FrontStillError,
   produceFrontStillFingerprint,
   type OwnedRgbaFrame,
@@ -300,5 +301,92 @@ describe('T316 producer localize-warp-extract', () => {
     rejectRuntime(new Error('load failed'))
     await expect(reason(pending)).resolves.toBe('unavailable')
     void runtime
+  })
+
+  it('wipes the freshly serialized wire when the post-serialize fence refuses', async () => {
+    const base = { quads: [BIG_QUAD], ...sift }
+    // A success run first learns the exact wire length for the wipe evidence.
+    const okFp = await produceFrontStillFingerprint(stillFor(jpegWithDims(320, 240)), {
+      fence: () => true,
+      runtime: makeFakeContourRuntime(base),
+      decode: async () => workingFrame(),
+    })
+    const wireLength = okFp.wire.length
+    expect(wireLength).toBeGreaterThan(0)
+    okFp.wire.fill(0)
+
+    interface FillRecord {
+      before: Uint8Array
+      after: Uint8Array
+    }
+    const records: FillRecord[] = []
+    const originalFill = Uint8Array.prototype.fill
+    const installFill = originalFill as unknown as (value: number, start?: number, end?: number) => Uint8Array
+    ;(Uint8Array.prototype as { fill: unknown }).fill = function (
+      this: Uint8Array,
+      value: number,
+      start?: number,
+      end?: number,
+    ): Uint8Array {
+      records.push({ before: this.slice(), after: this })
+      return installFill.call(this, value, start, end)
+    }
+    try {
+      // Nine fence evaluations precede transfer on this path (entry, decode,
+      // load, rgba, detect, plan, warp, extract, post-serialize); only the
+      // post-serialize recheck must refuse, after the wire already exists.
+      let calls = 0
+      await expect(
+        reason(
+          produceFrontStillFingerprint(stillFor(jpegWithDims(320, 240)), {
+            fence: () => ++calls < 9,
+            runtime: makeFakeContourRuntime(base),
+            decode: async () => workingFrame(),
+          }),
+        ),
+      ).resolves.toBe('stale')
+      expect(calls).toBe(9)
+      const wireWipe = records.find((entry) => entry.before.length === wireLength && entry.before.some((byte) => byte !== 0))
+      expect(wireWipe).toBeDefined()
+      expect(wireWipe!.after.every((byte) => byte === 0)).toBe(true)
+    } finally {
+      ;(Uint8Array.prototype as { fill: unknown }).fill = originalFill
+    }
+  })
+
+  it('wipes the exposed ImageData buffer after copying, keeping owned output correct', async () => {
+    const exposed = new Uint8ClampedArray([10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 1, 2, 3, 255])
+    let closed = false
+    const fakeBitmap = {
+      width: 2,
+      height: 2,
+      close: () => {
+        closed = true
+      },
+    }
+    const fakeContext = {
+      drawImage: () => undefined,
+      getImageData: () => ({ data: exposed, width: 2, height: 2 }),
+    }
+    const fakeCanvas = {
+      width: 0,
+      height: 0,
+      getContext: () => fakeContext,
+    }
+    const fakeDoc = { createElement: () => fakeCanvas } as unknown as Document
+    const realCreateImageBitmap = (globalThis as { createImageBitmap?: unknown }).createImageBitmap
+    ;(globalThis as { createImageBitmap?: unknown }).createImageBitmap = async () => fakeBitmap
+    try {
+      const frame = await decodeJpegUpright(fakeDoc, jpegWithDims(2, 2, 96))
+      expect(frame.width).toBe(2)
+      expect(frame.height).toBe(2)
+      expect(Array.from(frame.rgba)).toEqual([10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 1, 2, 3, 255])
+      expect(exposed.every((byte) => byte === 0)).toBe(true)
+      expect(closed).toBe(true)
+      frame.rgba.fill(0)
+    } finally {
+      ;(globalThis as { createImageBitmap?: unknown }).createImageBitmap = realCreateImageBitmap
+    }
+    expect(fakeCanvas.width).toBe(0)
   })
 })

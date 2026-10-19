@@ -88,7 +88,9 @@ function releaseAll(actions: readonly (() => void)[]): void {
   }
 }
 
-/** Copies DMatch scalars out of a nested vector, then the caller releases it. */
+/** Copies DMatch scalars out of a nested vector; each row handle returned by
+ * `parent.get(anchor)` is OWNED here and released (success AND throw) —
+ * deleting the parent does NOT release returned child vectors (root proof). */
 function copyKnnRows(
   vector: RawDMatchVectorVector,
   anchorCount: number,
@@ -102,50 +104,79 @@ function copyKnnRows(
   const rows: CvDMatch[][] = []
   for (let anchor = 0; anchor < rowCount; anchor++) {
     const row = vector.get(anchor)
-    if (typeof row?.size !== 'function' || typeof row.get !== 'function') {
-      throw new PinnedMatcherError('native-contract')
-    }
-    const count = row.size()
-    if (count > 2) throw new PinnedMatcherError('native-contract')
-    const copied: CvDMatch[] = []
-    for (let index = 0; index < count; index++) {
-      const match = row.get(index)
-      if (
-        typeof match?.queryIdx !== 'number'
-        || typeof match.trainIdx !== 'number'
-        || typeof match.distance !== 'number'
-        || match.queryIdx !== anchor
-        || match.trainIdx < 0
-        || match.trainIdx >= trainCount
-      ) {
+    if (row === undefined || row === null) throw new PinnedMatcherError('native-contract')
+    try {
+      if (typeof row.size !== 'function' || typeof row.get !== 'function') {
         throw new PinnedMatcherError('native-contract')
       }
-      copied.push({ queryIdx: match.queryIdx, trainIdx: match.trainIdx, distance: Number(match.distance) })
+      const count = row.size()
+      if (count > 2) throw new PinnedMatcherError('native-contract')
+      const copied: CvDMatch[] = []
+      for (let index = 0; index < count; index++) {
+        const match = row.get(index)
+        if (
+          typeof match?.queryIdx !== 'number'
+          || typeof match.trainIdx !== 'number'
+          || typeof match.distance !== 'number'
+          || match.queryIdx !== anchor
+          || match.trainIdx < 0
+          || match.trainIdx >= trainCount
+        ) {
+          throw new PinnedMatcherError('native-contract')
+        }
+        copied.push({ queryIdx: match.queryIdx, trainIdx: match.trainIdx, distance: Number(match.distance) })
+      }
+      rows.push(copied)
+    } finally {
+      // The nested DMatchVector is a live OWNED handle; release it after the
+      // scalar copy (or after any validation throw). DMatch scalars copied
+      // above are plain numbers, not native handles.
+      try {
+        row.delete?.()
+      } catch {
+        /* best-effort release; remaining rows/parents are still attempted */
+      }
     }
-    rows.push(copied)
   }
   return rows
 }
 
+/**
+ * Ownership begins IMMEDIATELY after the constructor succeeds: any later
+ * shape/getter/view.set failure wipes the already-copied data and releases
+ * the Mat in the same call (no bare delete, no abandoned partial allocation).
+ * On success the Mat transfers to the caller's cleanup list.
+ */
 function matFromRows(cv: RawCv, rows: readonly Float32Array[]): RawMatLike {
   if (rows.length === 0) throw new PinnedMatcherError('native-contract')
   const width = rows[0]!.length
   const mat = new cv.Mat(rows.length, width, cv.CV_32F) as unknown as RawMatLike
-  const view = mat.data32F
-  if (view.length !== rows.length * width) {
-    mat.delete()
-    throw new PinnedMatcherError('native-contract')
-  }
-  let offset = 0
-  for (const row of rows) {
-    if (row.length !== width) {
-      mat.delete()
-      throw new PinnedMatcherError('native-contract')
+  let transferred = false
+  try {
+    const view = mat.data32F
+    if (view.length !== rows.length * width) throw new PinnedMatcherError('native-contract')
+    let offset = 0
+    for (const row of rows) {
+      if (row.length !== width) throw new PinnedMatcherError('native-contract')
+      view.set(row, offset)
+      offset += width
     }
-    view.set(row, offset)
-    offset += width
+    transferred = true
+    return mat
+  } finally {
+    if (!transferred) {
+      try {
+        mat.data32F.fill(0)
+      } catch {
+        /* best-effort wipe before release */
+      }
+      try {
+        mat.delete()
+      } catch {
+        /* best-effort release */
+      }
+    }
   }
-  return mat
 }
 
 interface RawMatcherAny extends RawMatcher {

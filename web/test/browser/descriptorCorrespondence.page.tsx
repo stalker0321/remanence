@@ -161,12 +161,56 @@ async function main(): Promise<void> {
     report.normL2 = (cv as unknown as { NORM_L2?: number }).NORM_L2
     assert('pinned runtime exports NORM_L2 = 4', (cv as unknown as { NORM_L2?: number }).NORM_L2 === 4)
 
+    // ---- REAL WASM nested-row release invariant (review finding 1) ----
+    // Wrap DMatchVectorVector.prototype.get so every nested row handle the
+    // production port obtains is recorded; after matchDescriptors returns,
+    // each recorded row must be UNUSABLE (embind refuses methods on a
+    // deleted object). Root's real-WASM proof showed leaked rows stayed
+    // callable after parent deletion — this is the inverse assertion.
+    const recordedRows: Array<{ size: () => number; delete?: () => void }> = []
+    const vectorVectorCtor = (cv as unknown as { DMatchVectorVector?: new () => unknown }).DMatchVectorVector
+    const vectorVectorProto = vectorVectorCtor?.prototype as { get?: unknown } | undefined
+    const originalGet = vectorVectorProto && typeof vectorVectorProto.get === 'function'
+      ? vectorVectorProto.get as (this: unknown, index: number) => unknown
+      : null
+    if (vectorVectorProto && originalGet) {
+      vectorVectorProto.get = function (this: unknown, index: number): unknown {
+        const row = originalGet.call(this, index) as { size: () => number; delete?: () => void } | null
+        if (row && typeof row.size === 'function') recordedRows.push(row)
+        return row
+      }
+    }
+    let sameFrame: CorrespondenceResult
+    try {
+      // ---- SAME-frame correspondence through the REAL BFMatcher ----
+      sameFrame = await matchDescriptors(producedA.fingerprint, producedA.fingerprint, { matcher })
+    } finally {
+      if (vectorVectorProto && originalGet) vectorVectorProto.get = originalGet
+    }
+    assert('nested DMatchVector rows were obtained from the real runtime', recordedRows.length >= 2, `recorded=${recordedRows.length}`)
+    const stillUsable: number[] = []
+    recordedRows.forEach((row, index) => {
+      try {
+        row.size()
+        stillUsable.push(index)
+      } catch {
+        /* deleted embind objects throw on method calls — the released state */
+      }
+    })
+    assert('every nested row handle is RELEASED after the port returns (real WASM)',
+      stillUsable.length === 0, `still-usable rows: ${JSON.stringify(stillUsable)}`)
+    for (const row of recordedRows) {
+      try {
+        row.delete?.()
+      } catch {
+        /* already deleted — diagnostic only */
+      }
+    }
+
     // ---- input immutability snapshots ----
     const queryWireBefore = serializeSiftFingerprint(producedA.fingerprint)
     const referenceWireBefore = serializeSiftFingerprint(producedB.fingerprint)
 
-    // ---- SAME-frame correspondence through the REAL BFMatcher ----
-    const sameFrame: CorrespondenceResult = await matchDescriptors(producedA.fingerprint, producedA.fingerprint, { matcher })
     assert('same-frame correspondence returns original-index pairs', sameFrame.pairs.length >= 1, JSON.stringify(sameFrame.diagnostics))
     assert('same-frame pairs carry in-range original indices', sameFrame.pairs.every((pair) =>
       pair.queryIndex >= 0 && pair.queryIndex < producedA.fingerprint.keypoints.length

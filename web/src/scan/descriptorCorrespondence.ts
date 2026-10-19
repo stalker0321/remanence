@@ -173,9 +173,21 @@ function roundedQueryPixel(fingerprint: SiftFingerprint, queryIndex: number): st
   return `${x},${y}`
 }
 
+/**
+ * Synchronous per-original-index snapshot of every consumed query pixel key
+ * (scope 3): after any await, reduction must NEVER reread the caller's
+ * keypoints/dimensions. Caller buffers are untouched.
+ */
+export function queryPixelKeysForCorrespondence(fingerprint: SiftFingerprint): string[] {
+  const keys: string[] = new Array(fingerprint.keypoints.length)
+  for (let index = 0; index < fingerprint.keypoints.length; index++) {
+    keys[index] = roundedQueryPixel(fingerprint, index)
+  }
+  return keys
+}
+
 function reduceCorrespondence(
-  query: SiftFingerprint,
-  _reference: SiftFingerprint,
+  queryPixelKeys: readonly string[],
   queryRows: readonly RootedRow[],
   referenceRows: readonly RootedRow[],
   forward: readonly LocalMatch[],
@@ -198,10 +210,11 @@ function reduceCorrespondence(
     if (left.queryIndex !== right.queryIndex) return left.queryIndex - right.queryIndex
     return left.referenceIndex - right.referenceIndex
   })
-  // Deduplicate ONLY rounded query pixels; reference-side repeats remain.
+  // Deduplicate ONLY rounded query pixels (from the pre-await snapshot);
+  // reference-side repeats are kept.
   const seenQueryPixels = new Set<string>()
   const unique = mapped.filter((pair) => {
-    const key = roundedQueryPixel(query, pair.queryIndex)
+    const key = queryPixelKeys[pair.queryIndex]!
     if (seenQueryPixels.has(key)) return false
     seenQueryPixels.add(key)
     return true
@@ -218,8 +231,8 @@ export interface MatchDescriptorsDeps {
 }
 
 function diagnostics(
-  query: SiftFingerprint,
-  reference: SiftFingerprint,
+  rawQueryRows: number,
+  rawReferenceRows: number,
   usableQueryRows: number,
   usableReferenceRows: number,
   forwardRatio: number,
@@ -229,8 +242,8 @@ function diagnostics(
   noEvidence: CorrespondenceNoEvidence | null,
 ): CorrespondenceDiagnostics {
   return {
-    rawQueryRows: query.quantizedSiftDescriptors.length,
-    rawReferenceRows: reference.quantizedSiftDescriptors.length,
+    rawQueryRows,
+    rawReferenceRows,
     usableQueryRows,
     usableReferenceRows,
     forwardRatioMatches: forwardRatio,
@@ -260,14 +273,18 @@ export async function matchDescriptors(
     throw new DescriptorCorrespondenceError('shape')
   }
 
-  // Snapshot + RootSIFT conversion synchronously; caller rows untouched.
+  // Snapshot + RootSIFT conversion synchronously (BEFORE any await); caller
+  // rows/keypoints/dimensions are never reread afterwards or mutated.
+  const queryRawCount = query.quantizedSiftDescriptors.length
+  const referenceRawCount = reference.quantizedSiftDescriptors.length
+  const queryPixelKeys = queryPixelKeysForCorrespondence(query)
   const queryRows = rootSiftRowsForCorrespondence(query)
   const referenceRows = rootSiftRowsForCorrespondence(reference)
   const emptyResult = (noEvidence: CorrespondenceNoEvidence): CorrespondenceResult => ({
     pairs: [],
     diagnostics: diagnostics(
-      query,
-      reference,
+      queryRawCount,
+      referenceRawCount,
       queryRows.length,
       referenceRows.length,
       0,
@@ -296,7 +313,7 @@ export async function matchDescriptors(
 
     const forward = ratioMatchesForCorrespondence(knn.forward, queryRows.length, referenceRows.length, false)
     const reverse = ratioMatchesForCorrespondence(knn.reverse, referenceRows.length, queryRows.length, true)
-    const reduced = reduceCorrespondence(query, reference, queryRows, referenceRows, forward, reverse)
+    const reduced = reduceCorrespondence(queryPixelKeys, queryRows, referenceRows, forward, reverse)
 
     let noEvidence: CorrespondenceNoEvidence | null = null
     if (reduced.pairs.length === 0 && forward.length === 0 && reverse.length === 0) {
@@ -312,8 +329,8 @@ export async function matchDescriptors(
     return {
       pairs: reduced.pairs,
       diagnostics: diagnostics(
-        query,
-        reference,
+        queryRawCount,
+        referenceRawCount,
         queryRows.length,
         referenceRows.length,
         forward.length,

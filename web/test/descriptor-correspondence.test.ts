@@ -270,6 +270,43 @@ describe('B — pinned-bridge lifecycle/contract with a fake runtime', () => {
     expect(reference.quantizedSiftDescriptors[0]).toEqual(referenceCopy)
   })
 
+  it('R2: query pixel dedup uses the PRE-AWAIT snapshot (mid-await keypoint edits cannot change unique pairs)', async () => {
+    // Two query keypoints at DISTINCT pixels, two reciprocal pairs; while the
+    // matcher promise is pending the caller mutates the second keypoint onto
+    // the first pixel. The returned unique count must stay the ORIGINAL two
+    // (snapshot), not collapse to one.
+    const make = (fill: number): Uint8Array => new Uint8Array(128).fill(fill)
+    const query = fingerprintWith(
+      [make(1), make(2)],
+      [keypoint(100_000, 100_000), keypoint(400_000, 100_000)],
+    )
+    const reference = fingerprintWith(
+      [make(3), make(4)],
+      [keypoint(100_000, 100_000), keypoint(400_000, 100_000)],
+    )
+    const forward: CvDMatch[][] = [
+      [{ queryIdx: 0, trainIdx: 0, distance: 0.1 }, { queryIdx: 0, trainIdx: 1, distance: 0.9 }],
+      [{ queryIdx: 1, trainIdx: 1, distance: 0.2 }, { queryIdx: 1, trainIdx: 0, distance: 0.9 }],
+    ]
+    const reverse: CvDMatch[][] = [
+      [{ queryIdx: 0, trainIdx: 0, distance: 0.1 }, { queryIdx: 0, trainIdx: 1, distance: 0.9 }],
+      [{ queryIdx: 1, trainIdx: 1, distance: 0.2 }, { queryIdx: 1, trainIdx: 0, distance: 0.9 }],
+    ]
+    let release!: (value: PinnedKnnResult) => void
+    const gate = new Promise<PinnedKnnResult>((resolve) => { release = resolve })
+    const pending = matchDescriptors(query, reference, {
+      matcher: { kind: 'pinned-opencv', knnMatch2: () => gate },
+    })
+    // Mutate the caller's second query keypoint onto the first pixel while
+    // the matcher await is pending.
+    query.keypoints[1] = keypoint(100_000, 100_000)
+    release({ forward, reverse })
+    const result = await pending
+    expect(result.diagnostics.reciprocalMatches).toBe(2)
+    expect(result.pairs.length).toBe(2)
+    expect(result.pairs.map((pair) => pair.queryIndex).sort()).toEqual([0, 1])
+  })
+
   it('invalid KNN row counts and out-of-range indices refuse native-contract', async () => {
     const valid = fingerprintWith([new Uint8Array(128).fill(2), new Uint8Array(128).fill(3)])
     const badRows: CvDMatch[][] = [[{ queryIdx: 0, trainIdx: 0, distance: 0.1 }, { queryIdx: 0, trainIdx: 1, distance: 0.2 }]]

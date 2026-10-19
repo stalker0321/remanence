@@ -236,6 +236,9 @@ export function parseSiftFingerprint(bytes: Uint8Array): SiftFingerprint {
       const wire = tag % 8
       if (field === 6) {
         if (wire !== 2) throw refuse('encoding')
+        // Bound the repeated keypoint count BEFORE reading/copying/parsing the
+        // message, so an oversized input can never allocate past MAX_KEYPOINTS.
+        if (keypoints.length >= MAX_KEYPOINTS) throw refuse('range')
         keypoints.push(parseKeypoint(reader.lengthDelimited()))
         continue
       }

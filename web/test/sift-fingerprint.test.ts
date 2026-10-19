@@ -6,6 +6,7 @@ import {
   SiftFingerprintError,
   SIFT_FINGERPRINT_PROFILE_ID,
   DESCRIPTOR_BYTES,
+  MAX_KEYPOINTS,
   type SiftFingerprint,
 } from '../src/scan/siftFingerprint'
 import vectors from './fingerprint-vectors/fingerprint-vectors.json'
@@ -121,5 +122,21 @@ describe('format-3 fingerprint codec (genuine Kotlin vectors)', () => {
       expect(bytesToHex(row)).toBe(bytesToHex(before[index]!))
     })
     expect(DESCRIPTOR_BYTES).toBe(128)
+  })
+
+  it('caps repeated keypoints at MAX_KEYPOINTS with a typed refusal (1500 stays valid)', () => {
+    // 1500 keypoints with 1500 aligned descriptor rows remain valid + canonical.
+    const zeroPoint = { xMicro: 0, yMicro: 0, scaleMicro: 0, angleCentiDegrees: 0, responseQuantized: 0, octave: 0 }
+    const atLimit: SiftFingerprint = {
+      ...domainFor(ZERO),
+      keypoints: Array.from({ length: MAX_KEYPOINTS }, () => ({ ...zeroPoint })),
+      quantizedSiftDescriptors: Array.from({ length: MAX_KEYPOINTS }, () => new Uint8Array(DESCRIPTOR_BYTES)),
+    }
+    expect(reason(serializeSiftFingerprint(atLimit))).toBe('ok')
+
+    // 1501 empty keypoint messages (below 1 MiB) must refuse with 'range'
+    // before the 1501st message is read/parsed.
+    const overLimit = GOOD.replace('3200', '3200'.repeat(MAX_KEYPOINTS + 1))
+    expect(reason(hexToBytes(overLimit))).toBe('range')
   })
 })

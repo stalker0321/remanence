@@ -1069,7 +1069,6 @@ export function Create({
             <div className="send-block">
               <button
                 type="button"
-                className="primary"
                 data-testid="send_button"
                 disabled={!sendReady}
                 onClick={handleSend}

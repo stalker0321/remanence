@@ -16,8 +16,8 @@ import { MusicDraft } from '../../src/create/music'
 import { PhotoDraft } from '../../src/create/photos'
 import { RecipientDraft, type RecipientSnapshot } from '../../src/create/recipient'
 import { SessionStore } from '../../src/session/session'
-import { FrontHold } from '../../src/create/front'
-import { FrontFingerprintHold } from '../../src/create/frontFingerprint'
+import { FrontHold, type FrontStill } from '../../src/create/front'
+import { FrontFingerprintHold, type FrontFingerprintRunDeps } from '../../src/create/frontFingerprint'
 import { parseSiftFingerprint } from '../../src/scan/siftFingerprint'
 import { bytesToHex } from '../../src/protocol/bytes'
 import { catalog, type MessageKey, type Language } from '../../src/i18n/catalog'
@@ -117,6 +117,23 @@ async function blankJpeg(width: number, height: number): Promise<Uint8Array> {
   return new Uint8Array(await blob.arrayBuffer())
 }
 
+const timeline: string[] = []
+setInterval(() => {
+  const take = buttonByText('take the picture')
+  const body = bodyText()
+  timeline.push(
+    [
+      Date.now() % 100000,
+      `busy=${take?.disabled ?? 'gone'}`,
+      `working=${body.includes('preparing this picture')}`,
+      `ready=${bodyText().includes(catalog.en.frontReady)}`,
+      `failed=${body.includes('could not read')}`,
+      `notices=${notices.length}`,
+    ].join(' '),
+  )
+  if (timeline.length > 180) timeline.shift()
+}, 1000)
+
 function waitFor(cond: () => boolean, what: string, timeoutMs = 180000): Promise<void> {
   const start = Date.now()
   return new Promise((resolve, reject) => {
@@ -194,6 +211,9 @@ async function main(): Promise<void> {
     }
 
     const rootRef: { root: Root | null } = { root: null }
+    const noticeWithStamp = (notice: MessageKey): void => {
+      notices.push(notice)
+    }
     const render = () => {
       if (rootRef.root === null) {
         const host = document.createElement('div')
@@ -212,7 +232,7 @@ async function main(): Promise<void> {
           note={note}
           photos={photos}
           music={music}
-          onNotice={(notice) => { notices.push(notice) }}
+          onNotice={noticeWithStamp}
         />,
       )
     }
@@ -275,26 +295,98 @@ async function main(): Promise<void> {
     await waitFor(() => bodyText().includes(t('frontReady')), 'ready after re-confirm')
     assert('re-confirm recovers to a ready state', bodyText().includes(t('frontReady')))
 
-    // 7. Lock invalidates (camera stays open); unlock + re-confirm recovers.
-    store.lock()
-    await waitFor(() => !bodyText().includes(t('frontReady')), 'ready cleared on lock')
-    const countBeforeLock = notices.length
-    assert('lock clears the ready state', !bodyText().includes(t('frontReady')))
-    assert('lock adds no success notice', !notices.slice(countBeforeLock).includes('frontReady' as MessageKey))
+    // 7. Final-promise boundary: invalidate AFTER a genuine holder run
+    // resolves but BEFORE the Create continuation runs. A test-only wrapper
+    // around the real holder method schedules the invalidation; the App must
+    // show no ready and no success notice for the orphaned result.
+    const originalRun = FrontFingerprintHold.prototype.run
+    let boundaryInvalidated = false
+    FrontFingerprintHold.prototype.run = async function (this: FrontFingerprintHold, still: FrontStill, deps: FrontFingerprintRunDeps) {
+      const result = await originalRun.call(this, still, deps)
+      recipient.restart()
+      boundaryInvalidated = true
+      return result
+    }
+    try {
+      const readyBeforeBoundary = notices.filter((notice) => notice === 'frontReady').length
+      await clickText(t('takePicture'), 'take for boundary race')
+      await waitFor(() => boundaryInvalidated, 'boundary invalidation ran')
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      assert('no ready after a post-resolve invalidation', !bodyText().includes(t('frontReady')))
+      assert(
+        'no success notice from the invalidated run',
+        notices.filter((notice) => notice === 'frontReady').length === readyBeforeBoundary,
+      )
+      assert('no failure notice from the invalidated run', !bodyText().includes(t('frontScanFailed')))
+    } finally {
+      FrontFingerprintHold.prototype.run = originalRun
+    }
+    reconfirm()
+
+    // 8. Lock DURING a pending run: the stale completion must not surface.
+    // A test-only wrapper schedules the lock in a microtask at run entry,
+    // before the real async decode can complete — guaranteed mid-flight
+    // (decode needs real event-loop turns; the lock lands first). The stale
+    // run is doomed (aborted + attempt bumped + fence fails). Restored in
+    // finally; production path untouched.
+    const readyBeforeLockRace = notices.filter((notice) => notice === 'frontReady').length
+    let staleSettled: string | null = null
+    const realRun8 = FrontFingerprintHold.prototype.run
+    FrontFingerprintHold.prototype.run = async function (this: FrontFingerprintHold, still: FrontStill, deps: FrontFingerprintRunDeps) {
+      queueMicrotask(() => {
+        store.lock()
+      })
+      try {
+        const result = await realRun8.call(this, still, deps)
+        staleSettled = 'resolved'
+        return result
+      } catch (error) {
+        staleSettled = error instanceof Error ? error.message : 'unknown'
+        throw error
+      }
+    }
+    // Normalize camera state first: the boundary test leaves live true, but
+    // be deterministic regardless.
+    if (buttonByText(t('takePicture')) === null) {
+      await clickText(t('useCamera'), 'ensure open for lock race')
+    }
+    try {
+      await clickText(t('takePicture'), 'take for lock race')
+      await waitFor(() => staleSettled !== null, 'stale run settled')
+    } finally {
+      FrontFingerprintHold.prototype.run = realRun8
+    }
+    assert('stale run refused without success', staleSettled !== null && staleSettled !== 'resolved', staleSettled ?? 'unset')
+    assert('no stale ready while the old run settles', notices.filter((notice) => notice === 'frontReady').length === readyBeforeLockRace)
     store.unlock()
     reconfirm()
-    await clickText(t('useCamera'), 'reopen after unlock')
-    await clickText(t('takePicture'), 'take after unlock')
-    await waitFor(() => bodyText().includes(t('frontReady')), 'ready after unlock')
-    assert('unlock and re-confirm recover to ready', bodyText().includes(t('frontReady')))
+    // Normalize camera state deterministically (invalidation may or may not
+    // have closed it depending on render timing), then verify busy release
+    // with a bounded check so old code fails fast instead of hanging a click.
+    if (buttonByText(t('takePicture')) !== null) {
+      await clickText(t('closeCamera'), 'ensure closed after unlock')
+    }
+    let canProceed = false
+    for (let i = 0; i < 20 && !canProceed; i++) {
+      const primary = document.querySelector('button.primary') as HTMLButtonElement | null
+      canProceed = primary !== null && !primary.disabled
+      if (!canProceed) await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    assert('busy was reset so retake could proceed', canProceed)
+    if (canProceed) {
+      await clickText(t('useCamera'), 'reopen after unlock race')
+      await clickText(t('takePicture'), 'take after unlock race')
+      await waitFor(() => bodyText().includes(t('frontReady')), 'ready after unlock race')
+      assert('exactly one ready from the fresh take', notices.filter((notice) => notice === 'frontReady').length === readyBeforeLockRace + 1)
+    }
 
-    // 8. Unmount closes everything without errors.
+    // 9. Unmount closes everything without errors.
     rootRef.root?.unmount()
     rootRef.root = null
     await waitFor(() => document.querySelector('[data-testid="create-host"]') !== null, 'host persists')
     assert('unmount completes without crashing the page', true)
 
-    // 7. Holder-level real wire on the same genuine path (no UI observer).
+    // 10. Holder-level real wire on the same genuine path (no UI observer).
     const store2 = new SessionStore(lang)
     store2.signIn(SIGN_IN)
     store2.unlock()
@@ -348,7 +440,7 @@ async function main(): Promise<void> {
   } catch (error) {
     assert('front fingerprint connected harness', false, String(error))
   }
-  ;(window as unknown as { __frontFingerprint?: unknown }).__frontFingerprint = { assertions, failures, report }
+  ;(window as unknown as { __frontFingerprint?: unknown }).__frontFingerprint = { assertions, failures, report, timeline, notices: [...notices] }
   status.textContent = failures.length === 0 ? 'done' : 'failed'
 }
 

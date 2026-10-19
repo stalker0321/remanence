@@ -25,7 +25,7 @@ import { canvasTextMeasurer } from '../collage/measure'
 import { CreatorComposer, type CreatorComposerPhoto } from '../collage/CreatorComposer'
 import type { CreatorFreeze } from '../create/creatorFreeze'
 import { CreatorImageBridge, browserImageDecode, type CreatorImageDecode } from '../create/creatorImages'
-import { FrontHold } from '../create/front'
+import { FrontHold, type FrontStill } from '../create/front'
 import { FrontFingerprintHold } from '../create/frontFingerprint'
 import { FrontStillError } from '../scan/frontStillProducer'
 import { browserPhotoCodec } from '../create/browserPhoto'
@@ -445,6 +445,10 @@ export function Create({
     fpAttempt.current += 1
     frontFp.current.clear()
     setFpState('idle')
+    // Release a stuck busy so lock-during-work followed by unlock/reconfirm
+    // can take again; the bumped attempt keeps a stale finally from clearing
+    // a newer operation's busy state.
+    setBusy(false)
     front.current.close()
     host.current?.replaceChildren()
     setLive(false)
@@ -546,6 +550,10 @@ export function Create({
     fpAttempt.current += 1
     frontFp.current.clear()
     setFpState('idle')
+    // The invalidation owner releases busy so the same mounted Create can
+    // take again after close/retake; no newer attempt can be running here
+    // (takes are busy-serialized), so this cannot clear a newer busy state.
+    setBusy(false)
     front.current.close()
     host.current?.replaceChildren()
     setLive(false)
@@ -585,6 +593,9 @@ export function Create({
   async function takeFront() {
     const snapshot = recipient.confirmed()
     if (!snapshot || busy) return
+    // Capture the full current visit BEFORE the camera await: the sender
+    // tuple, session generation/phase, and the confirmed recipient identity.
+    const visit = store.getSnapshot()
     // This attempt owns every state/notice mutation below; a newer attempt,
     // close, recipient change or unmount invalidates it. Stale completions
     // must not clear another attempt's busy/notice/ready state.
@@ -592,19 +603,31 @@ export function Create({
     // A retake aborts old processing and wipes the prior wire BEFORE the take.
     frontFp.current.clear()
     setBusy(true)
+    // Full current-visit recheck. The producer and holder continuations are
+    // distinct Promises, so their fences cannot cover this continuation's
+    // gap: recheck everything after EVERY await before ANY side effect.
+    const visitOk = (still: FrontStill | null): boolean => {
+      const now = store.getSnapshot()
+      return now.accountId === visit.accountId
+        && now.bundleId === visit.bundleId
+        && now.generation === visit.generation
+        && now.phase === visit.phase
+        && now.phase !== 'signed-out'
+        && now.phase !== 'authenticated'
+        && recipient.confirmed() === snapshot
+        && (still === null || front.current.still() === still)
+        && mounted.current
+        && fpAttempt.current === my
+    }
     try {
       const still = await front.current.take(snapshot)
-      if (!mounted.current || fpAttempt.current !== my) return
-      if (recipient.confirmed() !== snapshot) {
-        front.current.close()
-        frontFp.current.clear()
-        return
-      }
+      if (!visitOk(still)) return
       setPictured(true)
       onNotice('frontHeld')
       setFpState('working')
+      let fp
       try {
-        await frontFp.current.run(still, {
+        fp = await frontFp.current.run(still, {
           store,
           recipient,
           hold: front.current,
@@ -612,13 +635,16 @@ export function Create({
         })
       } catch (error) {
         // Leaving-visit stale/cancel produces no misleading error or success.
-        if (!mounted.current || fpAttempt.current !== my) return
+        if (!visitOk(still)) return
         if (error instanceof FrontStillError && (error.code === 'stale' || error.code === 'cancelled')) return
         setFpState('failed')
         onNotice('frontScanFailed')
         return
       }
-      if (!mounted.current || fpAttempt.current !== my) return
+      // Authoritative final boundary: the held fingerprint must still be the
+      // value this attempt produced — a session/recipient invalidation may
+      // have landed after the holder resolved but before this continuation.
+      if (!visitOk(still) || frontFp.current.current() !== fp) return
       setFpState('ready')
       onNotice('frontReady')
     } catch (error) {

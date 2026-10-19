@@ -77,6 +77,14 @@ export class FrontFingerprintHold {
     this.#controller?.abort()
     const controller = new AbortController()
     this.#controller = controller
+    // Replacement owns the held lifetime: a newer run immediately invalidates
+    // and wipes any previously stored wire, even if this run later fails. Late
+    // completions of the superseded attempt can never touch the new value.
+    if (this.#held !== null) {
+      this.#held.wire.fill(0)
+      this.#held = null
+    }
+    this.#fence = null
     if (!still || typeof still !== 'object') throw refuseStale()
     const view = deps.store.getSnapshot()
     const accountId = view.accountId

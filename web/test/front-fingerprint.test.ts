@@ -303,4 +303,43 @@ describe('T320 front fingerprint holder', () => {
     expect(bytes.every((byte) => byte === 0)).toBe(true)
     hold.close()
   })
+
+  it('wipes a stored wire when a replacement run starts, then stores the new one', async () => {
+    const { store, recipient } = setupSession()
+    const hold = new FrontHold()
+    const still = await takeStill(hold, recipient.confirmed()!)
+    const fpHold = new FrontFingerprintHold()
+    const first = await fpHold.run(still, {
+      store,
+      recipient,
+      hold,
+      mounted: () => true,
+      runtime: makeRuntime(),
+      decode: async () => frameOf(),
+    })
+    const firstBytes = first.wire
+    expect(firstBytes.some((byte) => byte !== 0)).toBe(true)
+    let resolveSecond!: (frame: { rgba: Uint8Array; width: number; height: number }) => void
+    const deferred = new Promise<{ rgba: Uint8Array; width: number; height: number }>((resolve) => {
+      resolveSecond = resolve
+    })
+    const pending = fpHold.run(still, {
+      store,
+      recipient,
+      hold,
+      mounted: () => true,
+      runtime: makeRuntime(),
+      decode: () => deferred,
+    })
+    // The replacement run invalidates and wipes the stored wire immediately,
+    // before its own decode resolves — not only via clear().
+    expect(firstBytes.every((byte) => byte === 0)).toBe(true)
+    expect(fpHold.current()).toBeNull()
+    resolveSecond(frameOf())
+    const second = await pending
+    expect(fpHold.current()).toBe(second)
+    expect(second.wire.length).toBeGreaterThan(0)
+    expect(second.wire.some((byte) => byte !== 0)).toBe(true)
+    hold.close()
+  })
 })

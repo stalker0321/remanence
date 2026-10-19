@@ -111,6 +111,8 @@ try {
       failures: result?.failures ?? [],
       wireHex: result?.report?.wireHex ?? '',
       distinctWireHex: result?.report?.distinctWireHex ?? '',
+      timeline: result?.timeline ?? [],
+      notices: result?.notices ?? [],
     }
     await page.close()
     try {

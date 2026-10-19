@@ -26,6 +26,8 @@ import { CreatorComposer, type CreatorComposerPhoto } from '../collage/CreatorCo
 import type { CreatorFreeze } from '../create/creatorFreeze'
 import { CreatorImageBridge, browserImageDecode, type CreatorImageDecode } from '../create/creatorImages'
 import { FrontHold } from '../create/front'
+import { FrontFingerprintHold } from '../create/frontFingerprint'
+import { FrontStillError } from '../scan/frontStillProducer'
 import { browserPhotoCodec } from '../create/browserPhoto'
 import { PhotoIntake, PhotoNormalizer, type PhotoCodec } from '../create/normalize'
 import { MUSIC_QUERY_MAX_CODE_POINTS, MUSIC_SEARCH_DEBOUNCE_MS, musicCoverKey, musicLine, MusicDraft, searchMusic } from '../create/music'
@@ -374,6 +376,9 @@ export function Create({
   const musicTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [musicQuery, setMusicQuery] = useState('')
   const front = useRef(new FrontHold())
+  const frontFp = useRef(new FrontFingerprintHold())
+  const fpAttempt = useRef(0)
+  const [fpState, setFpState] = useState<'idle' | 'working' | 'ready' | 'failed'>('idle')
   const host = useRef<HTMLDivElement>(null)
   const urls = useRef(new Map<string, string>())
   const mounted = useRef(true)
@@ -428,6 +433,8 @@ export function Create({
       abort.current?.abort()
       musicAbort.current?.abort()
       if (musicTimer.current !== null) clearTimeout(musicTimer.current)
+      fpAttempt.current += 1
+      frontFp.current.clear()
       front.current.close()
       forgetPhotos()
     }
@@ -435,6 +442,9 @@ export function Create({
 
   useEffect(() => {
     if (bound) return
+    fpAttempt.current += 1
+    frontFp.current.clear()
+    setFpState('idle')
     front.current.close()
     host.current?.replaceChildren()
     setLive(false)
@@ -533,6 +543,9 @@ export function Create({
 
   function closeCamera() {
     abort.current?.abort()
+    fpAttempt.current += 1
+    frontFp.current.clear()
+    setFpState('idle')
     front.current.close()
     host.current?.replaceChildren()
     setLive(false)
@@ -572,20 +585,48 @@ export function Create({
   async function takeFront() {
     const snapshot = recipient.confirmed()
     if (!snapshot || busy) return
+    // This attempt owns every state/notice mutation below; a newer attempt,
+    // close, recipient change or unmount invalidates it. Stale completions
+    // must not clear another attempt's busy/notice/ready state.
+    const my = ++fpAttempt.current
+    // A retake aborts old processing and wipes the prior wire BEFORE the take.
+    frontFp.current.clear()
     setBusy(true)
     try {
-      await front.current.take(snapshot)
+      const still = await front.current.take(snapshot)
+      if (!mounted.current || fpAttempt.current !== my) return
       if (recipient.confirmed() !== snapshot) {
         front.current.close()
+        frontFp.current.clear()
         return
       }
       setPictured(true)
       onNotice('frontHeld')
+      setFpState('working')
+      try {
+        await frontFp.current.run(still, {
+          store,
+          recipient,
+          hold: front.current,
+          mounted: () => mounted.current,
+        })
+      } catch (error) {
+        // Leaving-visit stale/cancel produces no misleading error or success.
+        if (!mounted.current || fpAttempt.current !== my) return
+        if (error instanceof FrontStillError && (error.code === 'stale' || error.code === 'cancelled')) return
+        setFpState('failed')
+        onNotice('frontScanFailed')
+        return
+      }
+      if (!mounted.current || fpAttempt.current !== my) return
+      setFpState('ready')
+      onNotice('frontReady')
     } catch (error) {
+      if (!mounted.current || fpAttempt.current !== my) return
       if (error instanceof ScanError && error.code === 'CANCELLED') return
       onNotice('cameraUnavailable')
     } finally {
-      setBusy(false)
+      if (mounted.current && fpAttempt.current === my) setBusy(false)
     }
   }
 
@@ -760,7 +801,10 @@ export function Create({
       {confirmed ? (
         <>
           <div ref={host} />
-          {pictured ? <p>{t('frontHeld')}</p> : null}
+          {pictured && fpState === 'idle' ? <p>{t('frontHeld')}</p> : null}
+          {pictured && fpState === 'working' ? <p>{t('frontWorking')}</p> : null}
+          {pictured && fpState === 'ready' ? <p>{t('frontReady')}</p> : null}
+          {pictured && fpState === 'failed' ? <p role="alert">{t('frontScanFailed')}</p> : null}
           <label className="handle-form">
             {t('noteLabel')}
             <textarea

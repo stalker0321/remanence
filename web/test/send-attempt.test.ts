@@ -16,6 +16,7 @@ import { creatorScene, plannerFromTextMeasurer, previewCandidates } from '../src
 import { captureFrozenRenderedPlan } from '../src/collage/frozenRenderedPlan'
 import { jpegDimensionFixture } from '../src/collage/jpeg'
 import { encodeExpression } from '../src/collage/codec'
+import * as frozenExpressionModule from '../src/collage/frozenExpression'
 import { buildFrozenExpression } from '../src/collage/frozenExpression'
 import type { TextMeasurer } from '../src/collage/prepare'
 import { styleById } from '../src/collage/styles'
@@ -24,8 +25,8 @@ import type { KeyCapabilities } from '../src/crypto/keyOwner'
 import { freezeSelection, type CreatorFreeze } from '../src/create/creatorFreeze'
 import type { DraftPhoto } from '../src/create/photos'
 import type { RecipientSnapshot } from '../src/create/recipient'
-import { SealCapsuleError, type SealCapsuleInput, type SealedCapsule } from '../src/create/sealCapsule'
-import { PublishCapsuleError } from '../src/sync/publishCapsule'
+import { sealCapsule, SealCapsuleError, type SealCapsuleInput, type SealedCapsule } from '../src/create/sealCapsule'
+import { publishCapsule, PublishCapsuleError } from '../src/sync/publishCapsule'
 import type { CropProvenance } from '../src/scan/frontStillProducer'
 import type { FrontStill } from '../src/create/front'
 import type { FrontFingerprintValue } from '../src/create/frontFingerprint'
@@ -497,5 +498,58 @@ describe('SendAttemptController', () => {
     expect(outcome).toEqual({ kind: 'stale' })
     expect(publish).toHaveBeenCalledTimes(1)
     expect(seal).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('R2 original-criterion corrections', () => {
+  it('a note edit during the FIRST real draft request stops all subsequent real publisher uploads and finalize', async () => {
+    const { visit, ports, current } = await buildVisit()
+    let uploads = 0
+    let finalizes = 0
+    ports.seal = sealCapsule
+    ports.publish = publishCapsule
+    ports.transport = {
+      request: async (input) => {
+        if (input.path === '/v1/capsules') {
+          const draft = input.body as { capsule_id: string; blobs: Array<{ blob_id: string }> }
+          // The CURRENT note changes while the first draft request is pending
+          // (the Create note path synchronously invalidates the attempt; here
+          // the current-value fence alone must stop every following request).
+          current.noteText = `${NOTE} edited during the draft request`
+          return {
+            status: 201,
+            body: {
+              capsule_id: draft.capsule_id,
+              state: 'DRAFT',
+              draft_expires_at: '2026-10-20T00:00:00Z',
+              blobs: draft.blobs.map((blob) => ({ blob_id: blob.blob_id, state: 'DECLARED' })),
+            },
+          }
+        }
+        finalizes += 1
+        return { status: 201, body: { capsule_id: CAPSULE_ID, state: 'READY', ready_at: '2026-10-19T11:00:00Z' } }
+      },
+      requestBytes: async () => { throw new Error('not used') },
+      uploadBytes: async () => { uploads += 1; return { status: 204, body: null } },
+    }
+    const outcome = await runSendAttempt(visit, ports, new AbortController().signal)
+    expect(outcome).toEqual({ kind: 'stale' })
+    expect({ uploads, finalizes }).toEqual({ uploads: 0, finalizes: 0 })
+  })
+
+  it('deriveCandidateId wipes the builder-returned canonical expression bytes on success', async () => {
+    const { visit } = await buildVisit()
+    const built = await buildFrozenExpression(visit.freeze, visit.epoch)
+    if (!built.ok) throw new Error('expression build failed')
+    expect(built.bytes.some((byte) => byte !== 0)).toBe(true)
+    const spy = vi.spyOn(frozenExpressionModule, 'buildFrozenExpression').mockResolvedValueOnce(built)
+    try {
+      const id = await deriveCandidateId(visit.freeze, visit.epoch)
+      expect(id).toMatch(/^ber1-[0-9a-f]{32}$/)
+      expect(built.bytes.every((byte) => byte === 0)).toBe(true)
+    } finally {
+      spy.mockRestore()
+      built.bytes.fill(0)
+    }
   })
 })

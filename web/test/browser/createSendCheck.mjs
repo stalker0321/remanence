@@ -67,6 +67,7 @@ const captured = { drafts: [], uploads: [], finalizes: [] }
 let mode = 'ok'
 let releaseHeld = false
 let heldFinalize = null
+let heldDraft = null
 const json = { 'content-type': 'application/json', 'cache-control': 'no-store' }
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1')
@@ -83,11 +84,17 @@ const server = createServer((req, res) => {
         mode = String(JSON.parse(body.toString('utf8')).mode ?? 'ok')
         releaseHeld = false
         heldFinalize = null
+        heldDraft = null
         res.writeHead(200, json).end(JSON.stringify({ mode }))
         return
       }
       if (req.method === 'POST' && url.pathname === '/__release') {
         releaseHeld = true
+        if (heldDraft) {
+          const { res: heldRes, receipt } = heldDraft
+          heldDraft = null
+          if (!heldRes.headersSent && !heldRes.destroyed) heldRes.writeHead(201, json).end(JSON.stringify(receipt))
+        }
         if (heldFinalize) {
           const { res: heldRes, capsuleId } = heldFinalize
           heldFinalize = null
@@ -103,7 +110,12 @@ const server = createServer((req, res) => {
         const parsed = JSON.parse(body.toString('utf8'))
         // All blobs DECLARED: the browser must upload every ciphertext.
         const blobs = parsed.blobs.map((blob) => ({ blob_id: blob.blob_id, state: 'DECLARED' }))
-        res.writeHead(201, json).end(JSON.stringify({ capsule_id: parsed.capsule_id, state: 'DRAFT', draft_expires_at: '2026-10-17T00:00:00Z', blobs }))
+        const receipt = { capsule_id: parsed.capsule_id, state: 'DRAFT', draft_expires_at: '2026-10-17T00:00:00Z', blobs }
+        if (mode === 'hold-draft' && !releaseHeld) {
+          heldDraft = { res, receipt }
+          return
+        }
+        res.writeHead(201, json).end(JSON.stringify(receipt))
         return
       }
       const upload = /^\/v1\/capsules\/([0-9a-f-]{36})\/blobs\/([0-9a-f-]{36})$/.exec(url.pathname)
@@ -197,9 +209,9 @@ try {
       assert.deepEqual(result.failures, [])
 
       // Independent Node-side checks of the recorded wire across scenarios.
-      assert.equal(captured.drafts.length, 3, 'expected exactly three drafts (happy, lost-finalize, invalidation)')
-      assert.equal(captured.finalizes.length, 3, 'expected exactly three finalize attempts')
-      assert.equal(captured.uploads.length, 15, 'expected 5 uploads per publication scenario')
+      assert.equal(captured.drafts.length, 5, 'expected exactly five drafts (happy, lost-finalize, invalidation, draft-edit, alternate-order)')
+      assert.equal(captured.finalizes.length, 4, 'expected exactly four finalize attempts (none for the draft-edit scenario)')
+      assert.equal(captured.uploads.length, 20, 'expected 5 uploads per publication scenario except the draft-edit stop')
       const draftKey = header(captured.drafts[0].rawHeaders, 'idempotency-key')
       const finalizeKey = header(captured.finalizes[0].rawHeaders, 'idempotency-key')
       assert.ok(draftKey && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(draftKey), `draft idempotency key ${draftKey}`)
@@ -224,8 +236,8 @@ try {
       assert.equal(pageReport.happyUploads, 5, 'page saw five uploads on the happy path')
       assert.equal(pageReport.roundTrip?.note, true, 'receiver round trip recovered the note text')
       const noticeLog = pageReport.notices ?? []
-      assert.ok(noticeLog.includes('sendSent'), 'sendSent notice present exactly once for the happy path')
-      assert.equal(noticeLog.filter((n) => n === 'sendSent').length, 1, 'exactly one sendSent across all scenarios')
+      assert.ok(noticeLog.includes('sendSent'), 'sendSent notice present for the happy paths')
+      assert.equal(noticeLog.filter((n) => n === 'sendSent').length, 2, 'exactly two sendSent (primary + alternate camera-before-freeze order)')
       assert.ok(!noticeLog.includes('sendNotConfirmed') || noticeLog.filter((n) => n === 'sendNotConfirmed').length >= 1, 'lost finalize produced a not-confirmed notice')
     } catch (error) {
       failure = error

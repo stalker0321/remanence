@@ -21,6 +21,7 @@
  */
 import { bytesToHex } from '../protocol/bytes'
 import type { ApiTransport, ByteTransport, UploadTransport } from '../auth/http'
+import { AuthError } from '../auth/errors'
 import type { MemoryKeys } from '../auth/memoryKeys'
 import type { SessionStore } from '../session/session'
 import type { RecipientSnapshot } from './recipient'
@@ -31,7 +32,6 @@ import type { FrontFingerprintValue } from './frontFingerprint'
 import { sealCapsule, SealCapsuleError } from './sealCapsule'
 import { publishCapsule, PublishCapsuleError } from '../sync/publishCapsule'
 import { buildFrozenExpression } from '../collage/frozenExpression'
-import { encodeExpression } from '../collage/codec'
 
 /** Create-visit epoch: module-local, resets only on app restart (native-like). */
 let visitEpochCounter = 0n
@@ -63,7 +63,7 @@ export interface SendVisit {
 export interface SendPorts {
   readonly session: SessionStore
   readonly keys: MemoryKeys
-  readonly transport: ApiTransport & ByteTransport & UploadTransport
+  transport: ApiTransport & ByteTransport & UploadTransport
   /** Test seams only; production passes the real primitives. */
   seal?: typeof sealCapsule
   publish?: typeof publishCapsule
@@ -112,6 +112,11 @@ function visitCurrent(visit: SendVisit, ports: SendPortsFull): boolean {
   return true
 }
 
+/** Public read-only fence for owners that must guard UI writes after awaits. */
+export function sendVisitStillCurrent(visit: SendVisit, ports: SendPortsFull): boolean {
+  return visitCurrent(visit, ports)
+}
+
 /** Current-value accessors the coordinator re-reads at every fence. */
 export interface SendCurrentAccessors {
   recipientCurrent(): RecipientSnapshot | null
@@ -156,20 +161,20 @@ async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
 /**
  * `ber1-` + first 32 lowercase hex chars of SHA-256 over the accepted
  * canonical expression bytes for this exact freeze + epoch (native
- * `GeneratorBer1Provider.candidateIdFor` rule). Owned expression/digest
- * buffers are wiped; the derived id is public metadata.
+ * `GeneratorBer1Provider.candidateIdFor` rule). The builder already returns
+ * the canonical owned bytes; those and the digest are wiped on every path.
  */
 export async function deriveCandidateId(freeze: CreatorFreeze, epoch: bigint): Promise<string> {
   const built = await buildFrozenExpression(freeze, epoch)
   if (!built.ok) throw new Error('expression-build-failed')
-  let encoded: Uint8Array | null = null
+  let bytes: Uint8Array | null = built.bytes
   let digest: Uint8Array | null = null
   try {
-    encoded = encodeExpression(built.expression)
-    digest = await sha256(encoded)
+    digest = await sha256(bytes)
     return `ber1-${bytesToHex(digest).slice(0, 32)}`
   } finally {
-    encoded?.fill(0)
+    bytes?.fill(0)
+    bytes = null
     digest?.fill(0)
   }
 }
@@ -230,12 +235,31 @@ export async function runSendAttempt(
   if (signal.aborted) return { kind: 'stale' }
 
   // ---- exactly one real publication ----
+  // Bounded per-attempt transport guard around the UNCHANGED accepted
+  // publisher: an in-visit edit/invalidation must prevent any NEW request
+  // (further uploads / finalize) even if a request already reached the wire
+  // or the transport ignores AbortSignal per call. The already-issued draft
+  // may complete; nothing after it starts once the visit is no longer current.
+  const guardedTransport = {
+    request: async (input: Parameters<ApiTransport['request']>[0]) => {
+      if (signal.aborted || !visitCurrent(visit, ports)) throw new AuthError('CANCELLED')
+      return ports.transport.request(input)
+    },
+    requestBytes: async (input: Parameters<ByteTransport['requestBytes']>[0]) => {
+      if (signal.aborted || !visitCurrent(visit, ports)) throw new AuthError('CANCELLED')
+      return ports.transport.requestBytes(input)
+    },
+    uploadBytes: async (input: Parameters<UploadTransport['uploadBytes']>[0]) => {
+      if (signal.aborted || !visitCurrent(visit, ports)) throw new AuthError('CANCELLED')
+      return ports.transport.uploadBytes(input)
+    },
+  }
   try {
     const published = await publish({
       capsule: sealed,
       session: ports.session,
       idempotencyKey,
-      transport: ports.transport,
+      transport: guardedTransport,
       signal,
     })
     if (!visitCurrent(visit, ports)) return { kind: 'stale' }

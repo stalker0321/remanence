@@ -30,6 +30,7 @@ import { FrontFingerprintHold } from '../create/frontFingerprint'
 import {
   SendAttemptController,
   nextCreateVisitEpoch,
+  sendVisitStillCurrent,
   type SendOutcome,
   type SendPortsFull,
   type SendPhase,
@@ -457,6 +458,11 @@ export function Create({
     if (note.accepted() === null) return false
     return true
   })()
+  /** One synchronous owner: any in-visit draft/attempt invalidation aborts
+   * the in-flight Send and stops every subsequent publication request. */
+  function invalidateSend(): void {
+    sendControllerRef.current?.invalidate()
+  }
 
   function forgetPhotos() {
     for (const url of urls.current.values()) URL.revokeObjectURL(url)
@@ -612,6 +618,7 @@ export function Create({
   }
 
   function closeCamera() {
+    invalidateSend()
     abort.current?.abort()
     fpAttempt.current += 1
     frontFp.current.clear()
@@ -674,7 +681,8 @@ export function Create({
       generation: snap.generation,
       keysReady: snap.phase === 'keys-unlocked',
       recipient: rec,
-      photos: photos.photos(),
+      // Snapshot identity values; never alias the live PhotoDraft array.
+      photos: photos.photos().slice(),
       noteText: note.accepted() ?? '',
       musicSelected: selectedMusic !== null,
       freeze,
@@ -682,20 +690,14 @@ export function Create({
       fingerprint,
     }
     if (!controller.begin(visit)) return
-    const localGeneration = snap.generation
-    const localRecipient = rec
-    const localFreeze = freeze
-    const visitStillCurrent = (): boolean =>
-      mounted.current &&
-      store.getSnapshot().generation === localGeneration &&
-      recipient.confirmed() === localRecipient &&
-      frozenRef.current === localFreeze
+    const coherentVisit = (): boolean =>
+      sendVisitStillCurrent({ ...visit, mounted: mounted.current }, sendPortsRef.current as SendPortsFull)
     void (async () => {
       const outcome = await controller.run()
+      // Guard ALL post-await UI writes (state and notice) on the FULL current
+      // visit, not only on a notice-time tuple check.
+      if (!coherentVisit()) return
       setSendOutcome(outcome)
-      // Never show stale success/failure: drop the notice if the captured
-      // visit died while publishing (lock/recipient/unmount/edits).
-      if (!visitStillCurrent()) return
       if (outcome.kind === 'sent') onNotice('sendSent')
       else if (outcome.kind === 'refused') onNotice('sendNotSent')
       else if (outcome.kind === 'unknown') onNotice('sendNotConfirmed')
@@ -705,6 +707,7 @@ export function Create({
   async function takeFront() {
     const snapshot = recipient.confirmed()
     if (!snapshot || busy) return
+    invalidateSend()
     // Capture the full current visit BEFORE the camera await: the sender
     // tuple, session generation/phase, and the confirmed recipient identity.
     const visit = store.getSnapshot()
@@ -773,6 +776,7 @@ export function Create({
 
   async function addPhotos(list: File[] | FileList | null) {
     if (!list || list.length === 0 || !confirmed) return
+    invalidateSend()
     const intakePort = intake.current
     if (!intakePort) return
     // Capture the FULL tuple up front. The intake fences internally too,
@@ -953,6 +957,7 @@ export function Create({
               rows={4}
               disabled={sendPhase === 'working'}
               onChange={(event) => {
+                invalidateSend()
                 note.edit(event.target.value)
                 setStamp((value) => value + 1)
               }}
@@ -983,9 +988,9 @@ export function Create({
                 <li key={photo.id}>
                   <img src={urls.current.get(photo.id)} alt="" />
                   <div className="actions">
-                    <button type="button" disabled={index === 0} onClick={() => { photos.move(photo.id, -1); setStamp((value) => value + 1) }}>{t('photoEarlier')}</button>
-                    <button type="button" disabled={index === photos.photos().length - 1} onClick={() => { photos.move(photo.id, 1); setStamp((value) => value + 1) }}>{t('photoLater')}</button>
-                    <button type="button" onClick={() => { photos.remove(photo.id); rememberPhotos(); setStamp((value) => value + 1) }}>{t('removePhoto')}</button>
+                    <button type="button" disabled={index === 0} onClick={() => { invalidateSend(); photos.move(photo.id, -1); setStamp((value) => value + 1) }}>{t('photoEarlier')}</button>
+                    <button type="button" disabled={index === photos.photos().length - 1} onClick={() => { invalidateSend(); photos.move(photo.id, 1); setStamp((value) => value + 1) }}>{t('photoLater')}</button>
+                    <button type="button" onClick={() => { invalidateSend(); photos.remove(photo.id); rememberPhotos(); setStamp((value) => value + 1) }}>{t('removePhoto')}</button>
                   </div>
                 </li>
               ))}
@@ -1011,6 +1016,12 @@ export function Create({
                   measurer={measurer}
                   onFrozenChange={(frozen) => {
                     frozenRef.current = frozen
+                    // Freeze readiness is owned by the child composer; make it
+                    // reactive in the parent so camera-before-freeze arms Send
+                    // (and any freeze drop invalidates readiness/attempt) in
+                    // the same visit without extra parent state updates.
+                    invalidateSend()
+                    setStamp((value) => value + 1)
                   }}
                 />
               </div>
@@ -1032,7 +1043,7 @@ export function Create({
               <div>
                 <p>{musicLine(selectedMusic)}</p>
                 <p>{t(musicCoverKey(selectedMusic))}</p>
-                <button type="button" onClick={() => { music.remove(); setStamp((value) => value + 1) }}>{t('musicRemove')}</button>
+                <button type="button" onClick={() => { invalidateSend(); music.remove(); setStamp((value) => value + 1) }}>{t('musicRemove')}</button>
               </div>
             ) : null}
             <ul>
@@ -1041,6 +1052,7 @@ export function Create({
                   <button
                     type="button"
                     onClick={() => {
+                      invalidateSend()
                       music.select(hit.id)
                       setStamp((value) => value + 1)
                       onNotice('errorRegion')

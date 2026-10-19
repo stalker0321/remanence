@@ -226,6 +226,11 @@ async function releaseFinalize(): Promise<void> {
   if (!response.ok) throw new Error('release failed')
 }
 
+async function releaseDraft(): Promise<void> {
+  const response = await fetch('/__release', { method: 'POST' })
+  if (!response.ok) throw new Error('draft release failed')
+}
+
 async function capture(): Promise<WireCapture> {
   const response = await fetch('/__capture')
   return await response.json() as WireCapture
@@ -530,6 +535,73 @@ async function main(): Promise<void> {
     const after4 = await capture()
     assert('mid-flight invalidation still produced exactly one draft (terminal, no retry)', lastDraft(after4) !== null && after4.drafts.length === 3)
     assert('mid-flight invalidation received exactly one finalize', lastFinalize(after4) !== null && after4.finalizes.length === 3)
+
+    // ---- scenario 5: a real in-visit photo removal during the FIRST draft
+    // request must stop every subsequent upload/finalize (bounded per-attempt
+    // transport guard + Create's synchronous invalidation owner). ----
+    h4.unmount()
+    await setMode('hold-draft')
+    const h5 = harness()
+    h5.create()
+    await readyVisit(h5, files, 47)
+    const before5 = await capture()
+    const noticesBefore5 = notices.length
+    await clickText(t('sendAction'), 'send for draft-time edit')
+    await waitFor(() => byTest('send_state')?.textContent === t('sendWorking'), 'working state (draft hold)')
+    // Wait until the FIRST draft request has actually reached the server and
+    // is being held — THEN edit, so this is the draft-in-flight case.
+    {
+      const draftGateDeadline = Date.now() + 120000
+      for (;;) {
+        const current = await capture()
+        if (current.drafts.length === before5.drafts.length + 1) break
+        if (Date.now() > draftGateDeadline) throw new Error(`timeout: draft deferred on server (saw ${current.drafts.length}, want ${before5.drafts.length + 1})`)
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+    }
+    await waitFor(() => {
+      const button = buttonByText(t('removePhoto'))
+      return button !== null && !button.disabled
+    }, 'removePhoto clickable while working')
+    buttonByText(t('removePhoto'))!.click()
+    await releaseDraft()
+    await new Promise((resolve) => setTimeout(resolve, 2500))
+    const after5 = await capture()
+    assert('draft-time photo edit produced exactly one new draft', after5.drafts.length === before5.drafts.length + 1)
+    assert('draft-time photo edit stopped every subsequent upload', after5.uploads.length === before5.uploads.length)
+    assert('draft-time photo edit stopped the finalize request', after5.finalizes.length === before5.finalizes.length)
+    assert(
+      'draft-time photo edit adds no sent/not-sent/not-confirmed notice',
+      !notices.slice(noticesBefore5).some((notice) => notice === 'sendSent' || notice === 'sendNotSent' || notice === 'sendNotConfirmed'),
+    )
+
+    // ---- scenario 6: camera/front FIRST, freeze LAST must arm Send ----
+    h5.unmount()
+    await setMode('ok')
+    const h6 = harness()
+    h6.create()
+    await waitFor(() => document.querySelector('.photo-draft input[type="file"]') !== null, 'sixth create flow')
+    h6.pick(files)
+    await waitFor(() => h6.photos.accepted()?.length === 3, 'sixth visit photos')
+    await waitFor(() => document.querySelector('[data-testid="creator-canvas"]')?.getAttribute('data-painted') === 'ready', 'sixth composer painted')
+    h6.setNote(NOTE_TEXT)
+    await waitFor(() => document.querySelector('[data-testid="creator-canvas"]')?.getAttribute('data-painted') === 'ready', 'sixth composer repaint after note')
+    setQuad(await texturedQuadJpeg(55, 0, 0, 640, 480))
+    await clickText(t('useCamera'), 'useCamera (alternate order)')
+    await clickText(t('takePicture'), 'takePicture (alternate order)')
+    await waitFor(() => bodyText().includes(t('frontReady')), 'front ready before freeze', 300000)
+    assert('front ready with no freeze yet keeps Send disabled', (byTest('send_button') as HTMLButtonElement).disabled === true)
+    await waitFor(() => {
+      const button = byTest('creator-freeze') as HTMLButtonElement | null
+      return button !== null && !button.disabled
+    }, 'freeze armed after front', 120000)
+    ;(byTest('creator-freeze') as HTMLButtonElement).click()
+    await waitFor(() => byTest('creator-frozen') !== null, 'frozen after front', 120000)
+    await waitFor(() => byTest('send_button') !== null && !(byTest('send_button') as HTMLButtonElement).disabled, 'send armed after freeze-last', 60000)
+    assert('freeze LAST after a genuine camera take arms Send without extra action', !(byTest('send_button') as HTMLButtonElement).disabled)
+    await clickText(t('sendAction'), 'send (alternate order)')
+    await waitFor(() => byTest('send_state')?.textContent === t('sendSent'), 'sent state (alternate order)', 60000)
+    assert('alternate-order visit reports postcard sent', byTest('send_state')?.textContent === t('sendSent'))
 
     report.notices = [...notices]
   } catch (error) {

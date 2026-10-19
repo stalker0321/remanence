@@ -34,29 +34,65 @@ interface FakeOptions {
   descriptorRows?: readonly number[][]
   dctValues?: readonly number[]
   onCompute?: () => void
+  onDct?: () => void
   computeKeypointOverride?: readonly CvKeyPoint[]
+  failDescriptorDelete?: boolean
+}
+
+interface WipeRecord {
+  type: number
+  dataZeroed: boolean
+  floatZeroed: boolean
 }
 
 interface FakeRuntime {
   runtime: CvRuntime
   deleted: CvMat[]
+  wipes: WipeRecord[]
   siftDeleted: () => number
 }
 
-function mat(rows: number, cols: number, type: number, data: Uint8Array, data32F: Float32Array, deleted: CvMat[]): CvMat {
+function mat(
+  rows: number,
+  cols: number,
+  type: number,
+  data: Uint8Array,
+  data32F: Float32Array,
+  deleted: CvMat[],
+  wipes: WipeRecord[],
+  onDelete?: () => void,
+): CvMat {
   const handle: CvMat = {
     rows,
     cols,
     data,
     data32F,
     type: () => type,
-    delete: () => deleted.push(handle),
+    delete: () => {
+      wipes.push({
+        type,
+        dataZeroed: data.length === 0 || data.every((byte) => byte === 0),
+        floatZeroed: data32F.length === 0 || data32F.every((value) => value === 0),
+      })
+      deleted.push(handle)
+      onDelete?.()
+    },
   }
   return handle
 }
 
+/** The exposed view was wiped by its actual element type before release. */
+function wipedByType(wipes: readonly WipeRecord[]): boolean {
+  return wipes.every((record) => {
+    if (record.type === CV_8UC1) return record.dataZeroed
+    if (record.type === CV_32F) return record.floatZeroed
+    return true
+  })
+}
+
 function makeFakeRuntime(options: FakeOptions = {}): FakeRuntime {
   const deleted: CvMat[] = []
+  const wipes: WipeRecord[] = []
   const detections = options.detections ?? []
   const descriptorRows = options.descriptorRows ?? []
   const dctValues = options.dctValues ?? new Array(64).fill(0)
@@ -66,8 +102,8 @@ function makeFakeRuntime(options: FakeOptions = {}): FakeRuntime {
     CV_8UC1,
     CV_32F,
     INTER_AREA,
-    matFromGray: (gray) => mat(1, gray.length, CV_8UC1, gray.slice(), new Float32Array(0), deleted),
-    createEmptyMat: () => mat(0, 0, CV_8UC1, new Uint8Array(0), new Float32Array(0), deleted),
+    matFromGray: (gray) => mat(1, gray.length, CV_8UC1, gray.slice(), new Float32Array(0), deleted, wipes),
+    createEmptyMat: () => mat(0, 0, CV_8UC1, new Uint8Array(0), new Float32Array(0), deleted, wipes),
     createSift: (_parameters: SiftParameters): CvSift => {
       let live = true
       return {
@@ -81,7 +117,20 @@ function makeFakeRuntime(options: FakeOptions = {}): FakeRuntime {
             for (let col = 0; col < DESCRIPTOR_BYTES; col++) flat[row * DESCRIPTOR_BYTES + col] = source[col] ?? 0
           }
           return {
-            descriptors: mat(rows.length, DESCRIPTOR_BYTES, CV_32F, new Uint8Array(0), flat, deleted),
+            descriptors: mat(
+              rows.length,
+              DESCRIPTOR_BYTES,
+              CV_32F,
+              new Uint8Array(0),
+              flat,
+              deleted,
+              wipes,
+              options.failDescriptorDelete
+                ? () => {
+                    throw new Error('cleanup boom')
+                  }
+                : undefined,
+            ),
             keypoints: rows.map((point) => point),
           }
         },
@@ -96,16 +145,19 @@ function makeFakeRuntime(options: FakeOptions = {}): FakeRuntime {
     resizeArea: (src, size) => {
       const values = new Uint8Array(size * size)
       for (let index = 0; index < values.length; index++) values[index] = src.data[index * 17] ?? 0
-      return mat(size, size, CV_8UC1, values, new Float32Array(values.length), deleted)
+      return mat(size, size, CV_8UC1, values, new Float32Array(values.length), deleted, wipes)
     },
     convertToFloat: (src) => {
       const out = new Float32Array(src.data.length)
       for (let index = 0; index < out.length; index++) out[index] = src.data[index] ?? 0
-      return mat(src.rows, src.cols, CV_32F, new Uint8Array(0), out, deleted)
+      return mat(src.rows, src.cols, CV_32F, new Uint8Array(0), out, deleted, wipes)
     },
-    dct: () => mat(8, 8, CV_32F, new Uint8Array(0), Float32Array.from(dctValues), deleted),
+    dct: () => {
+      options.onDct?.()
+      return mat(8, 8, CV_32F, new Uint8Array(0), Float32Array.from(dctValues), deleted, wipes)
+    },
   }
-  return { runtime, deleted, siftDeleted: () => siftDeleteCount }
+  return { runtime, deleted, wipes, siftDeleted: () => siftDeleteCount }
 }
 
 function kp(x: number, y: number, response: number, overrides: Partial<CvKeyPoint> = {}): CvKeyPoint {
@@ -133,15 +185,17 @@ describe('T312 frame ownership and grayscale', () => {
     expect(reason(() => validateAndOwnFrame({ width: 4, height: 4, pixels: new Uint8ClampedArray(64) as unknown as Uint8Array }))).toBe('pixels')
   })
 
-  it('owns an independent copy of the caller pixels', () => {
+  it('owns an independent copy of the caller pixels with the validated dimensions', () => {
     const frame = canonicalFrame(6, 6)
     const owned = validateAndOwnFrame(frame)
-    expect(owned).not.toBe(frame.pixels)
-    expect(Array.from(owned)).toEqual(Array.from(frame.pixels))
-    owned[0] = 7
+    expect(owned.pixels).not.toBe(frame.pixels)
+    expect(Array.from(owned.pixels)).toEqual(Array.from(frame.pixels))
+    expect(owned.width).toBe(6)
+    expect(owned.height).toBe(6)
+    owned.pixels[0] = 7
     expect(frame.pixels[0]).not.toBe(7)
     frame.pixels[1] = 9
-    expect(owned[1]).not.toBe(9)
+    expect(owned.pixels[1]).not.toBe(9)
   })
 
   it('matches the Android integer grayscale floor and ignores alpha', () => {
@@ -307,6 +361,46 @@ describe('T312 orchestration with a deterministic test double', () => {
     controller.abort()
     expect(reason(() => extractWithRuntime(runtime, frame.pixels, frame.width, frame.height, controller.signal))).toBe('aborted')
   })
+
+  it('honors an abort signalled after the coarse-hash DCT stage', () => {
+    const controller = new AbortController()
+    const { runtime } = makeFakeRuntime({
+      detections: [kp(5, 5, 3), kp(6, 6, 2)],
+      descriptorRows: [[1], [2]],
+      dctValues: Array.from({ length: 64 }, (_, i) => i),
+      onDct: () => controller.abort(),
+    })
+    const frame = canonicalFrame(64, 64)
+    expect(reason(() => extractWithRuntime(runtime, frame.pixels, frame.width, frame.height, controller.signal))).toBe('aborted')
+  })
+
+  it('wipes every exposed native Mat buffer by its actual type before release', () => {
+    const { runtime, wipes, deleted } = settingsRuntime()
+    const frame = canonicalFrame(64, 64)
+    extractWithRuntime(runtime, frame.pixels, frame.width, frame.height)
+    expect(deleted.length).toBeGreaterThanOrEqual(5)
+    expect(wipes.length).toBe(deleted.length)
+    expect(wipedByType(wipes)).toBe(true)
+    // The descriptor Mat (CV_32F) really did hold nonzero data that got wiped.
+    expect(wipes.some((record) => record.type === CV_32F && record.floatZeroed)).toBe(true)
+  })
+
+  it('refuses typed internal and does not transfer output when native cleanup fails', () => {
+    const { runtime } = makeFakeRuntime({
+      detections: [kp(5, 5, 3), kp(6, 6, 2)],
+      descriptorRows: [[1], [2]],
+      dctValues: Array.from({ length: 64 }, (_, i) => i),
+      failDescriptorDelete: true,
+    })
+    const frame = canonicalFrame(64, 64)
+    expect(reason(() => extractWithRuntime(runtime, frame.pixels, frame.width, frame.height))).toBe('internal')
+  })
+
+  it('preserves a genuine primary failure even when cleanup also fails', () => {
+    const { runtime } = makeFakeRuntime({ detections: [], failDescriptorDelete: true })
+    const frame = canonicalFrame(32, 32)
+    expect(reason(() => extractWithRuntime(runtime, frame.pixels, frame.width, frame.height))).toBe('no-features')
+  })
 })
 
 describe('T312 extraction entry point', () => {
@@ -335,5 +429,57 @@ describe('T312 extraction entry point', () => {
     const snapshot = frame.pixels.slice()
     await extractSiftFingerprint(frame, { runtime })
     expect(Array.from(frame.pixels)).toEqual(Array.from(snapshot))
+  })
+
+  it('follows the captured dimensions and pixels when the caller frame mutates during a deferred load', async () => {
+    const { runtime } = makeFakeRuntime({
+      detections: [kp(5, 5, 3), kp(6, 6, 2)],
+      descriptorRows: [[1], [2]],
+      dctValues: Array.from({ length: 64 }, (_, i) => i),
+    })
+    const frame = canonicalFrame(64, 64)
+    let resolveRuntime!: (runtime: CvRuntime) => void
+    const deferred = new Promise<CvRuntime>((resolve) => {
+      resolveRuntime = resolve
+    })
+    const pending = extractSiftFingerprint(frame, { runtime: deferred })
+    // Mutate the caller frame after validation but while the load is suspended.
+    const mutable = frame as { width: number; height: number; pixels: Uint8Array }
+    mutable.width = 1
+    mutable.height = 1
+    mutable.pixels = new Uint8Array(4)
+    resolveRuntime(runtime)
+    const fingerprint = await pending
+    // The captured 64x64 frame drove selection: coordinates x=5 would be out of
+    // bounds for a 1-wide frame, so succeeding proves the snapshot drove extraction.
+    expect(fingerprint.canonicalWidthPx).toBe(64)
+    expect(fingerprint.canonicalHeightPx).toBe(64)
+    expect(fingerprint.keypoints).toHaveLength(2)
+  })
+
+  it('categorises a rejected runtime load as aborted when the signal aborts during it', async () => {
+    const controller = new AbortController()
+    let rejectRuntime!: (error: unknown) => void
+    const deferred = new Promise<CvRuntime>((_resolve, reject) => {
+      rejectRuntime = reject
+    })
+    const frame = canonicalFrame(32, 32)
+    const pending = extractSiftFingerprint(frame, { runtime: deferred, signal: controller.signal })
+    controller.abort()
+    rejectRuntime(new Error('load failed'))
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' })
+  })
+
+  it('refuses aborted when the signal aborts during a deferred runtime load that then resolves', async () => {
+    const controller = new AbortController()
+    let resolveRuntime!: (runtime: CvRuntime) => void
+    const deferred = new Promise<CvRuntime>((resolve) => {
+      resolveRuntime = resolve
+    })
+    const frame = canonicalFrame(32, 32)
+    const pending = extractSiftFingerprint(frame, { runtime: deferred, signal: controller.signal })
+    controller.abort()
+    resolveRuntime(makeFakeRuntime({ detections: [kp(5, 5, 3)], descriptorRows: [[1]] }).runtime)
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' })
   })
 })

@@ -33,7 +33,11 @@ mkdir -p "$ROOT/downloads" "$ROOT/src"
   curl -fsSL -o opencv-4.12.0.tar.gz https://github.com/opencv/opencv/archive/refs/tags/4.12.0.tar.gz
   echo "44c106d5bb47efec04e531fd93008b3fcd1d27138985c5baf4eafac0e1ec9e9d  opencv-4.12.0.tar.gz" | sha256sum -c -
 )
-[ -d "$ROOT/downloads/emsdk" ] || git clone --depth 1 --branch 4.0.10 https://github.com/emscripten-core/emsdk.git "$ROOT/downloads/emsdk"
+EMSDK="$ROOT/downloads/emsdk"
+[ -d "$EMSDK" ] || git clone --depth 1 --branch 4.0.10 https://github.com/emscripten-core/emsdk.git "$EMSDK"
+# Install/activate the exact pin (never the `latest` alias) before sourcing env.
+"$EMSDK/emsdk" install 4.0.10
+"$EMSDK/emsdk" activate 4.0.10
 tar -xzf "$ROOT/downloads/cmake-3.31.6-linux-x86_64.tar.gz" -C "$ROOT"
 tar -xzf "$ROOT/downloads/opencv-4.12.0.tar.gz" -C "$ROOT/src"
 
@@ -46,8 +50,10 @@ fi
 
 # --- build ---
 # shellcheck disable=SC1091
-source "$ROOT/downloads/emsdk/emsdk_env.sh" >/dev/null 2>&1
-export PATH="$ROOT/cmake/cmake-3.31.6-linux-x86_64/bin:$PATH"
+source "$EMSDK/emsdk_env.sh" >/dev/null 2>&1
+# The CMake archive extracts to $ROOT/cmake-3.31.6-linux-x86_64/ (no extra
+# `cmake/` component); put the pinned CMake on PATH before the system one.
+export PATH="$ROOT/cmake-3.31.6-linux-x86_64/bin:$PATH"
 # OPENCV_JS_WHITELIST is read by CMake at CONFIGURE time only. build_js.py sets it
 # from --config; it must also be present for any later reconfigure (a bare
 # `cmake --build` that triggers reconfigure without it silently regenerates the

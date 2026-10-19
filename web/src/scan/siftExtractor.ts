@@ -68,8 +68,38 @@ function refuse(code: SiftExtractionErrorCode): SiftExtractionError {
   return new SiftExtractionError(code)
 }
 
+/**
+ * Attaches a suppressed cleanup failure to a primary error without changing the
+ * public message. Uses the platform `addSuppressed` when present, else a
+ * non-enumerable `suppressed` array (kept off the typed error surface).
+ */
+function attachSuppressed(primary: unknown, extra: unknown): void {
+  if (!(primary instanceof Error) || extra == null) return
+  const native = (primary as { addSuppressed?: (error: unknown) => void }).addSuppressed
+  if (typeof native === 'function') {
+    native.call(primary, extra)
+    return
+  }
+  const holder = primary as Error & { suppressed?: unknown[] }
+  if (!holder.suppressed) {
+    Object.defineProperty(holder, 'suppressed', { value: [], writable: true, enumerable: false, configurable: true })
+  }
+  holder.suppressed!.push(extra)
+}
+
 /** Explicit already-canonical RGBA frame (4 bytes per pixel, row-major). */
 export interface CanonicalRgbaFrame {
+  readonly pixels: Uint8Array
+  readonly width: number
+  readonly height: number
+}
+
+/**
+ * Caller frame captured before the first await: the owned pixel copy plus the
+ * validated integer dimensions it was validated against. Later caller mutation
+ * cannot change the extraction inputs.
+ */
+export interface OwnedFrame {
   readonly pixels: Uint8Array
   readonly width: number
   readonly height: number
@@ -94,8 +124,11 @@ export interface SelectedSiftCandidate {
 
 export interface ExtractSiftOptions {
   readonly signal?: AbortSignal
-  /** Test seam only; the production path always loads the real pinned runtime. */
-  readonly runtime?: CvRuntime
+  /**
+   * Test seam only; the production path always loads the real pinned runtime.
+   * A promise is accepted so a bounded test can suspend the load.
+   */
+  readonly runtime?: CvRuntime | Promise<CvRuntime>
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -107,11 +140,12 @@ function isInteger(value: unknown): value is number {
 }
 
 /**
- * Validates the frame and returns an owned copy of its pixels, synchronously,
- * before any await or native allocation. `byteLength` is derived by
- * multiplication only after the dimension/pixel-budget guards pass.
+ * Validates the frame and returns an owned copy of its pixels together with the
+ * validated dimensions, synchronously, before any await or native allocation.
+ * `byteLength` is derived by multiplication only after the dimension/pixel-budget
+ * guards pass, so the returned width/height are the exact validated ones.
  */
-export function validateAndOwnFrame(frame: CanonicalRgbaFrame): Uint8Array {
+export function validateAndOwnFrame(frame: CanonicalRgbaFrame): OwnedFrame {
   if (!frame || typeof frame !== 'object') throw refuse('dimensions')
   const { width, height } = frame
   if (!isInteger(width) || width < 1 || width > MAX_CANONICAL_DIMENSION_PX) throw refuse('dimensions')
@@ -123,7 +157,7 @@ export function validateAndOwnFrame(frame: CanonicalRgbaFrame): Uint8Array {
   if (!(pixels instanceof Uint8Array) || pixels.length !== expected) throw refuse('pixels')
   const owned = new Uint8Array(expected)
   owned.set(pixels)
-  return owned
+  return { pixels: owned, width, height }
 }
 
 /** Exact Android grayscale: integer floor((299R + 587G + 114B) / 1000), alpha ignored. */
@@ -326,13 +360,52 @@ export function extractWithRuntime(
   signal?: AbortSignal,
 ): SiftFingerprint {
   throwIfAborted(signal)
-  const native: Array<() => void> = []
-  const ownMat = (mat: CvMat): void => {
-    native.push(() => mat.delete())
+
+  // Wipe a native Mat's exposed view by its actual element type before release.
+  const wipeMat = (mat: CvMat): void => {
+    const type = mat.type()
+    if (type === runtime.CV_8UC1) mat.data.fill(0)
+    else if (type === runtime.CV_32F) mat.data32F.fill(0)
   }
+  const cleanupActions: Array<() => void> = []
+  const ownMat = (mat: CvMat): void => {
+    cleanupActions.push(() => {
+      wipeMat(mat)
+      mat.delete()
+    })
+  }
+  /**
+   * Runs every registered release even if an earlier one fails. On a primary
+   * failure the cleanup failure is attached as suppressed detail and the primary
+   * error wins; on the success path a cleanup failure is returned so the caller
+   * can refuse output instead of transferring a partially cleaned fingerprint.
+   */
+  const runCleanup = (primary: unknown): unknown => {
+    let cleanupFailure: unknown = null
+    for (const action of cleanupActions) {
+      try {
+        action()
+      } catch (failure) {
+        if (cleanupFailure === null) cleanupFailure = failure
+        else attachSuppressed(cleanupFailure, failure)
+      }
+    }
+    if (primary != null) {
+      attachSuppressed(primary, cleanupFailure)
+      return null
+    }
+    return cleanupFailure
+  }
+
   let sift: ReturnType<CvRuntime['createSift']> | null = null
   let grayBytes: Uint8Array | null = null
   const descriptorRows: Uint8Array[] = []
+  let cleanupAttempted = false
+  let returned = false
+  let primaryFailure: unknown = null
+  const wipeRows = (): void => {
+    for (const row of descriptorRows) row.fill(0)
+  }
   try {
     sift = runtime.createSift({
       nfeatures: SIFT_NFEATURES,
@@ -341,7 +414,7 @@ export function extractWithRuntime(
       edgeThreshold: SIFT_EDGE_THRESHOLD,
       sigma: SIFT_SIGMA,
     })
-    native.push(() => sift?.delete())
+    cleanupActions.push(() => sift?.delete())
 
     grayBytes = toGrayRgba(rgba, width, height)
     const gray = runtime.matFromGray(grayBytes, width, height)
@@ -381,6 +454,18 @@ export function extractWithRuntime(
     if (!hasMatcherUsableRows(descriptorRows)) throw refuse('no-features')
 
     const coarseHash = coarseHash64(runtime, gray, ownMat)
+    // Abort is observed after the final native stage and before success transfer.
+    throwIfAborted(signal)
+
+    // Native cleanup must complete before descriptor ownership can transfer to
+    // the returned fingerprint. A cleanup failure refuses the output and wipes
+    // the still-owned rows.
+    cleanupAttempted = true
+    if (runCleanup(null) != null) {
+      wipeRows()
+      throw refuse('internal')
+    }
+    returned = true
     return {
       profileId: SIFT_FINGERPRINT_PROFILE_ID,
       canonicalWidthPx: width,
@@ -390,17 +475,15 @@ export function extractWithRuntime(
       quantizedSiftDescriptors: descriptorRows,
     }
   } catch (error) {
-    for (const row of descriptorRows) row.fill(0)
+    primaryFailure = error
     throw error
   } finally {
     if (grayBytes) grayBytes.fill(0)
-    native.reverse().forEach((action) => {
-      try {
-        action()
-      } catch {
-        /* best-effort native release; never mask the primary outcome */
-      }
-    })
+    if (!cleanupAttempted) {
+      cleanupAttempted = true
+      runCleanup(primaryFailure)
+    }
+    if (!returned) wipeRows()
   }
 }
 
@@ -413,22 +496,24 @@ export async function extractSiftFingerprint(
   frame: CanonicalRgbaFrame,
   options: ExtractSiftOptions = {},
 ): Promise<SiftFingerprint> {
+  // Snapshot the validated dimensions together with the owned pixels BEFORE the
+  // first await: later caller mutation of the frame cannot change extraction.
   const owned = validateAndOwnFrame(frame)
   const signal = options.signal
   try {
     throwIfAborted(signal)
-    let runtime = options.runtime
-    if (!runtime) {
-      try {
-        runtime = await loadOpenCvRuntime(signal)
-      } catch (error) {
-        if (error instanceof SiftExtractionError) throw error
-        throw refuse('unavailable')
-      }
+    let runtime: CvRuntime
+    try {
+      runtime = options.runtime ? await options.runtime : await loadOpenCvRuntime(signal)
+    } catch (error) {
+      // An aborted load is a cancellation, not an availability failure.
+      if (signal?.aborted) throw refuse('aborted')
+      if (error instanceof SiftExtractionError) throw error
+      throw refuse('unavailable')
     }
     throwIfAborted(signal)
-    return extractWithRuntime(runtime, owned, frame.width, frame.height, signal)
+    return extractWithRuntime(runtime, owned.pixels, owned.width, owned.height, signal)
   } finally {
-    owned.fill(0)
+    owned.pixels.fill(0)
   }
 }

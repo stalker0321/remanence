@@ -119,15 +119,37 @@ function waitForRuntime(cv: RawCv): Promise<void> {
   })
 }
 
-function wrap(cv: RawCv): CvRuntime {
+/** Wipe the exposed view of a Mat by its actual type, then release it. */
+function wipeAndDelete(cv: RawCv, mat: RawMat): void {
+  try {
+    const type = mat.type()
+    if (type === cv.CV_8UC1) mat.data.fill(0)
+    else if (type === cv.CV_32F) mat.data32F.fill(0)
+  } catch {
+    /* wiping is best-effort; the release below must still run */
+  }
+  mat.delete()
+}
+
+/**
+ * Builds the typed runtime over a raw `cv` module. Exported so the bridge
+ * ownership/cleanup contract can be exercised with a bounded fake module; the
+ * production path always uses the real loaded module.
+ */
+export function wrapOpenCvRuntime(cv: RawCv): CvRuntime {
   return {
     CV_8UC1: cv.CV_8UC1,
     CV_32F: cv.CV_32F,
     INTER_AREA: cv.INTER_AREA,
     matFromGray: (gray, width, height) => {
       const mat = new cv.Mat(height, width, cv.CV_8UC1)
-      mat.data.set(gray)
-      return mat
+      try {
+        mat.data.set(gray)
+        return mat
+      } catch (error) {
+        wipeAndDelete(cv, mat)
+        throw error
+      }
     },
     createEmptyMat: () => new cv.Mat(),
     createSift: (parameters: SiftParameters): CvSift => {
@@ -141,28 +163,34 @@ function wrap(cv: RawCv): CvRuntime {
       return {
         detect: (gray) => {
           // KeyPoint is an embind value_object, so `get` yields a plain snapshot
-          // that stays valid after the vector itself is released.
+          // that stays valid after the vector itself is released. `vector` and
+          // `mask` are owned immediately so a throwing allocation/op cannot leak.
           const vector = new cv.KeyPointVector()
-          const mask = new cv.Mat()
+          let mask: RawMat | null = null
           try {
+            mask = new cv.Mat()
             inner.detect(gray, vector, mask)
             const points: CvKeyPoint[] = []
             for (let index = 0; index < vector.size(); index++) points.push(vector.get(index) as unknown as CvKeyPoint)
             return points
           } finally {
+            if (mask) mask.delete()
             vector.delete()
-            mask.delete()
           }
         },
         compute: (gray, points) => {
           const vector = new cv.KeyPointVector()
+          let descriptors: RawMat | null = null
           try {
             for (const point of points) vector.push_back(point as unknown as RawKeyPoint)
-            const descriptors = new cv.Mat()
+            descriptors = new cv.Mat()
             inner.compute(gray, vector, descriptors)
             const keypoints: CvKeyPoint[] = []
             for (let index = 0; index < vector.size(); index++) keypoints.push(vector.get(index) as unknown as CvKeyPoint)
             return { descriptors, keypoints }
+          } catch (error) {
+            if (descriptors) wipeAndDelete(cv, descriptors)
+            throw error
           } finally {
             vector.delete()
           }
@@ -172,18 +200,33 @@ function wrap(cv: RawCv): CvRuntime {
     },
     resizeArea: (src, size) => {
       const dst = new cv.Mat()
-      cv.resize(src, dst, new cv.Size(size, size), 0, 0, cv.INTER_AREA)
-      return dst
+      try {
+        cv.resize(src, dst, new cv.Size(size, size), 0, 0, cv.INTER_AREA)
+        return dst
+      } catch (error) {
+        wipeAndDelete(cv, dst)
+        throw error
+      }
     },
     convertToFloat: (src) => {
       const dst = new cv.Mat()
-      ;(src as RawMat).convertTo(dst, cv.CV_32F)
-      return dst
+      try {
+        ;(src as RawMat).convertTo(dst, cv.CV_32F)
+        return dst
+      } catch (error) {
+        wipeAndDelete(cv, dst)
+        throw error
+      }
     },
     dct: (src) => {
       const dst = new cv.Mat()
-      cv.dct(src, dst)
-      return dst
+      try {
+        cv.dct(src, dst)
+        return dst
+      } catch (error) {
+        wipeAndDelete(cv, dst)
+        throw error
+      }
     },
   }
 }
@@ -199,7 +242,7 @@ export async function loadOpenCvRuntime(signal?: AbortSignal): Promise<CvRuntime
       const cv = await Promise.resolve(candidate)
       if (typeof cv.Mat !== 'function') await waitForRuntime(cv)
       if (typeof cv.SIFT !== 'function' || typeof cv.dct !== 'function') throw unavailable('SIFT/dct not exported')
-      return wrap(cv)
+      return wrapOpenCvRuntime(cv)
     })().catch((error) => {
       runtimePromise = null
       throw error instanceof Error ? error : unavailable(String(error))

@@ -30,6 +30,7 @@ import type { SealedCapsule } from '../src/create/sealCapsule'
 import { bytesToHex, concat } from '../src/protocol/bytes'
 import { SessionStore } from '../src/session/session'
 import { keysetFromJson, type JsonKeyset } from './keysetJson'
+import * as siftFingerprintModule from '../src/scan/siftFingerprint'
 import {
   serializeSiftFingerprint,
   type SiftFingerprint,
@@ -156,7 +157,7 @@ function validFingerprint(): SiftFingerprint {
   }
 }
 
-async function sealWithWire(wire: Uint8Array): Promise<{ sealed: SealedCapsule; senderSession: SessionStore; senderKeys: MemoryKeys }> {
+async function sealWithWire(wire: Uint8Array, capsuleId: string = CAPSULE_ID): Promise<{ sealed: SealedCapsule; senderSession: SessionStore; senderKeys: MemoryKeys }> {
   const photos = [await realPhoto('p0', 1000, 1000), await realPhoto('p1', 1080, 1080), await realPhoto('p2', 1160, 1160)]
   const session = new SessionStore('en')
   session.signIn({
@@ -187,7 +188,7 @@ async function sealWithWire(wire: Uint8Array): Promise<{ sealed: SealedCapsule; 
     freeze,
     recipient: RECIPIENT_SNAPSHOT,
     photos: ordered,
-    capsuleId: CAPSULE_ID,
+    capsuleId,
     candidateId: 'cand-1',
     createdAtEpochSeconds: 1_755_000_000n,
     epoch: 1n,
@@ -621,5 +622,79 @@ describe('buildRecognitionIndex', () => {
     }))
     expect(openedBuffers.length).toBe(1)
     expect(openedBuffers[0]!.every((byte) => byte === 0)).toBe(true)
+  })
+
+  it('R3: lock during the SECOND item download immediately wipes the FIRST item nonzero partial rows before the await settles', async () => {
+    const wire = serializeSiftFingerprint(validFingerprint())
+    const { sealed: first } = await sealWithWire(wire)
+    const secondId = 'c0c1c2c3-c4c5-c6c7-c8c9-cacbcccdcecf'
+    const { sealed: second } = await sealWithWire(wire, secondId)
+    const fixture = recipientFixture(first)
+    const secondRecognition = second.blobs.find((blob) => blob.kind === 'RECOGNITION_MANIFEST')!
+    fixture.catalog.items.push({
+      capsuleId: second.capsuleId,
+      senderUserId: second.senderUserId,
+      recipientUserId: second.recipientUserId,
+      senderKeyBundleId: second.senderKeyBundleId,
+      recipientKeyBundleId: second.recipientKeyBundleId,
+      envelopeCiphertext: second.envelopeCiphertext,
+      statementSha256: second.statementSha256,
+      blobs: second.blobs.map((blob) => ({
+        blobId: blob.blobId,
+        kind: blob.kind,
+        ordinal: blob.kind === 'PHOTO' ? blob.ordinal : null,
+        ciphertextSize: blob.ciphertextSize,
+        ciphertextSha256: b64(blob.ciphertextSha256),
+      })),
+    })
+
+    let enteredSecond!: () => void
+    let releaseSecond!: () => void
+    const entered = new Promise<void>((resolve) => { enteredSecond = resolve })
+    const release = new Promise<void>((resolve) => { releaseSecond = resolve })
+    const originalDownload = fixture.transport.requestBytes
+    fixture.transport.requestBytes = async (input) => {
+      if (input.path.includes(secondRecognition.blobId)) {
+        enteredSecond()
+        await release
+        return { status: 200, body: secondRecognition.ciphertext.slice() }
+      }
+      return originalDownload(input)
+    }
+
+    // Capture the FIRST item's parsed descriptor rows via a real-parser spy.
+    const parseReal = siftFingerprintModule.parseSiftFingerprint
+    const retainedRows: Uint8Array[] = []
+    const spy = vi.spyOn(siftFingerprintModule, 'parseSiftFingerprint').mockImplementation((bytes) => {
+      const result = parseReal(bytes)
+      retainedRows.push(...result.quantizedSiftDescriptors)
+      return result
+    })
+    const pending = buildRecognitionIndex({
+      session: fixture.session,
+      keys: fixture.keys,
+      transport: fixture.transport,
+      catalog: fixture.catalog,
+    }).then(
+      (index) => ({ kind: 'returned' as const, index }),
+      (error: unknown) => ({ kind: 'rejected' as const, error }),
+    )
+    try {
+      await entered
+      expect(retainedRows.length).toBe(2)
+      expect(retainedRows.every((row) => row.some((byte) => byte !== 0))).toBe(true)
+      fixture.session.lock()
+      // Assert BEFORE unblocking the unrelated outstanding network operation.
+      expect(retainedRows.every((row) => row.every((byte) => byte === 0))).toBe(true)
+    } finally {
+      releaseSecond()
+      const outcome = await pending
+      expect(outcome.kind).toBe('rejected')
+      if (outcome.kind === 'rejected') {
+        expect(outcome.error).toBeInstanceOf(RecognitionIndexError)
+      }
+      spy.mockRestore()
+      for (const row of retainedRows) row.fill(0)
+    }
   })
 })

@@ -250,10 +250,22 @@ export interface BuildRecognitionIndexDeps {
   readonly signal?: AbortSignal
 }
 
-/** Transient scope: immediate wipe of EVERY actually allocated secret buffer. */
+/** Transient scope: immediate wipe of EVERY actually allocated secret buffer
+ * AND of any already-parsed partial descriptor entries attached to it. */
 class TransientScope {
   invalidated = false
   readonly #owned: Uint8Array[] = []
+  #entries: RecognitionIndexEntry[] | null = null
+
+  /** Attach the build's partial-entry list so invalidation wipes rows NOW. */
+  attachEntries(entries: RecognitionIndexEntry[]): void {
+    this.#entries = entries
+  }
+
+  /** Success path only: the returned index owns the entries, not the scope. */
+  detachEntries(): void {
+    this.#entries = null
+  }
 
   take(buffer: Uint8Array): Uint8Array {
     this.#owned.push(buffer)
@@ -265,6 +277,10 @@ class TransientScope {
     this.invalidated = true
     for (const buffer of this.#owned) buffer.fill(0)
     this.#owned.length = 0
+    if (this.#entries !== null) {
+      for (const entry of this.#entries) wipeEntry(entry)
+      this.#entries.length = 0
+    }
   }
 }
 
@@ -303,6 +319,7 @@ export async function buildRecognitionIndex(deps: BuildRecognitionIndexDeps): Pr
   signal?.addEventListener('abort', onAbort, { once: true })
 
   const entries: RecognitionIndexEntry[] = []
+  scope.attachEntries(entries)
   const disposePartialEntries = (): void => {
     for (const entry of entries) wipeEntry(entry)
     entries.length = 0
@@ -445,9 +462,12 @@ export async function buildRecognitionIndex(deps: BuildRecognitionIndexDeps): Pr
     fenceOrRefuse()
 
     // Build watchers are no longer needed; the returned index installs its
-    // OWN live-lifetime watchers in its constructor.
+    // OWN live-lifetime watchers in its constructor. Detach the successful
+    // entries BEFORE the residual buffer wipe so only temporaries are
+    // cleared here — the index owns the rows from this point on.
     unsubscribe()
     signal?.removeEventListener('abort', onAbort)
+    scope.detachEntries()
     scope.wipeAll() // any residual registered snapshot copies are zeroed
     return new RecognitionIndex(entries, fence, page)
   } catch (error) {

@@ -648,7 +648,10 @@ export function Create({
       setFpState('ready')
       onNotice('frontReady')
     } catch (error) {
-      if (!mounted.current || fpAttempt.current !== my) return
+      // A camera failure is also an awaited outcome: recheck the full
+      // current visit before any error notice, so a stale invalidation
+      // cannot surface a misleading cameraUnavailable.
+      if (!visitOk(null)) return
       if (error instanceof ScanError && error.code === 'CANCELLED') return
       onNotice('cameraUnavailable')
     } finally {

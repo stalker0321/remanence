@@ -202,10 +202,23 @@ async function main(): Promise<void> {
     let payload: Uint8Array = await texturedQuadJpeg(7, 0, 0, 640, 480)
     let payloadWidth = 640
     let payloadHeight = 480
+    let failNextCapture = false
+    let captureFailTaken = false
     const camera: CameraPort = {
       open: async () => ({
         preview: document.createElement('video') as HTMLVideoElement,
-        capture: async (): Promise<StillCapture> => ({ bytes: payload.slice(), width: payloadWidth, height: payloadHeight }),
+        capture: async (): Promise<StillCapture> => {
+          if (failNextCapture) {
+            failNextCapture = false
+            captureFailTaken = true
+            // Invalidate synchronously inside the pending capture, before the
+            // awaiting Create continuation runs: the take must fail closed
+            // with no stale camera error.
+            recipient.restart()
+            throw new Error('capture failed')
+          }
+          return { bytes: payload.slice(), width: payloadWidth, height: payloadHeight }
+        },
         stop: () => undefined,
       }),
     }
@@ -380,13 +393,33 @@ async function main(): Promise<void> {
       assert('exactly one ready from the fresh take', notices.filter((notice) => notice === 'frontReady').length === readyBeforeLockRace + 1)
     }
 
-    // 9. Unmount closes everything without errors.
+    // 9. Capture fails after an in-visit invalidation: no stale error.
+    // The test-only capture branch restarts the recipient and rejects, so
+    // the awaiting Create continuation must fail closed with no notice.
+    failNextCapture = true
+    const noticesBeforeCaptureFail = notices.length
+    await clickText(t('takePicture'), 'take with failing capture')
+    // The capture branch throws synchronously inside the awaited take, so the
+    // Create catch settles within a microtask; a bounded delay guarantees the
+    // promise is done BEFORE the notice count is inspected. (Waiting on a
+    // post-restart UI button would couple this case to a different symptom:
+    // after restart() #pending is also null, so no primary button renders on
+    // either old or fixed code.)
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    assert('the failing capture branch actually ran (nonvacuous)', captureFailTaken)
+    assert(
+      'no stale camera error after in-visit invalidation',
+      notices.length === noticesBeforeCaptureFail,
+      `notice count grew by ${notices.length - noticesBeforeCaptureFail}`,
+    )
+
+    // 10. Unmount closes everything without errors.
     rootRef.root?.unmount()
     rootRef.root = null
     await waitFor(() => document.querySelector('[data-testid="create-host"]') !== null, 'host persists')
     assert('unmount completes without crashing the page', true)
 
-    // 10. Holder-level real wire on the same genuine path (no UI observer).
+    // 11. Holder-level real wire on the same genuine path (no UI observer).
     const store2 = new SessionStore(lang)
     store2.signIn(SIGN_IN)
     store2.unlock()

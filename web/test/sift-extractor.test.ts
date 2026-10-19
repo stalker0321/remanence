@@ -317,6 +317,63 @@ describe('T312 rounding and quantization', () => {
     expect(reason(() => packCoarseHash(new Array(5).fill(0)))).toBe('shape')
     expect(reason(() => packCoarseHash(new Array(64).fill(Number.POSITIVE_INFINITY)))).toBe('shape')
   })
+
+  it('wipes the in-flight descriptor row and AC scratch when a mid-fill non-finite value is refused', () => {
+    interface FillRecord {
+      kind: 'uint8' | 'float64'
+      before: ArrayLike<number>
+      after: Uint8Array | Float64Array
+    }
+    const records: FillRecord[] = []
+    // Unit-only, narrowly scoped prototype fill spy over synthetic buffers; the
+    // original implementation is restored in `finally`.
+    const originalUintFill = Uint8Array.prototype.fill
+    const originalFloatFill = Float64Array.prototype.fill
+    const installUint = originalUintFill as unknown as (value: number, start?: number, end?: number) => Uint8Array
+    ;(Uint8Array.prototype as { fill: unknown }).fill = function (
+      this: Uint8Array,
+      value: number,
+      start?: number,
+      end?: number,
+    ): Uint8Array {
+      records.push({ kind: 'uint8', before: this.slice(), after: this })
+      return installUint.call(this, value, start, end)
+    }
+    const installFloat = originalFloatFill as unknown as (value: number, start?: number, end?: number) => Float64Array
+    ;(Float64Array.prototype as { fill: unknown }).fill = function (
+      this: Float64Array,
+      value: number,
+      start?: number,
+      end?: number,
+    ): Float64Array {
+      records.push({ kind: 'float64', before: this.slice(), after: this })
+      return installFloat.call(this, value, start, end)
+    }
+    try {
+      // Non-finite value AFTER valid synthetic values (not the first element).
+      const rowValues = new Array<number>(DESCRIPTOR_BYTES).fill(1)
+      rowValues[DESCRIPTOR_BYTES - 1] = Number.NaN
+      expect(reason(() => quantizeRawSiftRow(rowValues))).toBe('shape')
+
+      const acValues = new Array<number>(64).fill(5)
+      acValues[20] = Number.POSITIVE_INFINITY
+      expect(reason(() => packCoarseHash(acValues))).toBe('shape')
+
+      const rowWipe = records.find((entry) => entry.kind === 'uint8')
+      const acWipe = records.find((entry) => entry.kind === 'float64')
+      expect(rowWipe).toBeDefined()
+      expect(acWipe).toBeDefined()
+      // The in-flight scratch really carried partial values at wipe time and is
+      // zeroed afterwards; typed `shape` alone already passed on the old helper.
+      expect(rowWipe!.before[0]).toBe(1)
+      expect((rowWipe!.after as Uint8Array).every((byte) => byte === 0)).toBe(true)
+      expect(acWipe!.before[0]).toBe(5)
+      expect((acWipe!.after as Float64Array).every((value) => value === 0)).toBe(true)
+    } finally {
+      ;(Uint8Array.prototype as { fill: unknown }).fill = originalUintFill
+      ;(Float64Array.prototype as { fill: unknown }).fill = originalFloatFill
+    }
+  })
 })
 
 describe('T312 orchestration with a deterministic test double', () => {

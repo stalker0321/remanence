@@ -304,12 +304,19 @@ export function quantizeKeypoint(candidate: SiftCandidate, width: number, height
 export function quantizeRawSiftRow(values: ArrayLike<number>): Uint8Array {
   if (values.length !== DESCRIPTOR_BYTES) throw refuse('shape')
   const row = new Uint8Array(DESCRIPTOR_BYTES)
-  for (let index = 0; index < DESCRIPTOR_BYTES; index++) {
-    const value = values[index]!
-    if (!Number.isFinite(value)) throw refuse('shape')
-    row[index] = Math.min(255, Math.max(0, rint(value)))
+  try {
+    for (let index = 0; index < DESCRIPTOR_BYTES; index++) {
+      const value = values[index]!
+      if (!Number.isFinite(value)) throw refuse('shape')
+      row[index] = Math.min(255, Math.max(0, rint(value)))
+    }
+    return row
+  } catch (error) {
+    // The in-flight row has not joined the caller's descriptor rows yet, so it
+    // must be wiped here; the outer cleanup only owns rows already in the list.
+    row.fill(0)
+    throw error
   }
-  return row
 }
 
 /**
@@ -319,10 +326,16 @@ export function quantizeRawSiftRow(values: ArrayLike<number>): Uint8Array {
 export function packCoarseHash(values: ArrayLike<number>): bigint {
   if (values.length !== HASH_SIZE * HASH_SIZE) throw refuse('shape')
   const ac = new Float64Array(HASH_SIZE * HASH_SIZE - 1)
-  for (let index = 1; index < values.length; index++) {
-    const value = values[index]!
-    if (!Number.isFinite(value)) throw refuse('shape')
-    ac[index - 1] = value
+  try {
+    for (let index = 1; index < values.length; index++) {
+      const value = values[index]!
+      if (!Number.isFinite(value)) throw refuse('shape')
+      ac[index - 1] = value
+    }
+  } catch (error) {
+    // Same in-flight scratch: wipe the partially filled AC buffer before rethrow.
+    ac.fill(0)
+    throw error
   }
   const sorted = Array.from(ac).sort((left, right) => left - right)
   const median = sorted[sorted.length >> 1]!

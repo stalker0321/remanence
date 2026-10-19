@@ -274,6 +274,65 @@ describe('T337 leaf homography bridge', () => {
     expect(JSON.stringify([ref, query])).toBe(before)
   })
 
+  it('wipes a nonzero wrong-type CV32F H backing buffer before delete (no data64F)', () => {
+    const records: Array<{ zeroAtDelete: boolean; type: number }> = []
+    class WMat {
+      rows: number
+      cols: number
+      typeId: number
+      data: Uint8Array
+      data32F: Float32Array
+      data64F?: Float64Array
+      zeroAtDelete = false
+      constructor(rows = 0, cols = 0, type = 0) {
+        const bytes = rows * cols * (type === CV_32FC2 ? 8 : type === CV_64F ? 8 : type === 5 ? 4 : 1)
+        const buffer = new ArrayBuffer(bytes)
+        this.rows = rows
+        this.cols = cols
+        this.typeId = type
+        this.data = new Uint8Array(buffer)
+        this.data32F = bytes % 4 === 0 ? new Float32Array(buffer) : new Float32Array(0)
+        this.data64F = type === CV_64F ? new Float64Array(buffer) : undefined
+      }
+      type(): number {
+        return this.typeId
+      }
+      total(): number {
+        return this.rows * this.cols
+      }
+      empty(): boolean {
+        return this.total() === 0
+      }
+      delete(): void {
+        this.zeroAtDelete = this.data.every((v) => v === 0)
+        records.push({ zeroAtDelete: this.zeroAtDelete, type: this.typeId })
+      }
+    }
+    const cv = {
+      Mat: WMat,
+      CV_32FC2,
+      CV_64F,
+      USAC_MAGSAC,
+      setRNGSeed() {
+        /* not asserted here */
+      },
+      findHomography(...args: unknown[]) {
+        const mask = args[4] as WMat
+        mask.rows = 6
+        mask.cols = 1
+        mask.data = new Uint8Array(6).fill(1)
+        const h = new WMat(3, 3, 5)
+        h.data32F.fill(33)
+        return h
+      },
+    } as unknown as RawCv
+    const observations = estimateHomographyObservations(cv, REF, QUERY)
+    expect(observations.homography.type).toBe(5)
+    expect(observations.homography.values).toBeNull()
+    expect(records).toHaveLength(4)
+    expect(records.every((entry) => entry.zeroAtDelete)).toBe(true)
+  })
+
   it('uses the source-provenance native parameters', () => {
     expect(GEOMETRY_NATIVE_PARAMETERS).toEqual({
       seed: 42,

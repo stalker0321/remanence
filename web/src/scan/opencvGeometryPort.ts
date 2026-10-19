@@ -84,16 +84,35 @@ interface RawHomographyCv extends RawCv {
 
 interface OwnedMat {
   readonly mat: RawMatHandle
-  readonly wipe: 'f32' | 'f64' | 'u8'
 }
 
+/**
+ * Wipes the ACTUAL exposed backing storage regardless of the expected type.
+ * A malformed H can be CV32F (no `data64F`) even though valid H is CV64F; the
+ * raw `data` view and any present f32/f64 views all alias the same buffer and
+ * are each attempted best-effort before the caller deletes the handle.
+ */
 function wipeExposed(owned: OwnedMat): void {
+  // Each view is read and wiped inside its own try: a malformed view getter
+  // must not escape (which would skip this handle's delete) or stop the other
+  // views from being attempted.
   try {
-    const view =
-      owned.wipe === 'f32' ? owned.mat.data32F : owned.wipe === 'f64' ? owned.mat.data64F : owned.mat.data
+    const view = owned.mat.data64F
     if (view && typeof view.fill === 'function') view.fill(0)
   } catch {
-    /* wiping is best-effort; delete below must still run */
+    /* unavailable view; continue */
+  }
+  try {
+    const view = owned.mat.data32F
+    if (view && typeof view.fill === 'function') view.fill(0)
+  } catch {
+    /* unavailable view; continue */
+  }
+  try {
+    const view = owned.mat.data
+    if (view && typeof view.fill === 'function') view.fill(0)
+  } catch {
+    /* unavailable view; continue */
   }
 }
 
@@ -157,8 +176,8 @@ export function estimateHomographyObservations(
   }
 
   const owned: OwnedMat[] = []
-  const own = (mat: RawMatHandle, wipe: OwnedMat['wipe']): RawMatHandle => {
-    owned.push({ mat, wipe })
+  const own = (mat: RawMatHandle): RawMatHandle => {
+    owned.push({ mat })
     return mat
   }
   const asMat = (mat: unknown): RawMatHandle => {
@@ -170,7 +189,7 @@ export function estimateHomographyObservations(
   let primary: unknown = null
   try {
     const buildPoints = (points: readonly { readonly x: number; readonly y: number }[]): RawMatHandle => {
-      const mat = own(asMat(new cv.Mat(pairCount, 1, cv.CV_32FC2)), 'f32')
+      const mat = own(asMat(new cv.Mat(pairCount, 1, cv.CV_32FC2)))
       const view = mat.data32F
       if (!(view instanceof Float32Array) || view.length !== pairCount * 2) {
         throw new GeometryBridgeError('native-contract')
@@ -184,7 +203,7 @@ export function estimateHomographyObservations(
 
     const referenceMat = buildPoints(referencePoints)
     const queryMat = buildPoints(queryPoints)
-    const mask = own(asMat(new cv.Mat()), 'u8')
+    const mask = own(asMat(new cv.Mat()))
 
     // CRITICAL SECTION: contiguous synchronous seed + exact seven-argument call.
     cv.setRNGSeed(GEOMETRY_NATIVE_PARAMETERS.seed)
@@ -205,7 +224,7 @@ export function estimateHomographyObservations(
         mask: readMask(mask, pairCount),
       }
     } else {
-      const homography = own(asMat(homographyRaw), 'f64')
+      const homography = own(asMat(homographyRaw))
       result = { homography: readHomography(homography), mask: readMask(mask, pairCount) }
     }
   } catch (error) {

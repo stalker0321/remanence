@@ -100,6 +100,16 @@ function validate(fingerprint: SiftFingerprint): void {
   }
 }
 
+/**
+ * T330 — narrow additive export of the accepted private validator so the
+ * correspondence stage can enforce the EXACT existing format-3 contract
+ * before any native access without duplicating rules or allocating full
+ * fingerprint wires. No validation behavior changes.
+ */
+export function validateSiftFingerprintShape(fingerprint: SiftFingerprint): void {
+  validate(fingerprint)
+}
+
 /** `fixed64` (wire type 1): raw little-endian 64 bits of the signed value. */
 function fixed64Field(field: number, value: bigint): Uint8Array {
   const out = new Uint8Array(9)

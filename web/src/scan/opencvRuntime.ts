@@ -56,7 +56,9 @@ interface RawSift {
   compute(image: CvMat, keypoints: RawKeyPointVector, descriptors: CvMat): void
   delete(): void
 }
-interface RawCv {
+/** T330: additive type export for the typed correspondence bridge. */
+export interface RawCv {
+  NORM_L2: number
   Mat: new (rows?: number, cols?: number, type?: number) => RawMat
   MatVector: new () => RawMatVector
   Size: new (width: number, height: number) => RawSize
@@ -106,6 +108,7 @@ declare global {
 }
 
 let runtimePromise: Promise<CvContourRuntime> | null = null
+let modulePromise: Promise<RawCv> | null = null
 
 function unavailable(message: string): Error {
   return new Error(`opencv-unavailable: ${message}`)
@@ -399,17 +402,39 @@ export function wrapOpenCvRuntime(cv: RawCv): CvContourRuntime {
   }
 }
 
-/** Loads (once) and returns the pinned OpenCV runtime (with contour/warp ops). */
-export async function loadOpenCvRuntime(signal?: AbortSignal): Promise<CvContourRuntime> {
+/**
+ * T330 — loads (once, cached) and returns the RAW pinned OpenCV module for
+ * the typed correspondence bridge. Shares the exact same-origin script load,
+ * runtime-initialized wait, and SIFT/dct export guard as the contour/warp
+ * runtime below; no duplicate loader, no CDN fallback, no whitelist change.
+ */
+export async function loadOpenCvModule(signal?: AbortSignal): Promise<RawCv> {
   if (signal?.aborted) throw unavailable('aborted')
-  if (!runtimePromise) {
-    runtimePromise = (async () => {
+  if (!modulePromise) {
+    modulePromise = (async () => {
       await loadScript(OPENCV_SCRIPT_URL)
       const candidate = window.cv
       if (!candidate) throw unavailable('no cv global')
       const cv = await Promise.resolve(candidate)
       if (typeof cv.Mat !== 'function') await waitForRuntime(cv)
       if (typeof cv.SIFT !== 'function' || typeof cv.dct !== 'function') throw unavailable('SIFT/dct not exported')
+      return cv
+    })().catch((error) => {
+      modulePromise = null
+      throw error instanceof Error ? error : unavailable(String(error))
+    })
+  }
+  const cv = await modulePromise
+  if (signal?.aborted) throw unavailable('aborted')
+  return cv
+}
+
+/** Loads (once) and returns the pinned OpenCV runtime (with contour/warp ops). */
+export async function loadOpenCvRuntime(signal?: AbortSignal): Promise<CvContourRuntime> {
+  if (signal?.aborted) throw unavailable('aborted')
+  if (!runtimePromise) {
+    runtimePromise = (async () => {
+      const cv = await loadOpenCvModule(signal)
       return wrapOpenCvRuntime(cv)
     })().catch((error) => {
       runtimePromise = null

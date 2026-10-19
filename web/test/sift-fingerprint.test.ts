@@ -47,9 +47,9 @@ const ZERO = VECTORS.find((vector) => vector.name === 'zero_defaults')!
 const GOOD = ZERO.wireHex
 
 describe('format-3 fingerprint codec (genuine Kotlin vectors)', () => {
-  it('exports only the production codec + error', async () => {
+  it('exports only the production codec + error + the T330 additive validator', async () => {
     const mod = await import('../src/scan/siftFingerprint')
-    expect(Object.keys(mod).sort()).toEqual(['DESCRIPTOR_BYTES', 'MAX_KEYPOINTS', 'MAX_SERIALIZED_BYTES', 'MIN_KEYPOINTS', 'SIFT_FINGERPRINT_FORMAT_VERSION', 'SIFT_FINGERPRINT_PROFILE_ID', 'SiftFingerprintError', 'parseSiftFingerprint', 'serializeSiftFingerprint'])
+    expect(Object.keys(mod).sort()).toEqual(['DESCRIPTOR_BYTES', 'MAX_KEYPOINTS', 'MAX_SERIALIZED_BYTES', 'MIN_KEYPOINTS', 'SIFT_FINGERPRINT_FORMAT_VERSION', 'SIFT_FINGERPRINT_PROFILE_ID', 'SiftFingerprintError', 'parseSiftFingerprint', 'serializeSiftFingerprint', 'validateSiftFingerprintShape'])
   })
 
   it('serializes the exact Kotlin canonical bytes and parses back the domain for every vector', () => {

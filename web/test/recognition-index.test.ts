@@ -27,7 +27,7 @@ import type { DraftPhoto } from '../src/create/photos'
 import type { RecipientSnapshot } from '../src/create/recipient'
 import { sealCapsule } from '../src/create/sealCapsule'
 import type { SealedCapsule } from '../src/create/sealCapsule'
-import { bytesToHex } from '../src/protocol/bytes'
+import { bytesToHex, concat } from '../src/protocol/bytes'
 import { SessionStore } from '../src/session/session'
 import { keysetFromJson, type JsonKeyset } from './keysetJson'
 import {
@@ -151,7 +151,8 @@ function validFingerprint(): SiftFingerprint {
     canonicalHeightPx: 640,
     coarseHash64: 42n,
     keypoints,
-    quantizedSiftDescriptors: keypoints.map(() => new Uint8Array(128)),
+    // NONZERO descriptor rows so every wipe assertion is meaningful.
+    quantizedSiftDescriptors: keypoints.map(() => new Uint8Array(128).fill(7)),
   }
 }
 
@@ -196,12 +197,18 @@ async function sealWithWire(wire: Uint8Array): Promise<{ sealed: SealedCapsule; 
   return { sealed, senderSession: session, senderKeys: keys }
 }
 
-function recipientFixture(sealed: SealedCapsule): {
+interface FixtureHooks {
+  openEnvelope?: (real: () => Promise<Uint8Array>) => Promise<Uint8Array>
+  decryptArtifact?: (real: () => Promise<Uint8Array>) => Promise<Uint8Array>
+}
+
+function recipientFixture(sealed: SealedCapsule, hooks: FixtureHooks = {}): {
   session: SessionStore
   keys: MemoryKeys
   item: IncomingCapsule
   catalog: { items: IncomingCapsule[]; hasMore: boolean; nextCursor: string | null }
   downloads: string[]
+  served: Uint8Array[]
   transport: ApiTransport & ByteTransport
 } {
   const session = new SessionStore('en')
@@ -215,11 +222,16 @@ function recipientFixture(sealed: SealedCapsule): {
     refreshExpiresAt: '2026-11-20T00:00:00Z',
   })
   session.unlock()
+  const realOpen = (info: Uint8Array, ciphertext: Uint8Array): Promise<Uint8Array> => openRecipientEnvelope(HPKE_PRIVATE, info, ciphertext)
   const caps: KeyCapabilities = {
     accountId: RECIPIENT_ID,
     bundleId: RECIPIENT_BUNDLE,
-    openEnvelope: (info, ciphertext) => openRecipientEnvelope(HPKE_PRIVATE, info, ciphertext),
-    decryptArtifact,
+    openEnvelope: (info, ciphertext) => (hooks.openEnvelope
+      ? hooks.openEnvelope(() => realOpen(info, ciphertext))
+      : realOpen(info, ciphertext)),
+    decryptArtifact: (keyset, aad, ciphertext, kind) => (hooks.decryptArtifact
+      ? hooks.decryptArtifact(() => decryptArtifact(keyset, aad, ciphertext, kind))
+      : decryptArtifact(keyset, aad, ciphertext, kind)),
     sign: async () => { throw new Error('unused') },
     lock: () => {},
   }
@@ -245,6 +257,7 @@ function recipientFixture(sealed: SealedCapsule): {
     blobs,
   }
   const downloads: string[] = []
+  const served: Uint8Array[] = []
   const transport: ApiTransport & ByteTransport = {
     request: async () => { throw new Error('no JSON requests expected') },
     requestBytes: async (input) => {
@@ -253,7 +266,9 @@ function recipientFixture(sealed: SealedCapsule): {
       const blobId = match?.[1]
       const blob = sealed.blobs.find((candidate) => candidate.blobId === blobId)
       if (!blob) return { status: 404, body: new Uint8Array(0) }
-      return { status: 200, body: blob.ciphertext.slice() }
+      const body = blob.ciphertext.slice()
+      served.push(body)
+      return { status: 200, body }
     },
   }
   return {
@@ -262,6 +277,7 @@ function recipientFixture(sealed: SealedCapsule): {
     item,
     catalog: { items: [item], hasMore: false, nextCursor: null },
     downloads,
+    served,
     transport,
   }
 }
@@ -305,7 +321,7 @@ describe('buildRecognitionIndex', () => {
     }
   })
 
-  it('dispose wipes descriptor rows, clears entries, and is idempotent; later access refuses stale', async () => {
+  it('dispose wipes nonzero descriptor rows, clears entries, and is idempotent; later access refuses stale', async () => {
     const wire = serializeSiftFingerprint(validFingerprint())
     const { sealed } = await sealWithWire(wire)
     const fixture = recipientFixture(sealed)
@@ -317,6 +333,7 @@ describe('buildRecognitionIndex', () => {
     })
     const rows = index.entries()[0]!.fingerprint.quantizedSiftDescriptors
     expect(rows.length).toBe(2)
+    expect(rows.every((row) => row.some((byte) => byte !== 0))).toBe(true)
     index.dispose()
     expect(index.disposed).toBe(true)
     expect(rows.every((row) => row.every((byte) => byte === 0))).toBe(true)
@@ -455,5 +472,154 @@ describe('buildRecognitionIndex', () => {
     const recognition = sealed.blobs.find((blob) => blob.kind === 'RECOGNITION_MANIFEST')!
     expect(spy.mock.calls.length).toBe(1)
     expect(String(spy.mock.calls[0]![0])).toContain(recognition.blobId)
+  })
+
+  it('R2: wipes every actually allocated secret temporary BEFORE returning a successful index (only descriptor rows live on)', async () => {
+    const wire = serializeSiftFingerprint(validFingerprint())
+    const { sealed } = await sealWithWire(wire)
+    const openedBuffers: Uint8Array[] = []
+    const plainBuffers: Uint8Array[] = []
+    const fixture = recipientFixture(sealed, {
+      openEnvelope: async (real) => {
+        const buffer = await real()
+        openedBuffers.push(buffer)
+        return buffer
+      },
+      decryptArtifact: async (real) => {
+        const buffer = await real()
+        plainBuffers.push(buffer)
+        return buffer
+      },
+    })
+    const index = await buildRecognitionIndex({
+      session: fixture.session,
+      keys: fixture.keys,
+      transport: fixture.transport,
+      catalog: fixture.catalog,
+    })
+    try {
+      // Rows are live and nonzero; every secret temporary is already zero.
+      const rows = index.entries()[0]!.fingerprint.quantizedSiftDescriptors
+      expect(rows.every((row) => row.some((byte) => byte !== 0))).toBe(true)
+      expect(openedBuffers.length).toBe(1)
+      expect(plainBuffers.length).toBe(1)
+      expect(fixture.served.length).toBe(1)
+      expect(openedBuffers[0]!.every((byte) => byte === 0)).toBe(true)
+      expect(plainBuffers[0]!.every((byte) => byte === 0)).toBe(true)
+      expect(fixture.served[0]!.every((byte) => byte === 0)).toBe(true)
+    } finally {
+      index.dispose()
+    }
+  })
+
+  it('R2: session lock immediately wipes live descriptor rows without waiting for entries()/matcher settlement', async () => {
+    const wire = serializeSiftFingerprint(validFingerprint())
+    const { sealed } = await sealWithWire(wire)
+    const fixture = recipientFixture(sealed)
+    const index = await buildRecognitionIndex({
+      session: fixture.session,
+      keys: fixture.keys,
+      transport: fixture.transport,
+      catalog: fixture.catalog,
+    })
+    const rows = index.entries()[0]!.fingerprint.quantizedSiftDescriptors
+    expect(rows.every((row) => row.some((byte) => byte !== 0))).toBe(true)
+    fixture.session.lock()
+    expect(index.disposed).toBe(true)
+    expect(rows.every((row) => row.every((byte) => byte === 0))).toBe(true)
+    expect(() => index.entries()).toThrow(RecognitionIndexError)
+    index.dispose()
+  })
+
+  it('R2: signal abort immediately wipes live descriptor rows', async () => {
+    const wire = serializeSiftFingerprint(validFingerprint())
+    const { sealed } = await sealWithWire(wire)
+    const fixture = recipientFixture(sealed)
+    const controller = new AbortController()
+    const index = await buildRecognitionIndex({
+      session: fixture.session,
+      keys: fixture.keys,
+      transport: fixture.transport,
+      catalog: fixture.catalog,
+      signal: controller.signal,
+    })
+    const rows = index.entries()[0]!.fingerprint.quantizedSiftDescriptors
+    expect(rows.every((row) => row.some((byte) => byte !== 0))).toBe(true)
+    controller.abort()
+    expect(index.disposed).toBe(true)
+    expect(rows.every((row) => row.every((byte) => byte === 0))).toBe(true)
+    index.dispose()
+  })
+
+  it('R2: a lock during the envelope await wipes the late plaintext immediately even though the build still rejects stale', async () => {
+    const wire = serializeSiftFingerprint(validFingerprint())
+    const { sealed } = await sealWithWire(wire)
+    const openedBuffers: Uint8Array[] = []
+    const fixture = recipientFixture(sealed, {
+      openEnvelope: async (real) => {
+        const buffer = await real()
+        // The invalidation lands AFTER the crypto returned a fresh plaintext
+        // (the late-arrival case): the scope must wipe it immediately.
+        fixture.session.lock()
+        openedBuffers.push(buffer)
+        return buffer
+      },
+    })
+    await expectIndexRefusal('stale', () => buildRecognitionIndex({
+      session: fixture.session,
+      keys: fixture.keys,
+      transport: fixture.transport,
+      catalog: fixture.catalog,
+    }))
+    expect(openedBuffers.length).toBe(1)
+    expect(openedBuffers[0]!.every((byte) => byte === 0)).toBe(true)
+  })
+
+  it('R2: preserves the original page flags across the envelope await (immutable snapshot)', async () => {
+    const wire = serializeSiftFingerprint(validFingerprint())
+    const { sealed } = await sealWithWire(wire)
+    const fixture = recipientFixture(sealed, {
+      openEnvelope: async (real) => {
+        // Mutate the CALLER catalog while the first await is pending.
+        fixture.catalog.hasMore = true
+        fixture.catalog.nextCursor = 'mutated-cursor'
+        return real()
+      },
+    })
+    const index = await buildRecognitionIndex({
+      session: fixture.session,
+      keys: fixture.keys,
+      transport: fixture.transport,
+      catalog: fixture.catalog,
+    })
+    try {
+      expect(index.hasMore).toBe(false)
+      expect(index.nextCursor).toBeNull()
+    } finally {
+      index.dispose()
+    }
+  })
+
+  it('R2: an unknown envelope field after a valid prefix refuses invalid and wipes the opened plaintext', async () => {
+    const wire = serializeSiftFingerprint(validFingerprint())
+    const { sealed } = await sealWithWire(wire)
+    const openedBuffers: Uint8Array[] = []
+    const fixture = recipientFixture(sealed, {
+      openEnvelope: async (real) => {
+        const plain = await real()
+        // Append an unexpected root field 10 (varint 1) after the valid envelope.
+        const extended = concat([plain, Uint8Array.of((10 << 3) | 0, 0x01)])
+        openedBuffers.push(extended)
+        return extended
+      },
+    })
+    await expectIndexRefusal('invalid', () => buildRecognitionIndex({
+      session: fixture.session,
+      keys: fixture.keys,
+      transport: fixture.transport,
+      catalog: fixture.catalog,
+    }))
+    expect(openedBuffers.length).toBe(1)
+    expect(openedBuffers[0]!.every((byte) => byte === 0)).toBe(true)
   })
 })

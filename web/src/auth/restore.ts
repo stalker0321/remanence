@@ -95,6 +95,7 @@ export async function restoreSignedInAccount(
     }
     const caps = await openIdentity(reply, secret)
     try {
+      if (signal?.aborted) throw new AuthError('CANCELLED')
       session.bind(generation)()
       const current = session.getSnapshot()
       if (current.accountId !== accountId || current.bundleId !== bundleId) throw new AuthError('STALE')

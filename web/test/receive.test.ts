@@ -39,6 +39,70 @@ function memoryFor(session: SessionStore): PresentationMemory {
 }
 
 describe('receive postcard', () => {
+  for (const failure of ['decrypt', 'cancel'] as const) {
+    it(`allows an owned retry after ${failure} fails after match admission`, async () => {
+      const material = await jsPressMaterial()
+      const session = unlocked()
+      const keys = new MemoryKeys()
+      keys.attach(session)
+      const caps = material.capabilities()
+      const original = caps.openEnvelope
+      const controller = new AbortController()
+      let first = true
+      caps.openEnvelope = async (...args) => {
+        if (first) {
+          first = false
+          if (failure === 'decrypt') throw new CollageError('INTEGRITY')
+          controller.abort()
+        }
+        return original(...args)
+      }
+      keys.hold(session.getSnapshot(), caps)
+      const memory = memoryFor(session)
+      const blobs: CiphertextPort = { read: async (_item, id) => material.ciphertext(id).slice() }
+      const engine: RecognitionEngine = { match: async () => ({ kind: 'one', capsuleId: jsPressIds.capsule }) }
+      await expect(receivePostcard(session, keys, memory, engine, jsPressCapture, catalog([material.capsule]), blobs, fitText, controller.signal)).rejects.toBeDefined()
+      expect(memory.getSnapshot()).toBeNull()
+      expect(session.getSnapshot().phase).toBe('keys-unlocked')
+      expect(keys.capabilities(session.getSnapshot())).toBe(caps)
+      await receivePostcard(session, keys, memory, engine, jsPressCapture, catalog([material.capsule]), blobs, fitText, new AbortController().signal)
+      expect(session.getSnapshot().phase).toBe('presentation-admitted')
+      expect(memory.getSnapshot()?.photos.size).toBe(3)
+    })
+  }
+
+  for (const boundary of ['account', 'operation'] as const) {
+  it(`a failed old receive never rolls back a newer ${boundary}`, async () => {
+    const material = await jsPressMaterial()
+    const session = unlocked()
+    const keys = new MemoryKeys()
+    keys.attach(session)
+    let newer: ReturnType<SessionStore['getSnapshot']> | undefined
+    const caps = material.capabilities()
+    caps.openEnvelope = async () => {
+      if (boundary === 'account') {
+        session.signOut()
+        session.signIn({ accountId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', bundleId: null, handle: 'new', accessToken: 'new', refreshToken: 'new', accessExpiresAt: '', refreshExpiresAt: '' })
+      } else {
+        session.lock()
+      }
+      session.unlock()
+      session.matchPostcard()
+      newer = session.getSnapshot()
+      throw new CollageError('INTEGRITY')
+    }
+    keys.hold(session.getSnapshot(), caps)
+    const memory = memoryFor(session)
+    await expect(receivePostcard(session, keys, memory,
+      { match: async () => ({ kind: 'one', capsuleId: jsPressIds.capsule }) },
+      jsPressCapture, catalog([material.capsule]),
+      { read: async (_item, id) => material.ciphertext(id).slice() },
+      fitText, new AbortController().signal)).rejects.toBeDefined()
+    expect(session.getSnapshot()).toBe(newer)
+    expect(memory.getSnapshot()).toBeNull()
+  })
+  }
+
   it('does not match an empty index or an unavailable engine', async () => {
     const session = unlocked()
     let calls = 0

@@ -229,4 +229,36 @@ describe('signed-in passkey restore', () => {
     signIn(session, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff')
     return expect(restoreSignedInAccount(session, scripted(() => ({ status: 500, body: null })).transport, browserPasskey(), new MemoryKeys())).rejects.toBeInstanceOf(AuthError)
   })
+
+  it('cancels after final crypto without unlocking and locks the returned capabilities', async () => {
+    const fixture = await syntheticRecovery()
+    const credentialId = fixture.reply.record.credential_id
+    const session = new SessionStore()
+    const keys = new MemoryKeys()
+    keys.attach(session)
+    signIn(session, fixture.reply.record.account_id, fixture.reply.record.bundle_id)
+    const before = session.getSnapshot()
+    const controller = new AbortController()
+    const prf = fixture.prf.slice()
+    let locks = 0
+    const { transport } = scripted((input) => {
+      if (input.path.endsWith('/status')) return { status: 200, body: { state: 'STORED', credential_id: credentialId } }
+      if (input.path.endsWith('/options')) return { status: 200, body: { flow: 'fixture', options: {} } }
+      if (input.path.endsWith('/verify')) return { status: 200, body: { authentication_verified: true, credential_id: credentialId } }
+      return { status: 200, body: fixture.reply }
+    })
+    const opener = async (): Promise<KeyCapabilities> => {
+      controller.abort()
+      return {
+        accountId: before.accountId!, bundleId: before.bundleId!,
+        openEnvelope: async () => new Uint8Array(), decryptArtifact: async () => new Uint8Array(),
+        sign: async () => new Uint8Array(), lock: () => { locks++ },
+      }
+    }
+    await expect(restoreSignedInAccount(session, transport, passkey(assertion(credentialId, prf)), keys, controller.signal, opener)).rejects.toMatchObject({ code: 'CANCELLED' })
+    expect(session.getSnapshot()).toBe(before)
+    expect(keys.capabilities(session.getSnapshot())).toBeNull()
+    expect(locks).toBe(1)
+    expect(prf.every((n) => n === 0)).toBe(true)
+  })
 })

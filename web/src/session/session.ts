@@ -124,6 +124,13 @@ export class SessionStore {
     this.#replace({ phase: 'presentation-admitted' })
   }
 
+  /** A failed local open may release ONLY its own match. Existing unlocked
+   * keys remain owned by the same account; a later operation is untouched. */
+  retryMatchedPostcard(generation: number): void {
+    if (this.#view.generation !== generation || this.#view.phase !== 'postcard-matched') return
+    this.#replace({ phase: 'keys-unlocked' })
+  }
+
   lock(): void {
     if (this.#view.phase === 'signed-out') throw new SessionError('ILLEGAL_PHASE')
     if (this.#view.phase === 'authenticated') return

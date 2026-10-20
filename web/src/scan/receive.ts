@@ -47,6 +47,7 @@ export async function receivePostcard(
   const photos = item.blobs.filter((blob) => blob.kind === 'PHOTO' && blob.ordinal !== null)
   if (!content || photos.length === 0 || item.envelopeCiphertext.length === 0) throw new ScanError('BODY_MISSING')
   const downloaded: Uint8Array[] = []
+  let matchedGeneration: number | null = null
   try {
     const contentBytes = await readChecked(blobs, item, content, signal)
     downloaded.push(contentBytes)
@@ -62,6 +63,9 @@ export async function receivePostcard(
     if (signal.aborted) throw new ScanError('CANCELLED')
     if (keys.capabilities(session.getSnapshot()) === null) throw new ScanError('GRANT_MISMATCH')
     admitScan(session, grant)
+    // matchPostcard advances exactly this generation once. A synchronous
+    // subscriber may already have replaced it by the time admitScan returns.
+    matchedGeneration = generation + 1
     const opened = await openGrantedPostcard(session, keys, grant, item, {
       blobId: content.blobId,
       ciphertext: contentBytes,
@@ -72,6 +76,9 @@ export async function receivePostcard(
       throw new ScanError('CANCELLED')
     }
     showGrantedPostcard(session, memory, opened)
+  } catch (error) {
+    if (matchedGeneration !== null) session.retryMatchedPostcard(matchedGeneration)
+    throw error
   } finally {
     for (const bytes of downloaded) bytes.fill(0)
   }

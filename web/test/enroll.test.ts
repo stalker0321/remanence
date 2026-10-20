@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import * as keyOwner from '../src/crypto/keyOwner'
 import { enrollHeldIdentity } from '../src/auth/enroll'
 import type { ApiRequest, ApiResult, ApiTransport } from '../src/auth/http'
 import { MemoryKeys } from '../src/auth/memoryKeys'
@@ -172,5 +173,57 @@ describe('passkey enrollment of the held identity', () => {
     })
     expect(calls).toHaveLength(0)
     expect(session.getSnapshot().phase).toBe('authenticated')
+  })
+
+  it('cancels after readback crypto without unlocking, wiping the returned capability only', async () => {
+    const session = new SessionStore()
+    const { draft, bundleId, encryption, signing } = await heldDraft()
+    sign(session, bundleId)
+    const before = session.getSnapshot()
+    const keys = new MemoryKeys()
+    keys.attach(session)
+    const controller = new AbortController()
+    const prf = new Uint8Array(32).fill(9)
+    const seeds = (await draft.identity()).copySeeds()
+    const prepared = await prepareRecoveryRecord({
+      accountId: ACCOUNT, bundleId, credentialId: CRED, prf,
+      encryptionSeed: seeds.encryption, signingSeed: seeds.signing,
+      encryptionPublicKeyset: encryption, signingPublicKeyset: signing,
+    })
+    seeds.encryption.fill(0)
+    seeds.signing.fill(0)
+    const transport: ApiTransport = {
+      async request(input) {
+        if (input.path.endsWith('/status')) return { status: 200, body: { state: 'STORED', credential_id: CRED } }
+        if (input.path.endsWith('/options')) return { status: 200, body: { flow: FLOW, options: {} } }
+        if (input.path.endsWith('/verify')) return { status: 200, body: { authentication_verified: true, credential_id: CRED, flow: UPLOAD } }
+        return { status: 200, body: { record: prepared.record, encryption_public_keyset: encryption, signing_public_keyset: signing } }
+      },
+    }
+    let locks = 0
+    const original = keyOwner.unlockAccount
+    const spy = vi.spyOn(keyOwner, 'unlockAccount').mockImplementation(async (...args) => {
+      const caps = await original(...args)
+      const lock = caps.lock
+      caps.lock = () => { locks++; lock() }
+      controller.abort()
+      return caps
+    })
+    try {
+      await expect(enrollHeldIdentity(session, transport, {
+        canAuthenticate: () => true,
+        create: async () => { throw new Error('unexpected create') },
+        get: async () => assertion(CRED, prf),
+      }, keys, draft, controller.signal)).rejects.toMatchObject({ code: 'CANCELLED' })
+      expect(session.getSnapshot()).toBe(before)
+      expect(keys.capabilities(session.getSnapshot())).toBeNull()
+      expect(locks).toBe(1)
+      expect(prf.every((n) => n === 0)).toBe(true)
+      expect(draft.bundleId()).toBe(bundleId)
+    } finally {
+      spy.mockRestore()
+      prepared.code.fill(0)
+      draft.wipe()
+    }
   })
 })

@@ -204,31 +204,51 @@ export function Scan({
   const heldShot = useRef<StillCapture | null>(null)
   const busy = useRef(false)
   const openAbort = useRef<AbortController | null>(null)
+  const operation = useRef(0)
   const [live, setLive] = useState(false)
   const [held, setHeld] = useState(false)
 
-  useEffect(() => () => {
+  function release() {
+    operation.current += 1
+    busy.current = false
     openAbort.current?.abort()
+    openAbort.current = null
     session.current?.stop()
     session.current = null
+    heldShot.current?.bytes.fill(0)
     heldShot.current = null
     host.current?.replaceChildren()
-  }, [])
+  }
+
+  useEffect(() => {
+    let previous = store.getSnapshot()
+    const unsubscribe = store.subscribe(() => {
+      const next = store.getSnapshot()
+      if (next.accountId !== previous.accountId || next.bundleId !== previous.bundleId ||
+          (next.generation !== previous.generation && (next.phase === 'authenticated' || next.phase === 'signed-out'))) {
+        close()
+      }
+      previous = next
+    })
+    return () => { unsubscribe(); release() }
+  }, [store])
 
   async function open() {
     if (busy.current) return
     busy.current = true
+    const attempt = ++operation.current
     openAbort.current?.abort()
     const controller = new AbortController()
     openAbort.current = controller
     try {
       const next = await camera.open(controller.signal)
-      if (controller.signal.aborted) {
+      if (controller.signal.aborted || operation.current !== attempt) {
         next.stop()
         return
       }
       session.current?.stop()
       session.current = next
+      heldShot.current?.bytes.fill(0)
       heldShot.current = null
       next.preview.className = 'preview'
       host.current?.replaceChildren(next.preview)
@@ -236,26 +256,33 @@ export function Scan({
       setHeld(false)
       onNotice('errorRegion')
     } catch (error) {
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || operation.current !== attempt) return
       onNotice(error instanceof ScanError && error.code === 'CAMERA_DENIED' ? 'cameraDenied' : 'cameraUnavailable')
     } finally {
-      if (openAbort.current === controller) busy.current = false
+      if (operation.current === attempt) busy.current = false
     }
   }
 
   async function take() {
     if (busy.current) return
+    const current = session.current
+    if (!current) return
     busy.current = true
+    const attempt = ++operation.current
     try {
-      const picture = await session.current?.capture()
-      if (!picture) return
+      const picture = await current.capture()
+      if (operation.current !== attempt || session.current !== current) {
+        picture.bytes.fill(0)
+        return
+      }
+      heldShot.current?.bytes.fill(0)
       heldShot.current = picture
       setHeld(true)
       onNotice('cameraHeld')
     } catch {
-      onNotice('cameraUnavailable')
+      if (operation.current === attempt) onNotice('cameraUnavailable')
     } finally {
-      busy.current = false
+      if (operation.current === attempt) busy.current = false
     }
   }
 
@@ -268,6 +295,7 @@ export function Scan({
       return
     }
     busy.current = true
+    const attempt = ++operation.current
     const controller = new AbortController()
     openAbort.current?.abort()
     openAbort.current = controller
@@ -316,18 +344,15 @@ export function Scan({
     } catch (error) {
       if (!controller.signal.aborted) onNotice(explainScan(error))
     } finally {
-      if (openAbort.current === controller) busy.current = false
+      if (operation.current === attempt) busy.current = false
     }
   }
 
   function close() {
-    openAbort.current?.abort()
-    session.current?.stop()
-    session.current = null
-    heldShot.current = null
-    host.current?.replaceChildren()
+    release()
     setLive(false)
     setHeld(false)
+    onNotice('errorRegion')
   }
 
   return (

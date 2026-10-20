@@ -93,12 +93,12 @@ export interface MeasureCaptureQualityOptions {
   readonly loadModule?: (signal?: AbortSignal) => Promise<RawCv>
 }
 
-function checkGate(options: MeasureCaptureQualityOptions): void {
-  if (options.signal?.aborted) throw new CaptureQualityError('cancelled')
-  if (options.fence) {
+function checkGate(signal: AbortSignal | undefined, fence: (() => boolean) | undefined): void {
+  if (signal?.aborted) throw new CaptureQualityError('cancelled')
+  if (fence) {
     let current = false
     try {
-      current = options.fence()
+      current = fence()
     } catch {
       current = false
     }
@@ -118,25 +118,30 @@ export async function measureCaptureQuality(
   height: number,
   options: MeasureCaptureQualityOptions = {},
 ): Promise<CaptureQualitySignals> {
+  // Snapshot ALL consumed options synchronously BEFORE the first await. The
+  // caller can replace `options.signal`/`fence`/`loadModule` while the loader
+  // is pending; every pre/post-load/native/error path uses these captures only.
+  const signal = options.signal
+  const fence = options.fence
+  const load = options.loadModule ?? loadOpenCvModule
   const dims = validateCaptureQualityDimensions(width, height)
   if (!(rgba instanceof Uint8Array) || rgba.length !== dims.width * dims.height * 4) {
     throw new CaptureQualityError('contract')
   }
   const ownedBytes = rgba.slice()
   try {
-    checkGate(options)
-    const load = options.loadModule ?? loadOpenCvModule
+    checkGate(signal, fence)
     let cv: RawCv
     try {
-      cv = await load(options.signal)
+      cv = await load(signal)
     } catch (error) {
-      if (options.signal?.aborted) throw new CaptureQualityError('cancelled')
+      if (signal?.aborted) throw new CaptureQualityError('cancelled')
       if (error instanceof CaptureQualityError) throw error
       throw new CaptureQualityError('unavailable')
     }
-    checkGate(options)
+    checkGate(signal, fence)
     const signals = measureCaptureQualitySignals(cv as unknown as QualityRawCv, ownedBytes, dims.width, dims.height)
-    checkGate(options)
+    checkGate(signal, fence)
     return signals
   } finally {
     ownedBytes.fill(0)

@@ -17,6 +17,7 @@ import {
   measureCaptureQuality,
   type CaptureQualityGateInput,
   type CaptureQualityGateOptions,
+  type MeasureCaptureQualityOptions,
   type QualityReason,
 } from '../src/scan/captureQuality'
 import type { RawCv } from '../src/scan/opencvRuntime'
@@ -496,6 +497,96 @@ describe('T345 async default-loader wrapper', () => {
     const meter = createCaptureQualityMeter(cv)
     const signals = meter.measure(rgbaFromGray([246]), 1, 1)
     expect(signals.largestGlareFraction).toBe(1)
+    assertClean(cv)
+  })
+})
+
+describe('T345 R2 async options snapshot', () => {
+  it('keeps the original abort signal when the caller replaces options.signal', async () => {
+    const original = new AbortController()
+    const replacement = new AbortController()
+    let rejectLoad!: (reason: unknown) => void
+    const options: { signal: AbortSignal; loadModule: NonNullable<MeasureCaptureQualityOptions['loadModule']> } = {
+      signal: original.signal,
+      loadModule: () =>
+        new Promise<RawCv>((_resolve, reject) => {
+          rejectLoad = reject
+        }),
+    }
+    const pending = measureCaptureQuality(new Uint8Array([128, 128, 128, 255]), 1, 1, options)
+    options.signal = replacement.signal
+    original.abort()
+    rejectLoad(new Error('synthetic loader failure'))
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+  })
+
+  it('keeps the original owner fence when the caller replaces options.fence', async () => {
+    let current = true
+    let resolveLoad!: (cv: RawCv) => void
+    const options: { fence: () => boolean; loadModule: NonNullable<MeasureCaptureQualityOptions['loadModule']> } = {
+      fence: () => current,
+      loadModule: () =>
+        new Promise<RawCv>((resolve) => {
+          resolveLoad = resolve
+        }),
+    }
+    const pending = measureCaptureQuality(new Uint8Array([128, 128, 128, 255]), 1, 1, options)
+    options.fence = () => true
+    current = false
+    resolveLoad({} as RawCv)
+    await expect(pending).rejects.toMatchObject({ code: 'stale' })
+  })
+
+  it('evaluates the captured fence after a successful load before native work', async () => {
+    const cv = new FakeCv()
+    let current = true
+    let resolveLoad!: (cv: RawCv) => void
+    const pending = measureCaptureQuality(rgbaFromGray(brightL()), 5, 5, {
+      fence: () => current,
+      loadModule: () =>
+        new Promise<RawCv>((resolve) => {
+          resolveLoad = resolve
+        }),
+    })
+    current = false
+    resolveLoad(cv as unknown as RawCv)
+    await expect(pending).rejects.toMatchObject({ code: 'stale' })
+    expect(cv.calls.length).toBe(0)
+    expect(cv.mats.length).toBe(0)
+  })
+
+  it('evaluates the captured abort after a successful load before native work', async () => {
+    const cv = new FakeCv()
+    const controller = new AbortController()
+    let resolveLoad!: (cv: RawCv) => void
+    const pending = measureCaptureQuality(rgbaFromGray(brightL()), 5, 5, {
+      signal: controller.signal,
+      loadModule: () =>
+        new Promise<RawCv>((resolve) => {
+          resolveLoad = resolve
+        }),
+    })
+    resolveLoad(cv as unknown as RawCv)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+    expect(cv.calls.length).toBe(0)
+    expect(cv.mats.length).toBe(0)
+  })
+
+  it('keeps the original loader when the caller replaces options.loadModule', async () => {
+    const cv = new FakeCv()
+    let replacementCalled = false
+    const options: { loadModule: NonNullable<MeasureCaptureQualityOptions['loadModule']> } = {
+      loadModule: async () => cv as unknown as RawCv,
+    }
+    const pending = measureCaptureQuality(rgbaFromGray([246]), 1, 1, options)
+    options.loadModule = async () => {
+      replacementCalled = true
+      throw new Error('replacement loader must not run')
+    }
+    const signals = await pending
+    expect(signals.largestGlareFraction).toBe(1)
+    expect(replacementCalled).toBe(false)
     assertClean(cv)
   })
 })

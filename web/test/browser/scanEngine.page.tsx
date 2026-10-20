@@ -447,8 +447,11 @@ async function main(): Promise<void> {
         lock: () => {},
       }
       const keys = new MemoryKeys()
+      keys.attach(store)
       keys.hold(store.getSnapshot(), caps)
-      return { store, keys, memory: new PresentationMemory() }
+      const memory = new PresentationMemory()
+      memory.attach(store) // Same lifecycle wiring as production main.tsx.
+      return { store, keys, memory }
     }
 
     let scanQuad: Uint8Array = quad.slice()

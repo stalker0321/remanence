@@ -259,10 +259,19 @@ export function Scan({
   const busy = useRef(false)
   const openAbort = useRef<AbortController | null>(null)
   const operation = useRef(0)
+  const cameraButton = useRef<HTMLButtonElement>(null)
+  const focusAfterClose = useRef(false)
   const [live, setLive] = useState(false)
   const [held, setHeld] = useState(false)
   const [working, setWorking] = useState(false)
   const [openStatus, setOpenStatus] = useState<MessageKey>('scanPreparing')
+
+  useEffect(() => {
+    if (!live && focusAfterClose.current) {
+      focusAfterClose.current = false
+      cameraButton.current?.focus()
+    }
+  }, [live, held, working])
 
   function release() {
     operation.current += 1
@@ -415,6 +424,7 @@ export function Scan({
   }
 
   function close() {
+    focusAfterClose.current = true
     release()
     setLive(false)
     setHeld(false)
@@ -437,7 +447,7 @@ export function Scan({
             <button type="button" onClick={close}>{t('closeCamera')}</button>
           </>
         ) : (
-          <button type="button" className="primary" onClick={() => { void open() }}>{t('useCamera')}</button>
+          <button ref={cameraButton} type="button" className="primary" onClick={() => { void open() }}>{t('useCamera')}</button>
         )}
         <a href={href('home')} onClick={close}>{t('back')}</a>
       </div>
@@ -784,6 +794,7 @@ export function Create({
     const controller = new AbortController()
     abort.current = controller
     setBusy(true)
+    onNotice('errorRegion')
     try {
       const session = await front.current.open(camera, controller.signal)
       if (controller.signal.aborted) return

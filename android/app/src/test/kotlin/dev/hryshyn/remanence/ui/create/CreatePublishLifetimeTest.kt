@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -869,7 +870,17 @@ class CreatePublishLifetimeTest {
     }
 
     private fun awaitUpload(vm: CreateViewModel, expected: CreateViewModel.CreateUploadStatus) =
-        runBlocking { withTimeout(10_000) { vm.uploadStatus.first { it == expected } } }
+        runBlocking {
+            withTimeout(10_000) {
+                // Room collection on Unconfined can wake this test between
+                // the status and step writes. Await the complete observable
+                // outcome, retaining the caller's independent assertions.
+                val expectedStep = if (expected == CreateViewModel.CreateUploadStatus.Published)
+                    CreateViewModel.Step.PUBLISHED else CreateViewModel.Step.UPLOAD_PENDING
+                combine(vm.uploadStatus, vm.step) { status, step -> status == expected && step == expectedStep }
+                    .first { it }
+            }
+        }
 
     private fun runBlockingNullable(block: suspend () -> Unit) {
         kotlinx.coroutines.runBlocking { block() }

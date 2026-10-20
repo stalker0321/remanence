@@ -16,6 +16,8 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpRect
@@ -158,6 +160,21 @@ class CropCorrectionSurfaceTest {
         assertEquals(1, backs)
         assertEquals(1, resets)
         assertEquals(1, dones)
+    }
+
+    @Test fun semanticCropActionsMoveAndZoomTheRealFrame() {
+        stage()
+        val before = composeRule.onNodeWithTag("crop_frame").getBoundsInRoot()
+        composeRule.onNodeWithTag("crop_frame").performSemanticsAction(SemanticsActions.CustomActions) { actions ->
+            assertEquals(6, actions.size)
+            assertTrue(actions.single { it.label == "Move crop right" }.action())
+        }
+        val moved = composeRule.onNodeWithTag("crop_frame").getBoundsInRoot()
+        assertTrue(moved.left > before.left)
+        composeRule.onNodeWithTag("crop_frame").performSemanticsAction(SemanticsActions.CustomActions) { actions ->
+            assertTrue(actions.single { it.label == "Zoom in" }.action())
+        }
+        assertTrue(composeRule.onNodeWithTag("crop_frame").getBoundsInRoot().width < moved.width)
     }
 
     @Test

@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
@@ -163,6 +164,13 @@ class ScanCaptureRetryUiTest {
             composeRule.waitForIdle()
             composeRule.runOnIdle { live.get()?.emitReady() }
             composeRule.waitForIdle()
+            val locale = ApplicationProvider.getApplicationContext<Context>().resources.configuration.locales[0].language
+            val copy = when (locale) {
+                "ru" -> "Снимите лицевую сторону полученной открытки, чтобы открыть воспоминание."
+                "uk" -> "Сфотографуйте лицьовий бік отриманої листівки, щоб відкрити спогад."
+                else -> "Capture the picture side of the postcard you received to open the memory."
+            }
+            composeRule.onNodeWithText(copy).assertIsDisplayed()
         }
 
         fun shutter() {

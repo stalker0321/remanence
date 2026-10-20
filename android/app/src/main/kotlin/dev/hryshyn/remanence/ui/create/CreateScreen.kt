@@ -96,6 +96,7 @@ fun CreateScreen(
     requestPermissionOnAttach: Boolean = true,
     onScreenDispose: () -> Unit = {},
     onExit: () -> Unit = {},
+    recentRecipientsContent: @Composable () -> Unit = {},
 ) {
     val step by viewModel.step.collectAsStateWithLifecycle()
     val uploadStatus by viewModel.uploadStatus.collectAsStateWithLifecycle()
@@ -200,7 +201,7 @@ fun CreateScreen(
                     Spacer(Modifier.height(if (step == CreateViewModel.Step.FRONT) 16.dp else 24.dp))
                 }
                 when (step) {
-                    CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel)
+                    CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel, recentRecipientsContent)
                     CreateViewModel.Step.RECIPIENT_CONFIRM -> RecipientConfirmContent(viewModel)
                     CreateViewModel.Step.FRONT -> Column(Modifier.weight(1f).fillMaxWidth()) {
                         // T186 M14a: pending-gated recipient return (a
@@ -389,7 +390,7 @@ fun CreateScreen(
 }
 
 @Composable
-private fun RecipientLookupContent(viewModel: CreateViewModel) {
+private fun RecipientLookupContent(viewModel: CreateViewModel, recentRecipientsContent: @Composable () -> Unit) {
     val handle by viewModel.pickerVm.handle.collectAsStateWithLifecycle()
     val state by viewModel.pickerVm.state.collectAsStateWithLifecycle()
     val selfAccount by viewModel.selfRecipientAccount.collectAsStateWithLifecycle()
@@ -427,6 +428,7 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
                 )
             }
             Spacer(Modifier.height(8.dp))
+            recentRecipientsContent()
             if (selfRejected) Text(stringResource(R.string.recipient_design_self_unavailable),
                 color = HoldColors.Error, modifier = Modifier.testTag("create_self_recipient_error"))
             when (val current = state) {

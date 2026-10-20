@@ -62,7 +62,8 @@ sealed interface CapsuleAccess {
 /**
  * Every reachable top-level destination of the app. This sealed hierarchy is
  * the single source of truth for what can be navigated to; there is no
- * gallery, inbox, history, or deep-link destination by construction. The one
+ * gallery, inbox, or deep-link destination by construction. Outgoing history
+ * contains metadata only, never content or an opening grant. The one
  * capsule presentation surface exists ONLY behind a live memory-only scan
  * grant plus a verified crypto result. Create and Scan are the only required
  * home entry points (docs/product.md section 7).
@@ -75,6 +76,8 @@ sealed interface AppDestination {
     data object Home : AppDestination
 
     data object Settings : AppDestination
+
+    data object History : AppDestination
 
     /** Sender flow entry: resolve recipient, capture, encrypt, publish. */
     data object Create : AppDestination
@@ -135,6 +138,7 @@ object RouteGuard {
         AppDestination.Authentication,
         AppDestination.Home,
         AppDestination.Settings,
+        AppDestination.History,
         AppDestination.Create,
         AppDestination.Scan,
         AppDestination.Capsule("inventory-probe"),
@@ -214,7 +218,7 @@ class AppNavigationController(initialAuth: AuthUiState = AuthUiState.Resolving) 
             // are still Authenticated; do not leave those surfaces mounted
             // across A -> B or key-bundle changes.
             current = if (next is AuthUiState.Authenticated &&
-                (current == AppDestination.Create || current == AppDestination.Scan)
+                (current == AppDestination.Create || current == AppDestination.Scan || current == AppDestination.History)
             ) {
                 AppDestination.Home
             } else {

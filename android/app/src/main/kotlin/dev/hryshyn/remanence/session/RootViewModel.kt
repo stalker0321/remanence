@@ -299,6 +299,16 @@ class RootViewModel internal constructor(
         }
     }
 
+    /** Sender metadata only. This never issues or restores a capsule grant. */
+    fun openHistory() {
+        synchronized(publicationFence) {
+            if (!authenticatedEntryAdmitted() || controller.current != AppDestination.Home) return
+            controller.consumeCapsuleAccess()
+            controller.navigate(AppDestination.History)
+            _destination.value = controller.current
+        }
+    }
+
     /** Home entry point: sender create flow (authenticated accounts only). */
     fun openCreate() {
         synchronized(publicationFence) {

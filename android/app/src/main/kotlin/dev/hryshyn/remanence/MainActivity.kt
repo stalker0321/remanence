@@ -190,6 +190,7 @@ private fun RootSurface(
     }
     val loginViewModel: LoginViewModel = viewModel(factory = factory)
     val registrationViewModel: RegistrationViewModel = viewModel(factory = factory)
+    val historyViewModel: dev.hryshyn.remanence.ui.history.HistoryViewModel = viewModel(factory = factory)
     val googleViewModel: dev.hryshyn.remanence.auth.GoogleAuthViewModel = viewModel(factory = factory)
     val googleState by googleViewModel.state.collectAsStateWithLifecycle()
     val activity = androidx.compose.ui.platform.LocalContext.current as android.app.Activity
@@ -241,6 +242,7 @@ private fun RootSurface(
         capabilityViewModel.onAuthStateChanged(authState)
         setupViewModel.onAuthChanged()
         if (authState == AuthUiState.SignedOut) registrationViewModel.onSignedOut()
+        historyViewModel.bind((authState as? AuthUiState.Authenticated)?.userId)
     }
     val accountCapability by capabilityViewModel.capability.collectAsStateWithLifecycle()
 
@@ -417,10 +419,27 @@ private fun RootSurface(
             }
             if (authenticated != null) {
                 AuthenticatedHomeChrome(authenticated.handle, { logoutRequested = true }, home,
-                    onSettings = rootViewModel::openSettings)
+                    onSettings = rootViewModel::openSettings, onHistory = rootViewModel::openHistory)
             } else {
                 home()
             }
+        },
+        historyContent = {
+            val owner = (authState as? AuthUiState.Authenticated)?.userId
+            val state by historyViewModel.state.collectAsStateWithLifecycle()
+            LaunchedEffect(owner) {
+                historyViewModel.bind(owner)
+                historyViewModel.refresh()
+            }
+            dev.hryshyn.remanence.ui.history.HistoryScreen(
+                state = if (state.owner == owner) state else dev.hryshyn.remanence.ui.history.HistoryUiState(),
+                onBack = rootViewModel::returnToHome,
+                onSelect = historyViewModel::select, onBackToList = historyViewModel::backToList,
+                onRefresh = historyViewModel::refresh, onMore = historyViewModel::loadMore,
+                canCancel = historyViewModel::canCancel, onRequestCancel = historyViewModel::requestCancel,
+                onDismissCancel = historyViewModel::dismissCancel, onConfirmCancel = historyViewModel::confirmCancel,
+                copyCode = historyViewModel::codeForCopy,
+            )
         },
         settingsContent = {
             val signedIn = authState as? AuthUiState.Authenticated
@@ -444,6 +463,8 @@ private fun RootSurface(
                 // suspending publish work; the ViewModel keeps this snapshot
                 // for all staging and cleanup paths.
                 createViewModel.beginSession(createEpoch, authenticatedOwner)
+                historyViewModel.bind(authenticatedOwner)
+                historyViewModel.loadRecent()
             }
             androidx.compose.runtime.key(createEpoch) {
                 // T186 first-send handle gate: a handleless receive-only
@@ -470,6 +491,21 @@ private fun RootSurface(
                 val create: @Composable () -> Unit = {
                 CreateScreen(
                     viewModel = createViewModel,
+                    recentRecipientsContent = {
+                        val recent by historyViewModel.recent.collectAsStateWithLifecycle()
+                        val lookup by createViewModel.pickerVm.state.collectAsStateWithLifecycle()
+                        dev.hryshyn.remanence.ui.history.RecentRecipients(
+                            state = if (recent.owner == authenticatedOwner) recent else dev.hryshyn.remanence.ui.history.RecentUiState(),
+                            enabled = lookup !is dev.hryshyn.remanence.ui.create.RecipientLookupUiState.LookingUp,
+                            onRetry = historyViewModel::loadRecent,
+                            onSelect = { userId ->
+                                historyViewModel.recentForLookup(userId)?.let { suggestion ->
+                                    createViewModel.onHandleChange(suggestion.handle)
+                                    createViewModel.lookupRecipient()
+                                }
+                            },
+                        )
+                    },
                     onExit = rootViewModel::returnToHome,
                     // Activity recreation disposes Compose while the root
                     // remains on Create. Only a stable route exit owns the

@@ -83,6 +83,9 @@ class ProductionApiStack private constructor(
     val capsuleRevokeRepository: CapsuleRevokeRepository =
         CapsuleRevokeRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
+    val outgoingHistoryRepository: OutgoingHistoryRepository =
+        OutgoingHistoryRepository(authenticatedClient, baseUrl, requestLeaseProvider, capsuleRevokeRepository)
+
     /** Recipient first-open claims share the same authenticated lease boundary. */
     val capsuleFirstOpenRepository: CapsuleFirstOpenRepository =
         CapsuleFirstOpenRepository(authenticatedClient, baseUrl, requestLeaseProvider)

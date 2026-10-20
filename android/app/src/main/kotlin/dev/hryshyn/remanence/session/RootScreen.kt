@@ -38,7 +38,7 @@ import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
  * set. Authentication hosts login/registration slots; authenticated users
  * land on Home and can reach ONLY the Create and Scan entry points (plus the
  * grant-gated capsule presentation). There is deliberately no gallery,
- * inbox, history, or feed surface anywhere in this hierarchy.
+ * inbox or feed. Outgoing history is metadata only, never capsule content.
  */
 @Composable
 fun RootScreen(
@@ -53,6 +53,7 @@ fun RootScreen(
     onExitFlow: () -> Unit = {},
     showPublicHome: Boolean = false,
     settingsContent: @Composable () -> Unit = {},
+    historyContent: @Composable () -> Unit = {},
 ) {
     if (authState is AuthUiState.Resolving) {
         // Cold-start session check still in flight: hold a neutral frame so
@@ -113,6 +114,9 @@ fun RootScreen(
     when (destination) {
         AppDestination.Settings -> key(destination) {
             AstraContextArrival(motion, modifier.fillMaxSize(), contentKey = destination) { settingsContent() }
+        }
+        AppDestination.History -> key(destination) {
+            AstraContextArrival(motion, modifier.fillMaxSize(), contentKey = destination) { historyContent() }
         }
         // Create owns its step-aware back arrow and pinned close control.
         // The root owns only the route boundary and session lifecycle.
@@ -201,6 +205,7 @@ fun AuthenticatedHomeChrome(
     modifier: Modifier = Modifier,
     recoveryContent: @Composable () -> Unit = {},
     onSettings: (() -> Unit)? = null,
+    onHistory: (() -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -218,6 +223,10 @@ fun AuthenticatedHomeChrome(
             }
         }
         recoveryContent()
+        if (onHistory != null) OutlinedButton(onClick = onHistory,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).testTag("root_history_button")) {
+            Text(stringResource(R.string.history_title))
+        }
         Box(Modifier.weight(1f)) { homeContent() }
     }
 }

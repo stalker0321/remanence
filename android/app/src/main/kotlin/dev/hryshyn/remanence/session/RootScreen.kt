@@ -36,7 +36,7 @@ import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 /**
  * I03/FIX-M1-007-10 root renderer: picks exactly one surface from the guarded
  * set. Authentication hosts login/registration slots; authenticated users
- * land on Home and can reach ONLY the Create and Scan entry points (plus the
+ * land on Home and can reach Create, Scan and outgoing metadata (plus the
  * grant-gated capsule presentation). There is deliberately no gallery,
  * inbox or feed. Outgoing history is metadata only, never capsule content.
  */

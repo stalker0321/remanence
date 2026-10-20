@@ -150,6 +150,17 @@ class HistoryScreenTest {
         rule.onNodeWithTag("history_copy_result").assertTextEquals("Could not copy the code.")
     }
 
+    @Test fun deepListSelectionStartsDetailAtTopAndBackRestoresListPosition() {
+        val rows = (1..20).map { historyItem("20000000-0000-4000-8000-" + it.toString().padStart(12, '0')) }
+        port.load = { _, _ -> HistoryResult.Loaded(OutgoingPage(rows, null)) }
+        vm.refresh(); mount()
+        rule.onNodeWithTag("history_scroll").performScrollToNode(hasTestTag("history_row_${rows.last().key}"))
+        rule.onNodeWithTag("history_row_${rows.last().key}").performClick()
+        rule.onNodeWithTag("history_status").assertIsDisplayed()
+        rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        rule.onNodeWithTag("history_row_${rows.last().key}").assertIsDisplayed()
+    }
+
     @Test
     @Config(qualifiers = "ru-w320dp-h568dp-mdpi")
     fun narrowLargeTextKeepsCodeAndCancelReachableByScroll() {

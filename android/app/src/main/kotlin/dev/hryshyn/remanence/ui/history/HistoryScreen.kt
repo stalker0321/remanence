@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,12 +43,18 @@ fun HistoryScreen(
     copyCode: (String) -> String?,
 ) {
     val selected = state.selected
-    val back = if (selected != null) onBackToList else onBack
+    val back = if (state.selectedKey != null) onBackToList else onBack
+    val listScroll = rememberLazyListState()
+    val detailScroll = rememberLazyListState()
+    LaunchedEffect(state.selectedKey) {
+        if (state.selectedKey != null) detailScroll.scrollToItem(0)
+    }
     BackHandler(onBack = if (state.confirmKey != null) onDismissCancel else back)
     Column(Modifier.fillMaxSize().background(HoldColors.Paper).testTag("history_screen")) {
         HoldFlowHeader(onBack = back, onClose = onBack, testKey = "history")
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().testTag("history_scroll"),
+            state = if (state.selectedKey != null) detailScroll else listScroll,
             contentPadding = PaddingValues(horizontal = HoldSpace.pageGutter(), vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {

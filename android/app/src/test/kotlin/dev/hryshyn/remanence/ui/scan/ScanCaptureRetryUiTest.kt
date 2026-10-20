@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
 import dev.hryshyn.remanence.capture.CapturePermissionStep
@@ -197,7 +198,7 @@ class ScanCaptureRetryUiTest {
                 "uk" -> "Сфотографуйте лицьовий бік отриманої листівки, щоб відкрити спогад."
                 else -> "Capture the picture side of the postcard you received to open the memory."
             }
-            composeRule.onNodeWithText(copy).assertIsDisplayed()
+            composeRule.onNodeWithText(copy).performScrollTo().assertIsDisplayed()
             val tree = composeRule.onRoot(useUnmergedTree = true).printToString()
             composeRule.runOnIdle {
                 val view = composeRule.activity.window.decorView
@@ -212,7 +213,7 @@ class ScanCaptureRetryUiTest {
         }
 
         fun shutter() {
-            composeRule.onNodeWithTag("capture_shutter_front").assertIsDisplayed()
+            composeRule.onNodeWithTag("capture_shutter_front").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("capture_shutter_front").performClick()
         }
 
@@ -235,7 +236,7 @@ class ScanCaptureRetryUiTest {
         shutter()
         deliver("frame-1")
 
-        composeRule.onNodeWithTag("capture_terminal_panel").assertIsDisplayed()
+        composeRule.onNodeWithTag("capture_terminal_panel").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("quality_reason_TOO_BLURRY").assertIsDisplayed()
         composeRule.onNodeWithTag("quality_failure_header").assertIsDisplayed()
         assertTrue(
@@ -245,7 +246,7 @@ class ScanCaptureRetryUiTest {
         val firstRejection = (vm.frontAttempt.phase as CaptureAttemptPhase.Rejected)
 
         // Retake -> fresh binding -> identical rejection is a NEW attempt.
-        composeRule.onNodeWithTag("capture_retake_front").performClick()
+        composeRule.onNodeWithTag("capture_retake_front").performScrollTo().performClick()
         composeRule.waitForIdle()
         assertEquals(CaptureAttemptPhase.Binding, vm.frontAttempt.phase)
         readyCamera()
@@ -257,7 +258,7 @@ class ScanCaptureRetryUiTest {
         composeRule.onNodeWithTag("quality_reason_TOO_BLURRY").assertIsDisplayed()
 
         // Processor exception -> visible Failed message + working Retake.
-        composeRule.onNodeWithTag("capture_retake_front").performClick()
+        composeRule.onNodeWithTag("capture_retake_front").performScrollTo().performClick()
         composeRule.waitForIdle()
         readyCamera()
         shutter()
@@ -267,7 +268,7 @@ class ScanCaptureRetryUiTest {
         assertTrue(vm.frontAttempt.phase is CaptureAttemptPhase.Failed)
 
         // Retry after failure is accepted: one FRONT runs matching immediately.
-        composeRule.onNodeWithTag("capture_retake_front").performClick()
+        composeRule.onNodeWithTag("capture_retake_front").performScrollTo().performClick()
         composeRule.waitForIdle()
         readyCamera()
         shutter()

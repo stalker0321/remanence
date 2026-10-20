@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -67,7 +68,7 @@ internal fun CapsulePhotoDialog(
         LaunchedEffect(inputMode) {
             // Material buttons accept keyboard focus only in keyboard mode.
             // Entering that mode is an event, not a delayed focus retry.
-            if (inputMode == InputMode.Keyboard) closeFocus.requestFocus()
+            closeFocus.requestFocus()
         }
         val previousLabel = stringResource(R.string.media_photo_previous)
         val nextLabel = stringResource(R.string.media_photo_next)
@@ -101,7 +102,8 @@ internal fun CapsulePhotoDialog(
                     modifier = Modifier.testTag("capsule_photo_next").semantics { contentDescription = nextLabel }) {
                     Text("→", Modifier.clearAndSetSemantics {}, color = HoldColors.Paper)
                 }
-                HoldTextButton(onClick = onDismiss, modifier = Modifier.focusRequester(closeFocus).testTag("capsule_photo_close")) {
+                HoldTextButton(onClick = onDismiss, modifier = Modifier.focusRequester(closeFocus)
+                    .focusProperties { canFocus = true }.testTag("capsule_photo_close")) {
                     Text(stringResource(R.string.hold_close), color = HoldColors.Paper)
                 }
             }

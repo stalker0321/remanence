@@ -81,7 +81,8 @@ fun HistoryScreen(
                 items(state.items, key = { it.key }) { entry ->
                     SettingsGroup {
                         SettingsActionRow(recipientLabel(entry),
-                            stringResource(statusCopy(entry.status)) + " · " + historyDate(entry.createdAt),
+                            stringResource(statusCopy(entry.status)) + "\n" +
+                                stringResource(R.string.history_created, historyDate(entry.createdAt)),
                             { onSelect(entry.key) }, Modifier.testTag("history_row_${entry.key}"))
                     }
                 }

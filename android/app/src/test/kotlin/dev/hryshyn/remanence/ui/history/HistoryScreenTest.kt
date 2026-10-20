@@ -42,14 +42,18 @@ class HistoryScreenTest {
     @Before fun before() { Dispatchers.setMain(dispatcher); vm.bind(HISTORY_OWNER) }
     @After fun after() { scope.cancel(); Dispatchers.resetMain() }
 
-    private fun mount() {
+    private fun mount(fontScale: Float = 1f, copy: (String) -> String? = vm::codeForCopy) {
         rule.setContent {
             root = LocalView.current.rootView
             val state by vm.state.collectAsState()
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                androidx.compose.ui.unit.Density(density.density, fontScale)) {
             HoldTheme { Surface(Modifier.fillMaxSize()) {
                 HistoryScreen(state, { exited++ }, vm::select, vm::backToList, vm::refresh, vm::loadMore,
-                    vm::canCancel, vm::requestCancel, vm::dismissCancel, vm::confirmCancel, vm::codeForCopy)
+                    vm::canCancel, vm::requestCancel, vm::dismissCancel, vm::confirmCancel, copy)
             } }
+            }
         }
     }
     private fun snapshot(name: String) {
@@ -137,6 +141,23 @@ class HistoryScreenTest {
         rule.onNodeWithTag("history_cancel_confirm").assertDoesNotExist()
         rule.onNodeWithTag("history_code").assertDoesNotExist()
         assertEquals(0, port.cancels)
+    }
+
+    @Test fun failedClipboardAdmissionNeverClaimsCopied() {
+        vm.refresh(); mount(copy = { null })
+        rule.onNodeWithTag("history_row_${historyItem().key}").performClick()
+        rule.onNodeWithTag("history_copy").performScrollTo().performClick()
+        rule.onNodeWithTag("history_copy_result").assertTextEquals("Could not copy the code.")
+    }
+
+    @Test
+    @Config(qualifiers = "ru-w320dp-h568dp-mdpi")
+    fun narrowLargeTextKeepsCodeAndCancelReachableByScroll() {
+        vm.refresh(); mount(fontScale = 1.5f)
+        rule.onNodeWithTag("history_row_${historyItem().key}").performScrollTo().performClick()
+        rule.onNodeWithTag("history_copy").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("history_cancel").performScrollTo().assertIsDisplayed()
+        snapshot("history-narrow-large-text-ru")
     }
 
     private fun visual(locale: String) {

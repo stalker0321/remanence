@@ -94,7 +94,7 @@ class OutgoingHistoryRepositoryTest {
         }
     } }
 
-    @Test fun unsupportedOfflineAndInvalidResponsesAreNeverFakeEmpty() = runTest { fixture { server, stack ->
+    @Test fun unsupportedAndInvalidResponsesAreNeverFakeEmpty() = runTest { fixture { server, stack ->
         for (status in listOf(404, 503, 500, 422)) {
             server.respond("{}", status)
             assertIs<HistoryResult.Failed>(stack.outgoingHistoryRepository.outgoing(owner))
@@ -108,6 +108,16 @@ class OutgoingHistoryRepositoryTest {
             assertEquals(HistoryFailure.INVALID_RESPONSE,
                 assertIs<HistoryResult.Failed>(stack.outgoingHistoryRepository.outgoing(owner)).reason)
         }
+    } }
+
+    @Test fun transportIoFailureIsAnErrorNotAnEmptySuccess() = runTest { fixture { server, stack ->
+        val repository = OutgoingHistoryRepository(
+            HttpClientFactory.create().newBuilder().addInterceptor { throw java.io.IOException("synthetic offline") }.build(),
+            ApiBaseUrl.parse(server.url("/").toString()), SessionRequestLeaseProvider(stack.sessionRefreshCoordinator),
+            stack.capsuleRevokeRepository)
+        assertEquals(HistoryFailure.NETWORK, assertIs<HistoryResult.Failed>(repository.outgoing(owner)).reason)
+        assertEquals(HistoryFailure.NETWORK, assertIs<HistoryResult.Failed>(repository.recent(owner)).reason)
+        assertEquals(0, server.requestCount)
     } }
 
     @Test fun recentUsesFreshPublicSuggestionsAndRejectsSelfDuplicateOrBadHandle() = runTest { fixture { server, stack ->

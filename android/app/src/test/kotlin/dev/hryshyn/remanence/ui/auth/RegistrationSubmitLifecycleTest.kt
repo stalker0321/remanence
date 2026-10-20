@@ -256,4 +256,22 @@ class RegistrationSubmitLifecycleTest {
         composeRule.waitForIdle()
         assertEquals(2, api.calls)
     }
+
+    @Test
+    fun retainedUnfinishedFormSurvivesCompositionRestorationWithoutSubmitting() {
+        val api = ScriptedRegistrationApi(ArrayDeque(listOf(ok201())))
+        val vm = validViewModel(api)
+        val input = vm.form.value
+        val restoration = androidx.compose.ui.test.junit4.StateRestorationTester(composeRule)
+        restoration.setContent {
+            val form by vm.form.collectAsState()
+            val state by vm.submitState.collectAsState()
+            MaterialTheme { RegistrationFormScreen(form, state, vm::onFieldChange, vm::submit) }
+        }
+        restoration.emulateSavedInstanceStateRestore()
+        composeRule.onNodeWithTag("reg_submit_button").assertIsEnabled()
+        assertEquals(input, vm.form.value)
+        assertEquals(RegistrationSubmitState.Idle, vm.submitState.value)
+        assertEquals(0, api.calls)
+    }
 }

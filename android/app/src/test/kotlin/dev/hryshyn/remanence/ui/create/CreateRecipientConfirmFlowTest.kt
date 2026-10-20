@@ -186,6 +186,8 @@ class CreateRecipientConfirmFlowTest {
     }
 
     @Test
+    @Config(qualifiers = "w390dp-h844dp-mdpi")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
     fun recentSuggestionRunsFreshLookupThenExistingExplicitConfirmation() {
         val calls = mutableListOf<String>()
         val owner = selfSnapshot.userId.toRestString()
@@ -197,8 +199,10 @@ class CreateRecipientConfirmFlowTest {
         val recent = dev.hryshyn.remanence.ui.history.RecentUiState(owner = owner, loaded = true,
             items = listOf(dev.hryshyn.remanence.core.data.network.RecentRecipient(
                 otherSnapshot.userId.toRestString(), "friend", "2026-10-20T10:01:00Z")))
+        lateinit var view: android.view.View
         composeRule.setContent {
-            MaterialTheme {
+            view = LocalView.current.rootView
+            HoldTheme {
                 CreateScreen(vm, recentRecipientsContent = {
                     dev.hryshyn.remanence.ui.history.RecentRecipients(recent, true, {}, { id ->
                         val suggestion = recent.items.single { it.userId == id }
@@ -208,6 +212,19 @@ class CreateRecipientConfirmFlowTest {
                 })
             }
         }
+        fun capture(name: String) {
+            composeRule.waitForIdle()
+            composeRule.runOnIdle {
+                val bitmap = android.graphics.Bitmap.createBitmap(view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888)
+                try {
+                    view.draw(android.graphics.Canvas(bitmap))
+                    File("build/t369-review").apply { mkdirs() }.resolve("$name.png").outputStream().use {
+                        assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it))
+                    }
+                } finally { bitmap.recycle() }
+            }
+        }
+        capture("recent-lookup-en")
         composeRule.onNodeWithTag("recent_${otherSnapshot.userId.toRestString()}").performScrollTo().performClick()
         composeRule.waitUntil(10_000) { vm.pendingRecipient.value != null }
         composeRule.waitForIdle()
@@ -215,7 +232,8 @@ class CreateRecipientConfirmFlowTest {
         assertNull(vm.confirmedRecipient.value)
         File("build/t369-review").apply { mkdirs() }.resolve("recent-confirm-semantics.txt")
             .writeText(composeRule.onNodeWithTag("create_screen_scroll").printToString())
-        composeRule.onNodeWithTag("confirm_handle_text").assertIsDisplayed()
+        composeRule.onNodeWithTag("confirm_handle_text", useUnmergedTree = true).assertIsDisplayed()
+        capture("recent-confirm-en")
         composeRule.onNodeWithTag("confirm_button").performClick()
         composeRule.runOnIdle {
             assertEquals(otherSnapshot, vm.confirmedRecipient.value)

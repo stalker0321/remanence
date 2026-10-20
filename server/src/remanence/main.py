@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from remanence.api.auth import router as auth_router
 from remanence.api.google_auth import router as google_auth_router
+from remanence.api.registration_setup import router as registration_setup_router, RegistrationNoStoreMiddleware
 from remanence.api.dependencies import (
     AuthenticationRequiredError,
     DatabaseUnavailableError,
@@ -190,6 +191,7 @@ def create_app(
     app.state.telemetry_ingress = telemetry
     app.add_middleware(RequestIdMiddleware, telemetry_app=telemetry)
     app.add_middleware(HistoryPrivacyMiddleware)
+    app.add_middleware(RegistrationNoStoreMiddleware)
     app.state.settings = resolved
     app.state.upload_reservations = (
         upload_reservations if upload_reservations is not None else build_upload_reservation_manager()
@@ -205,6 +207,8 @@ def create_app(
 
     @app.exception_handler(DatabaseUnavailableError)
     def _database_unavailable(request: Request, exc: DatabaseUnavailableError) -> JSONResponse:
+        if request.url.path.startswith("/v2/registration/"):
+            return JSONResponse({"reason": "SETUP_UNAVAILABLE"}, status_code=503, headers={"Cache-Control": "no-store"})
         return problem_response(request, "INTERNAL_UNAVAILABLE")
 
     @app.exception_handler(AuthenticationRequiredError)
@@ -235,6 +239,8 @@ def create_app(
 
     @app.exception_handler(Exception)
     def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+        if request.url.path.startswith("/v2/registration/"):
+            return JSONResponse({"reason": "SETUP_UNAVAILABLE"}, status_code=503, headers={"Cache-Control": "no-store"})
         # Starlette's outer ServerErrorMiddleware may see a failed ASGI send.
         # Even that fallback must not allocate/echo a normal request identifier.
         if reserved_path(request.scope.get("path", "")):
@@ -245,6 +251,7 @@ def create_app(
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(google_auth_router)
+    app.include_router(registration_setup_router)
     app.include_router(users_router)
     app.include_router(send_access_router)
     app.include_router(directory_router)

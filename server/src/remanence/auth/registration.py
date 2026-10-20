@@ -49,6 +49,7 @@ class RegistrationService:
         encryption_public_keyset: bytes,
         signing_public_keyset: bytes,
         now: datetime,
+        reserved_user_id: uuid.UUID | None = None,
     ) -> RegistrationResult:
         if now.tzinfo is None or now.utcoffset() != timezone.utc.utcoffset(now):
             raise ValueError("invalid timestamp")
@@ -66,7 +67,11 @@ class RegistrationService:
             signing_public_keyset=signing_public_keyset,
         )
 
-        user_id = uuid.uuid4()
+        # Server-controlled reservation only; no public registration DTO exposes
+        # this parameter. Caller owns the surrounding permanent transaction.
+        if reserved_user_id is not None and not isinstance(reserved_user_id, uuid.UUID):
+            raise ValueError("invalid reserved UUID")
+        user_id = reserved_user_id if reserved_user_id is not None else uuid.uuid4()
         user = User(
             id=user_id,
             email_normalized=email_normalized,

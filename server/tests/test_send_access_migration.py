@@ -107,7 +107,7 @@ def test_populated_upgrade_preserves_all_old_source_bytes_and_nulls(populated_up
 def test_empty_upgrade_named_constraints_and_orm_match(session_factory):
     with session_factory() as session:
         inspector = inspect(session.connection())
-        assert session.scalar(text("SELECT version_num FROM alembic_version")) == "0017_send_access"
+        assert session.scalar(text("SELECT version_num FROM alembic_version")) == "0018_atomic_registration"
         for model in (AccountSendAccess, SendPublication):
             table = model.__table__
             assert {column["name"] for column in inspector.get_columns(table.name)} == set(table.c.keys())

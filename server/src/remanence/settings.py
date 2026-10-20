@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     recovery_enabled: bool = False
     send_access_mode: SendAccessMode = SendAccessMode.OFF
     google_sign_in_enabled: bool = False
+    # Atomic registration A: isolated opt-in; admission and durable legacy fence
+    # are separate so stopping new setups never disables existing recovery.
+    registration_atomic_required: bool = False
+    registration_atomic_admission_enabled: bool = False
+    registration_reservation_ttl_seconds: int = Field(default=86400, gt=0, le=604800)
+    registration_setup_ttl_seconds: int = Field(default=600, gt=0, le=3600)
+    registration_ceremony_ttl_seconds: int = Field(default=300, gt=0, le=900)
+    registration_receipt_ttl_seconds: int = Field(default=2592000, gt=0, le=7776000)
     google_client_ids: list[str] = Field(default_factory=list)
     google_presenter_ids: list[str] = Field(default_factory=list)
     recovery_rp_id: str = "remanence.hryshyn.dev"
@@ -82,6 +90,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def require_datastore_for_non_test(self) -> Self:
+        if self.registration_atomic_required or self.registration_atomic_admission_enabled:
+            if self.mode not in (AppMode.TEST, AppMode.DEV) or not self.google_sign_in_enabled or not self.recovery_enabled:
+                raise ValueError("atomic registration requires explicit DEV/TEST Google recovery")
+        if self.registration_atomic_admission_enabled and not self.registration_atomic_required:
+            raise ValueError("atomic admission requires the legacy safety fence")
         if self.send_access_mode is SendAccessMode.ENFORCE and self.mode is not AppMode.TEST:
             raise ValueError("send access enforcement is synthetic-test only")
         if self.music_search_backend is MusicSearchBackend.FULL_CATALOG:

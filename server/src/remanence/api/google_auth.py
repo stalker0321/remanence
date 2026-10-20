@@ -24,6 +24,8 @@ from remanence.auth.session_rotation import ACCESS_TTL, REFRESH_TTL
 from remanence.auth.tokens import generate_access_token, generate_refresh_token, hash_opaque_token
 from remanence.users.models import User
 from remanence.users.handles import normalize_handle
+from remanence.registration_setup.service import AtomicRegistration, SetupFailure, required_policy, lock_subject
+from remanence.settings import AppMode
 
 
 def enabled(request: Request, response: Response):
@@ -47,6 +49,14 @@ class GoogleProof(Strict):
     flow: uuid.UUID
     nonce: str = Field(min_length=43, max_length=43)
     id_token: SecretStr = Field(repr=False)
+    onboarding_version: int | None = None
+
+    @field_validator("onboarding_version", mode="before")
+    @classmethod
+    def onboarding(cls, value):
+        if type(value) is not int or value != 1:
+            raise ValueError("unsupported onboarding version")
+        return value
 
     @field_validator("id_token")
     @classmethod
@@ -139,15 +149,20 @@ def options(payload: Empty, request: Request, db: Session = Depends(get_db_sessi
 
 @router.post("/v1/auth/google/verify")
 def verify(payload: GoogleProof, request: Request, db: Session = Depends(get_db_session)):
+    if payload.onboarding_version is not None and request.app.state.settings.mode not in (AppMode.TEST, AppMode.DEV):
+        raise HTTPException(404)
     burned = False
+    policy = False
     try:
         from remanence.pending.profiles import client_profile_version
 
         capability = client_profile_version(request.headers)
+        policy = required_policy(db, request.app.state.settings)
         row = pending(db, payload.flow, "AUTH", payload.nonce)
         row.consumed_at = datetime.now(timezone.utc); db.flush(); burned = True
         with db.begin_nested():
             proof = verify_google_token(payload.id_token.get_secret_value(), payload.nonce, request.app.state.settings)
+            lock_subject(db, proof["subject"])
             identity = db.get(GoogleIdentity, proof["subject"])
             if identity:
                 user = db.scalar(select(User).where(User.id == identity.user_id).with_for_update())
@@ -155,25 +170,40 @@ def verify(payload: GoogleProof, request: Request, db: Session = Depends(get_db_
             elif db.scalar(select(User.id).where(User.email_normalized == proof["email"])):
                 # No implicit linking, including non-Gmail addresses controlled elsewhere.
                 result = fail("EXISTING_ACCOUNT_REQUIRES_LINK", 409)
+            elif payload.onboarding_version == 1:
+                engine = AtomicRegistration(db, request.app.state.settings,
+                    getattr(request.app.state, "registration_clock", lambda: datetime.now(timezone.utc)))
+                result = engine.reserve_verified(proof["subject"], proof["email"])
+            elif policy:
+                result = fail("CLIENT_UPGRADE_REQUIRED", 426)
             else:
                 token = b64(secrets.token_bytes(32))
                 registration = fresh(db, "REGISTER", token, proof["subject"], proof["email"])
                 result = {"status": "NEEDS_HANDLE", "flow": str(registration.id), "registration_token": token}
         db.commit(); return result
     except ProfileUpgradeRequired:
-        db.rollback()
+        if burned or policy: db.commit()
+        else: db.rollback()
         return JSONResponse({"reason": "CLIENT_UPGRADE_REQUIRED"}, status_code=426,
                             headers={"Cache-Control": "no-store"})
+    except SetupFailure as error:
+        if burned or policy: db.commit()
+        else: db.rollback()
+        return fail(error.reason, error.status)
     except Exception:
-        if burned: db.commit()
+        if burned or policy: db.commit()
         else: db.rollback()
         return fail()
 
 
 @router.post("/v1/auth/google/register")
-def register(payload: GoogleRegistration, db: Session = Depends(get_db_session)):
+def register(payload: GoogleRegistration, request: Request, db: Session = Depends(get_db_session)):
     try:
+        if required_policy(db, request.app.state.settings):
+            db.commit()
+            return fail("CLIENT_UPGRADE_REQUIRED", 426)
         row = pending(db, payload.flow, "REGISTER", payload.registration_token.get_secret_value())
+        lock_subject(db, row.subject)
         if db.get(GoogleIdentity, row.subject): raise ValueError("already registered")
         bundle = payload.key_bundle
         result = RegistrationService(db, PasswordService()).register(email_normalized=row.email, password=None,

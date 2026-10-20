@@ -17,6 +17,7 @@ from remanence.users.key_models import UserKeyBundle as _UserKeyBundle
 from remanence.users.models import User as _User
 from remanence.users.safety_models import UserBlock, SafetyReport, TermsAcceptance
 from remanence.recovery.models import RecoveryCredential, RecoveryRecord, RecoveryChallenge
+from remanence.registration_setup.models import RegistrationPolicy, RegistrationReservation, RegistrationCredential, RegistrationChallenge
 from remanence.telemetry.models import AnonymousTelemetryReport
 from remanence.pending.claim_models import PendingDelivery
 from remanence.pending.models import PendingSendRoute, GiftLocator

@@ -27,6 +27,7 @@ try {
     check(`${language} gated without handle/private registration`, (await state()).phase === 'signed-out' && await page.locator('input').count() === 0)
     for (const width of [320, 1280]) { await page.setViewportSize({ width, height: 900 }); await shot(`gate-${language}-${width}`) }
     await (await button('cancelRegistration', language)).click()
+    check(`${language} gate dismissal returns focus`, await (await button('continueGoogle', language)).evaluate((el) => el === document.activeElement))
   }
   check('no registration or recovery write from gate', await page.evaluate(() => !window.journey.calls.some((p) => /register|recovery/.test(p))))
   await call('language', 'en'); await call('mode', 'existing'); await sign()

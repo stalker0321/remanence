@@ -469,7 +469,8 @@ async function main(): Promise<void> {
       window.location.hash = '#/scan'
       const host = document.createElement('div')
       host.setAttribute('data-testid', 'app-host')
-      host.className = 'shell'
+      // App owns the shell; a second shell distorts responsive proof and leaves
+      // padded empty hosts behind after sequential fixture visits.
       document.body.appendChild(host)
       rootRef.current = createRoot(host)
       rootRef.current.render(

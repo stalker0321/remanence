@@ -435,7 +435,7 @@ export function Scan({
   return (
     <section className="card">
       <h1>{t('scanTitle')}</h1>
-      <p>{t('scanWaiting')}</p>
+      {!live ? <p>{t('scanWaiting')}</p> : null}
       <div ref={host} />
       {held ? <p>{t('cameraHeld')}</p> : null}
       {working ? <p role="status">{t(openStatus)}</p> : null}
@@ -1405,7 +1405,9 @@ function Account({
               void run(async (signal) => {
                 const outcome = await continueWithGoogle(store, transport, google, signal, draft)
                 if (!signal.aborted) setChoosing(outcome.kind === 'needs-handle')
-                return explainGoogle(outcome)
+                // The inline gate is a live status; do not repeat its long copy
+                // in the global alert below the whole account card.
+                return outcome.kind === 'needs-handle' ? null : explainGoogle(outcome)
               })
             }}
           >
@@ -1469,13 +1471,13 @@ function Account({
       {recoveryCode ? <p className="recovery-code">{t('recoveryCodeHint')} {recoveryCode}</p> : null}
       {choosing && !signedIn ? (
         <div className="handle-form">
-          <p>{t('registrationPaused')}</p>
+          <p role="status">{t('registrationPaused')}</p>
           <div className="actions">
             <button
               type="button"
               disabled={busy}
               onClick={() => {
-                abort.current?.abort()
+                cancel()
                 draft.wipe()
                 setChoosing(false)
                 onNotice('errorRegion')

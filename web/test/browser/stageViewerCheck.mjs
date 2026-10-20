@@ -222,7 +222,12 @@ try {
 
     await trustedClick(".viewer-actions button:nth-of-type(2)")
     await trustedClick(".viewer-actions button:nth-of-type(1)")
-    check("focused previous becomes disabled at the first original", await page.evaluate(() => document.activeElement?.textContent?.trim()) === "previous" && await page.evaluate(() => (document.activeElement instanceof HTMLButtonElement) && document.activeElement.disabled))
+    const boundaryFocus = await page.evaluate(() => ({
+      active: document.activeElement?.outerHTML ?? null,
+      previousDisabled: document.querySelector(".viewer-actions button:nth-of-type(1)")?.disabled === true,
+    }))
+    check("previous is disabled at the first original", boundaryFocus.previousDisabled, JSON.stringify(boundaryFocus))
+    check("focused previous becomes disabled at the first original", boundaryFocus.active?.includes("disabled") === true && boundaryFocus.active?.includes("previous") === true, JSON.stringify(boundaryFocus))
     await page.keyboard.press("Shift+Tab")
     check("Shift+Tab from a newly disabled focused previous stays in the modal", await page.evaluate(() => document.querySelector(".viewer")?.contains(document.activeElement) === true))
     check("background App-like control never receives focus", await page.evaluate(() => document.activeElement?.id !== "background-account"))

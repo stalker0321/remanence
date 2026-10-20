@@ -1,6 +1,7 @@
 import type { Language, MessageKey } from '../i18n/catalog'
 import { href } from '../router/route'
 import { LanguageMenu } from './LanguageMenu'
+import { ShellStatus } from '../pwa/ShellStatus'
 import './settings.css'
 
 export interface SettingsProps {
@@ -46,6 +47,7 @@ export function Settings({ t, language, onSelectLanguage, handle, signedIn, sess
         <h2>{t('language')}</h2>
         <LanguageMenu language={language} onSelect={onSelectLanguage} t={t} />
       </section>
+      <ShellStatus t={t} details />
       <div className="actions">
         <a href={href('home')}>{t('back')}</a>
       </div>

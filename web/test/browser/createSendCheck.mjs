@@ -14,7 +14,8 @@ import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:http'
 import { existsSync } from 'node:fs'
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { pathToFileURL } from 'node:url'
 import { extname, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -64,6 +65,22 @@ await cp(vendor, join(dist, 'opencv'), { recursive: true })
 const fontsDir = join(web, 'public', 'fonts')
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.otf': 'font/otf', '.wasm': 'application/wasm' }
 const captured = { drafts: [], uploads: [], finalizes: [] }
+const pwaProof = process.env.T359_PWA_SEND === '1'
+let shellVersion = 1
+let shell = null
+let shellFiles
+let shellArtifacts
+if (pwaProof) {
+  ;({ shellArtifacts } = await import(pathToFileURL(join(web, 'tools/static-shell.mjs'))))
+  shellFiles = new Map([['index.html', await readFile(join(dist, 'index.html'))]])
+  for (const name of await readdir(join(dist, 'assets'))) {
+    if (/\.(js|css)$/.test(name)) shellFiles.set(`assets/${name}`, await readFile(join(dist, 'assets', name)))
+  }
+  for (const name of await readdir(fontsDir)) {
+    if (name.endsWith('.otf')) shellFiles.set(`fonts/${name}`, await readFile(join(fontsDir, name)))
+  }
+  shell = shellArtifacts('/', shellFiles)
+}
 let mode = 'ok'
 let releaseHeld = false
 let heldFinalize = null
@@ -76,6 +93,26 @@ const server = createServer((req, res) => {
   req.on('end', async () => {
     try {
       const body = Buffer.concat(chunks)
+      if (pwaProof && req.method === 'POST' && url.pathname === '/__shell-version') {
+        shellVersion++
+        const next = new Map(shellFiles)
+        next.set('index.html', Buffer.from(String(shellFiles.get('index.html')) + `<!-- fixture shell ${shellVersion} -->`))
+        shell = shellArtifacts('/', next)
+        res.writeHead(200, json).end('{}')
+        return
+      }
+      if (pwaProof && req.method === 'GET' && url.pathname === '/shell-bootstrap') {
+        res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>isolated shell bootstrap</title>')
+        return
+      }
+      if (pwaProof && req.method === 'GET' && url.pathname === '/sw.js') {
+        res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }).end(shell.worker)
+        return
+      }
+      if (pwaProof && req.method === 'GET' && url.pathname === '/index.html' && shellVersion > 1) {
+        res.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' }).end(String(shellFiles.get('index.html')) + `<!-- fixture shell ${shellVersion} -->`)
+        return
+      }
       if (req.method === 'GET' && url.pathname === '/__capture') {
         res.writeHead(200, json).end(JSON.stringify(captured))
         return
@@ -191,13 +228,42 @@ try {
         await route.abort()
       }
     })
-    await page.goto('http://127.0.0.1:4187/index.html')
+    if (pwaProof) {
+      await page.goto('http://127.0.0.1:4187/shell-bootstrap')
+      await page.evaluate(async () => {
+        await navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' })
+        await navigator.serviceWorker.ready
+      })
+    }
+    await page.goto(`http://127.0.0.1:4187/index.html${pwaProof ? '?pwa=1' : ''}`)
+    let extraLoads = 0
+    page.on('load', () => extraLoads++)
+    if (pwaProof) {
+      for (const stage of ['draft', 'sending']) {
+        await page.waitForFunction((stage) => window.__pwaCapture === stage, stage, { timeout: 180000 })
+        await page.screenshot({ path: join(outDir, `waiting-${stage}.png`), fullPage: true })
+        await writeFile(join(outDir, `waiting-${stage}.html`), await page.content())
+        await page.evaluate(() => { window.__pwaContinue = true })
+      }
+    }
     await page.waitForFunction(() => {
       const status = document.querySelector('#create-send-status')?.textContent
       return status === 'done' || status === 'failed'
     }, undefined, { timeout: 1200000 })
     const status = await page.textContent('#create-send-status')
     const result = await page.evaluate(() => window.__createSend)
+    if (pwaProof) {
+      report.pwa = await page.evaluate(async () => ({
+        waiting: Boolean((await navigator.serviceWorker.getRegistration('/')).waiting),
+        caches: await Promise.all((await caches.keys()).map(async (name) => ({
+          name, paths: (await (await caches.open(name)).keys()).map((r) => new URL(r.url).pathname),
+        }))),
+      }))
+      report.pwa.extraLoads = extraLoads
+      assert.equal(extraLoads, 0, 'no reload during actual draft/send')
+      assert.equal(report.pwa.waiting, true, 'updates still wait after actual send scenarios')
+      assert.equal(report.pwa.caches.some((c) => c.paths.some((path) => path.startsWith('/v1/') || path.startsWith('/__'))), false, 'real publication responses never cached')
+    }
     report.pages['index'] = { status, assertions: result?.assertions ?? [], failures: result?.failures ?? [], report: result?.report ?? null }
     await page.close()
 

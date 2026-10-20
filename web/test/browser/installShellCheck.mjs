@@ -42,9 +42,8 @@ report.builds.prefix = { status: prefixBuild.status, log: (prefixBuild.stdout ??
 assert.equal(rootBuild.status, 0, report.builds.root.log)
 assert.equal(prefixBuild.status, 0, report.builds.prefix.log)
 
-// Build the assertion entry as a separate ES module into each production dist,
-// then inject it into the REAL built index.html. The app's production document
-// (manifest/theme/favicon/boot/app bundle) remains the page under test.
+// Build the assertion entry separately; inject it from Playwright only AFTER
+// loading the byte-exact production document. SW install must see that document.
 const testEntry = join(web, 'test/browser/installShell.page.tsx')
 async function buildTest(base, out, name) {
   const config = join(work, `${name}.config.mjs`)
@@ -58,17 +57,8 @@ async function buildTest(base, out, name) {
 }
 await buildTest('/', rootOut, 'test-root')
 await buildTest('/test-prefix/', prefixOut, 'test-prefix')
-const rootHtml = (await readFile(join(rootOut, 'index.html'), 'utf8')).replace(
-  '</body>',
-  '<script type="module" src="/install-shell.js"></script></body>',
-)
-const prefixHtml = (await readFile(join(prefixOut, 'index.html'), 'utf8')).replace(
-  '</body>',
-  '<script type="module" src="/test-prefix/install-shell.js"></script></body>',
-)
-report.injected = { root: rootHtml.includes('src="/install-shell.js"'), prefix: prefixHtml.includes('src="/test-prefix/install-shell.js"') }
-assert.equal(report.injected.root, true)
-assert.equal(report.injected.prefix, true)
+const rootHtml = await readFile(join(rootOut, 'index.html'), 'utf8')
+const prefixHtml = await readFile(join(prefixOut, 'index.html'), 'utf8')
 
 const executable = '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
 assert.ok(existsSync(executable), 'pinned chromium missing')
@@ -139,6 +129,7 @@ try {
       page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()) })
       try {
         await page.goto(url)
+        await page.addScriptTag({ type: 'module', url: `${path}install-shell.js` })
         await page.waitForFunction(() => {
           const status = document.querySelector('#install-shell-status')?.textContent
           return status === 'done' || status === 'failed'

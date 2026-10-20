@@ -36,6 +36,8 @@ import hpkeVector from '../../../protocol/fixtures/recipient-envelope-v1.json'
 import signatureVector from '../../../protocol/fixtures/publish-signature-v1.json'
 import { keysetFromJson, type JsonKeyset } from '../keysetJson'
 import '../../src/design/tokens.css'
+import { startShell, shellStore } from '../../src/pwa/shell'
+import { ShellStatus } from '../../src/pwa/ShellStatus'
 
 interface CheckResult { name: string; ok: boolean; detail?: string }
 const assertions: CheckResult[] = []
@@ -392,6 +394,32 @@ async function readyVisit(h: Harness, files: File[], seed: number): Promise<Uint
 let quadRef: Uint8Array = new Uint8Array()
 function setQuad(bytes: Uint8Array): void { quadRef = bytes }
 
+const pwaProof = new URLSearchParams(location.search).has('pwa')
+async function updateWhileHeld(h: Harness, stage: string): Promise<void> {
+  if (!pwaProof) return
+  const controller = navigator.serviceWorker.controller
+  const registration = await navigator.serviceWorker.getRegistration('/')
+  if (!registration || !controller) throw new Error('fixture is not controlled')
+  const beforeWaiting = registration.waiting
+  const note = h.notes.accepted()
+  const photos = h.photos.photos()
+  const host = document.querySelector('[data-testid="create-host"]')
+  await fetch('/__shell-version', { method: 'POST' })
+  await registration.update()
+  await waitFor(() => registration.waiting !== null && registration.waiting !== beforeWaiting, `waiting update during ${stage}`)
+  await waitFor(() => shellStore.getSnapshot().waiting, 'real shell store update notice')
+  assert(`${stage}: worker remains waiting without replacing controller`, navigator.serviceWorker.controller === controller)
+  assert(`${stage}: mounted Create and in-memory draft survive update`,
+    document.querySelector('[data-testid="create-host"]') === host &&
+    h.notes.accepted() === note && h.photos.photos().every((photo, i) => photo === photos[i]))
+  if (stage === 'sending') assert('sending: real request remains pending across update', byTest('send_state')?.textContent === t('sendWorking'))
+  // The runner records the actual composed screen before allowing continuation.
+  const bridge = window as unknown as { __pwaCapture?: string; __pwaContinue?: boolean }
+  bridge.__pwaCapture = stage
+  bridge.__pwaContinue = false
+  await waitFor(() => bridge.__pwaContinue === true, 'runner screen capture')
+}
+
 async function main(): Promise<void> {
   const status = document.createElement('p')
   status.id = 'create-send-status'
@@ -399,6 +427,13 @@ async function main(): Promise<void> {
   document.body.appendChild(status)
   const report: Record<string, unknown> = { roundTrip: {}, freezeTimelines }
   try {
+    if (pwaProof) {
+      startShell('/')
+      const shellHost = document.createElement('div')
+      shellHost.className = 'shell'
+      document.body.appendChild(shellHost)
+      createRoot(shellHost).render(<ShellStatus t={t} details={false} />)
+    }
     const files = [
       await gradientJpeg(800, 600, 40),
       await gradientJpeg(600, 800, 90),
@@ -411,6 +446,7 @@ async function main(): Promise<void> {
     h.create()
     const normalizedPhotos = await readyVisit(h, files, 7)
     assert('send button visible and armed only after freeze+front', byTest('send_button') !== null && !(byTest('send_button') as HTMLButtonElement).disabled)
+    await updateWhileHeld(h, 'draft')
     const before = await capture()
     const draftCountBefore = before.drafts.length
     await clickText(t('sendAction'), 'sendAction')
@@ -527,6 +563,7 @@ async function main(): Promise<void> {
         await new Promise((resolve) => setTimeout(resolve, 250))
       }
     }
+    await updateWhileHeld(h4, 'sending')
     h4.session.lock()
     await releaseFinalize()
     await new Promise((resolve) => setTimeout(resolve, 2500))

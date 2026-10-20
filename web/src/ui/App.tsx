@@ -15,6 +15,7 @@ import { writeLanguage, type PreferencePort } from '../preferences/language'
 import { href, parseRoute, type RouteName } from '../router/route'
 import { LanguageMenu } from './LanguageMenu'
 import { Settings } from './Settings'
+import { ShellStatus } from '../pwa/ShellStatus'
 import { CollageStage } from '../collage/stage'
 import type { PresentationMemory } from '../collage/memory'
 import { browserCamera, type CameraPort, type CameraSession, type StillCapture } from '../scan/camera'
@@ -106,6 +107,7 @@ export function App({
         <p className="mark">remanence</p>
         <LanguageMenu language={view.language} onSelect={chooseLanguage} t={t} />
       </div>
+      <ShellStatus t={t} details={false} />
       {route === 'home' ? <Home t={t} /> : null}
       {route === 'scan' ? (
         <Scan

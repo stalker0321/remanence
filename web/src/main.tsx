@@ -9,6 +9,7 @@ import { RecipientDraft } from './create/recipient'
 import { readLanguage, type PreferencePort } from './preferences/language'
 import { SessionStore } from './session/session'
 import { App } from './ui/App'
+import { startShell } from './pwa/shell'
 import './design/tokens.css'
 
 const preferences: PreferencePort = {
@@ -35,6 +36,7 @@ music.attach(store)
 
 const root = document.getElementById('root')
 if (!root) throw new Error('ROOT_MISSING')
+if (import.meta.env.PROD) startShell(import.meta.env.BASE_URL)
 
 createRoot(root).render(
   <StrictMode>

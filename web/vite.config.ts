@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
+import { staticShell } from './tools/static-shell.mjs'
 
 const staticBase =
   (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.REMANENCE_STATIC_BASE ?? '/'
@@ -10,7 +11,7 @@ export default defineConfig({
   plugins: [react(), {
     name: 'remanence-static-base',
     configResolved(config) { resolvedStaticBase = config.base },
-  }],
+  }, staticShell()],
   // Public assets (fonts/boot/etc.) are referenced with root-absolute URLs.
   // Prefix them with the selected static base at build time; hashed assets and
   // import.meta.env.BASE_URL keep their normal Vite behavior.

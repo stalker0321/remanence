@@ -8,6 +8,7 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.test.TestCoroutineScheduler
 
 /** Test-owned Android VM lifetime, including cancellation-delayed children. */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 internal class CreateTestViewModels(private val scheduler: TestCoroutineScheduler) {
     private val store = ViewModelStore()
     private val jobs = mutableListOf<Job>()

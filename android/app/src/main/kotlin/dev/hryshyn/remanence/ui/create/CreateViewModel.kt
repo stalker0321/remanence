@@ -1378,6 +1378,12 @@ class CreateViewModel(
         capsuleId: String,
     ) {
         if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
+        val localQueueFailure = _uploadStatus.value == CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
+        // ENCRYPTED proves durable recovery material, not scheduler admission.
+        // Room may deliver this older staging projection after enqueue refused.
+        // Keep the local failure until explicit retry or actual worker progress.
+        if (localQueueFailure && (status == null || status.state == OutboxCapsuleState.PREPARING ||
+                status.state == OutboxCapsuleState.ENCRYPTED)) return
         val mapped = when (status?.state) {
             null -> CreateUploadStatus.NotStarted
             OutboxCapsuleState.PREPARING,
@@ -1392,6 +1398,7 @@ class CreateViewModel(
             OutboxCapsuleState.PUBLISHED -> CreateUploadStatus.Published
         }
         if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
+        if (localQueueFailure) _publishError.value = null
         _uploadStatus.value = mapped
         if (_step.value == Step.UPLOAD_PENDING || _step.value == Step.PUBLISHED) {
             if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
@@ -1401,6 +1408,13 @@ class CreateViewModel(
                 Step.UPLOAD_PENDING
             }
         }
+    }
+
+    private fun CreateUploadStatus.hasOutboxProgress(): Boolean = when (this) {
+        CreateUploadStatus.NotStarted -> false
+        is CreateUploadStatus.Pending -> state != OutboxCapsuleState.PREPARING && state != OutboxCapsuleState.ENCRYPTED
+        is CreateUploadStatus.RetryableFailure -> errorCode != "QUEUE_FAILED"
+        is CreateUploadStatus.TerminalFailure, CreateUploadStatus.Published -> true
     }
 
     private fun outboxObservationStillCurrent(
@@ -2694,8 +2708,11 @@ class CreateViewModel(
                     // Ciphertext is already durably staged. Never send the
                     // user through sealing again (stage rejects replay).
                     if (!isPublishCurrent(generation)) return
-                    if (_uploadStatus.value is CreateUploadStatus.Published) {
-                        _step.value = Step.PUBLISHED
+                    // An already-running worker can make progress before a
+                    // refused/lost scheduler ACK. Its state wins in either order.
+                    if (_uploadStatus.value.hasOutboxProgress()) {
+                        _step.value = if (_uploadStatus.value is CreateUploadStatus.Published)
+                            Step.PUBLISHED else Step.UPLOAD_PENDING
                         return
                     }
                     _uploadStatus.value = CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
@@ -2866,6 +2883,7 @@ class CreateViewModel(
         val dao = outboxCapsuleDao ?: return
         _uploadRetrying.value = true
         uploadRetryJob = viewModelScope.launch {
+            var statusBeforeEnqueue: CreateUploadStatus? = null
             try {
                 val row = dao.getByCapsuleIdAndOwner(capsule, owner.toRestString()) ?: return@launch
                 if (!outboxObservationStillCurrent(generation, owner, capsule)) return@launch
@@ -2877,6 +2895,7 @@ class CreateViewModel(
                 if (liveOwner != owner.toRestString() ||
                     !outboxObservationStillCurrent(generation, owner, capsule)) return@launch
                 val expectedStatus = _uploadStatus.value
+                statusBeforeEnqueue = expectedStatus
                 enqueueUpload(owner, CapsuleId.parseRest(capsule))
                 if (outboxObservationStillCurrent(generation, owner, capsule)) {
                     _publishError.value = null
@@ -2891,7 +2910,12 @@ class CreateViewModel(
             } catch (_: Exception) {
                 if (outboxObservationStillCurrent(generation, owner, capsule) &&
                     _step.value == Step.UPLOAD_PENDING && _uploadStatus.value !is CreateUploadStatus.Published) {
-                    _uploadStatus.value = CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
+                    // Do not overwrite a worker observation delivered during
+                    // this attempt; an unchanged prior failure is still retryable.
+                    if (_uploadStatus.value == statusBeforeEnqueue || !_uploadStatus.value.hasOutboxProgress()) {
+                        _uploadStatus.value = CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
+                        _publishError.value = "upload could not be queued; retry available"
+                    }
                 }
             } finally {
                 if (generation == createSessionGeneration) _uploadRetrying.value = false

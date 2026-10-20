@@ -114,16 +114,11 @@ class CreateComposeFlowTest {
 
     @After
     fun tearDown() {
-        try {
-            // RED: the original fixture reset Main without retiring its VMs.
-            assertTrue("owned VM work must complete BEFORE resetMain", ownedViewModels.allCompleted)
-        } finally {
-            // Bound the RED run itself: never leak work into the next test.
-            runBlocking { withTimeout(10_000) { ownedViewModels.clearAndJoin() } }
-            Dispatchers.resetMain()
-            if (::database.isInitialized) database.close()
-            stagingDir.deleteRecursively()
-        }
+        runBlocking { withTimeout(10_000) { ownedViewModels.clearAndJoin() } }
+        assertTrue("owned VM work must complete BEFORE resetMain", ownedViewModels.allCompleted)
+        Dispatchers.resetMain()
+        if (::database.isInitialized) database.close()
+        stagingDir.deleteRecursively()
     }
 
     private class Accepting(private val result: ProcessedStill.Accepted) : StillProcessor {
@@ -236,7 +231,7 @@ class CreateComposeFlowTest {
         assertEquals(GeneratorPreviewState.Loading, vm.generatorPreview.value)
         assertTrue(requireNotNull(vm.viewModelScope.coroutineContext[Job]).children.any { it.isActive })
         // Worker return is queued, so the missing teardown ownership cannot
-        // be hidden by a fast preview. The @After invariant must fail on RED.
+        // be hidden by a fast preview. @After must cancel/join before resetMain.
     }
 
     @Test fun retirementJoinsCancellationDelayedWorkAndEveryOwnedVm() = runTest(testDispatcher) {

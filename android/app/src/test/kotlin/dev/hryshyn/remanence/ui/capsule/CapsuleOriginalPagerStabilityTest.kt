@@ -3,9 +3,12 @@ package dev.hryshyn.remanence.ui.capsule
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.ui.hold.HoldTheme
 import java.io.File
@@ -33,7 +36,10 @@ class CapsuleOriginalPagerStabilityTest {
     @Test @Config(qualifiers = "uk-w360dp-h640dp-xhdpi")
     fun ukrainianPagingKeepsCloseButtonAndStageStill() = verifyPaging("uk")
 
-    private fun verifyPaging(locale: String) {
+    @Test @Config(qualifiers = "ru-w360dp-h640dp-xhdpi-night")
+    fun largeRussianTextWithSystemDarkKeepsCloseReachable() = verifyPaging("ru-large-night", 1.5f)
+
+    private fun verifyPaging(locale: String, fontScale: Float = 1f) {
         val ids = listOf("wide", "tall")
         val images = listOf(320 to 160, 160 to 320).mapIndexed { index, (width, height) ->
             Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply {
@@ -43,10 +49,12 @@ class CapsuleOriginalPagerStabilityTest {
         var validations = 0
         var dismissals = 0
         rule.setContent {
-            HoldTheme {
-                CapsulePhotoDialog(ids, ids.zip(images).toMap(), "wide",
-                    validateAccess = { validations++ }, onAccessLost = {},
-                    onDismiss = { dismissals++ })
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
+                HoldTheme {
+                    CapsulePhotoDialog(ids, ids.zip(images).toMap(), "wide",
+                        validateAccess = { validations++ }, onAccessLost = {},
+                        onDismiss = { dismissals++ })
+                }
             }
         }
         rule.onNodeWithTag("capsule_photo_close").assertIsDisplayed()
@@ -66,7 +74,7 @@ class CapsuleOriginalPagerStabilityTest {
 
     private fun capture(name: String) {
         rule.waitForIdle()
-        val hierarchy = rule.onAllNodes(isRoot()).printToString()
+        val hierarchy = rule.onNodeWithTag("capsule_photo_dialog", useUnmergedTree = true).printToString()
         rule.runOnIdle {
             val view = requireNotNull(ShadowDialog.getLatestDialog().window).decorView
             val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)

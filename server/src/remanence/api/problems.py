@@ -73,6 +73,14 @@ def _spec(
 
 
 PROBLEM_CATALOG: Final[dict[str, ProblemSpec]] = {
+    "SEND_LIMIT_REACHED": _spec(
+        "SEND_LIMIT_REACHED", 409, "Send limit reached",
+        "No free send remains in this category.",
+    ),
+    "SEND_ACCESS_UNAVAILABLE": _spec(
+        "SEND_ACCESS_UNAVAILABLE", 503, "Send access unavailable",
+        "Send access could not be verified.", retryable=True,
+    ),
     "TERMS_REQUIRED": _spec("TERMS_REQUIRED", 403, "Terms required", "Accept the current terms before creating content."),
     "AUTH_INVALID": _spec(
         "AUTH_INVALID",

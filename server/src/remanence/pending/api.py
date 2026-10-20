@@ -226,6 +226,9 @@ def _lookup_limiter(request: Request) -> LookupRateLimiter:
 def _map_error(exc: Exception) -> JSONResponse:
     code = getattr(exc, "code", "INTERNAL_ERROR")
     status = {
+        "SEND_LIMIT_REACHED": 409,
+        "SEND_ACCESS_UNAVAILABLE": 503,
+        "INTERNAL_ERROR": 500,
         "GIFT_UNAVAILABLE": 404,
         "ROUTE_STALE": 409,
         "IDEMPOTENCY_CONFLICT": 409,
@@ -543,6 +546,26 @@ def _delivery_hint(db: Session, delivery, ctx) -> str:
         return "•••"
 
 
+def _accepted_finalize_response(db: Session, delivery, code: str, ctx) -> JSONResponse:
+    """Validate/serialize before COMMIT; preserve the existing five wire fields."""
+    from remanence.pending.claim_models import PendingDelivery
+
+    if (
+        not isinstance(delivery, PendingDelivery) or delivery.state != "PENDING"
+        or not isinstance(delivery.id, uuid.UUID) or not isinstance(code, str)
+        or not isinstance(delivery.claim_expires_at, datetime)
+        or delivery.claim_expires_at.tzinfo is None
+    ):
+        raise ValueError("invalid publication response")
+    return JSONResponse(content={
+        "delivery_id": str(delivery.id),
+        "state": delivery.state,
+        "locator_code": code,
+        "claim_expires_at": int(delivery.claim_expires_at.timestamp()),
+        "hint": _delivery_hint(db, delivery, ctx),
+    })
+
+
 @router.post("/v2/pending-deliveries/{delivery_id}/finalize")
 def finalize_pending_delivery(
     delivery_id: uuid.UUID, payload: FinalizeRequest, request: Request,
@@ -585,18 +608,14 @@ def finalize_pending_delivery(
             now=datetime.now(timezone.utc),
             blob_stat=_blob_stat,
             operation_id=payload.idempotency_key,
+            send_access_mode=request.app.state.settings.send_access_mode,
         )
+        result = _accepted_finalize_response(db, delivery, code, ctx)
         db.commit()
     except Exception as exc:
         db.rollback()
         return _map_error(exc)
-    return {
-        "delivery_id": str(delivery.id),
-        "state": delivery.state,
-        "locator_code": code,
-        "claim_expires_at": int(delivery.claim_expires_at.timestamp()),
-        "hint": _delivery_hint(db, delivery, ctx),
-    }
+    return result
 
 
 @router.post("/v2/pending-deliveries/{delivery_id}/cancel")

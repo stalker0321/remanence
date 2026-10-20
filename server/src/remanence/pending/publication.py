@@ -31,6 +31,8 @@ from remanence.pending.vault import (
 from remanence.protocol.delivery_v2 import delivery_v2_pb2 as dv2
 from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 from remanence.users.models import User
+from remanence.send_access import service as send_access
+from remanence.send_access.policy import SendAccessMode
 
 MAX_CLAIM_DEADLINE_DAYS = 180
 
@@ -279,6 +281,7 @@ def finalize_delivery(
     blob_stat=None,
     operation_id: uuid.UUID | None = None,
     clock: Callable[[], datetime] | None = None,
+    send_access_mode: SendAccessMode = SendAccessMode.OFF,
 ) -> tuple[PendingDelivery, str]:
     """Finalize a DRAFT into PENDING + ACTIVE locator in one flush.
 
@@ -322,6 +325,7 @@ def finalize_delivery(
             or bytes(delivery.finalize_request_digest or b"") != request_digest
         ):
             raise PublicationError("IDEMPOTENCY_CONFLICT")
+        send_access.validate_replay(session, delivery)
         locator = session.get(GiftLocator, delivery.locator_id) if delivery.locator_id else None
         code = ""
         if locator is not None and locator.code_ciphertext is not None:
@@ -425,6 +429,10 @@ def finalize_delivery(
         claim_policy_version=1,
         claim_expires_at_epoch_seconds=statement.claim_expires_at_epoch_seconds,
     )
+    allocation = send_access.admit(
+        session, delivery, mode=send_access_mode, publication_sha256=statement_hash,
+        check_deadline=check_deadlines,
+    )
     check_deadlines()
     try:
         handle = vault.seal(escrow_payload, aad)
@@ -458,6 +466,7 @@ def finalize_delivery(
     delivery.state = "PENDING"
     session.flush()
     # Cover locator/flush waits as well. Caller retains commit/rollback ownership.
+    send_access.record(session, delivery, allocation, now=check_deadlines())
     check_deadlines()
     return delivery, code
 

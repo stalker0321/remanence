@@ -25,6 +25,7 @@ from remanence.users.handles import normalize_handle
 from remanence.users.key_bundle_validation import validate_public_key_bundle
 from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 from remanence.users.models import User
+from remanence.send_access.service import provision
 
 PROFILE_VERSION_2 = 2
 PROFILE_HEADER = "x-remanence-profile-version"
@@ -141,6 +142,7 @@ def register_receive(
     )
     session.add(user)
     session.flush()
+    provision(session, user.id, now=now)
     bundle = UserKeyBundle(
         id=key_bundle_id,
         user_id=user.id,

@@ -9,6 +9,7 @@ import re
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from remanence.send_access.policy import SendAccessMode
 
 
 class AppMode(StrEnum):
@@ -41,6 +42,7 @@ class Settings(BaseSettings):
     music_catalog_path: Path | None = None
     music_search_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     recovery_enabled: bool = False
+    send_access_mode: SendAccessMode = SendAccessMode.OFF
     google_sign_in_enabled: bool = False
     google_client_ids: list[str] = Field(default_factory=list)
     google_presenter_ids: list[str] = Field(default_factory=list)
@@ -80,6 +82,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def require_datastore_for_non_test(self) -> Self:
+        if self.send_access_mode is SendAccessMode.ENFORCE and self.mode is not AppMode.TEST:
+            raise ValueError("send access enforcement is synthetic-test only")
         if self.music_search_backend is MusicSearchBackend.FULL_CATALOG:
             if self.music_catalog_path is None or not self.music_catalog_path.is_absolute():
                 raise ValueError("full catalog search requires an absolute music_catalog_path")

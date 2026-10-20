@@ -18,6 +18,9 @@ from remanence.users.models import User as _User
 from remanence.users.safety_models import UserBlock, SafetyReport, TermsAcceptance
 from remanence.recovery.models import RecoveryCredential, RecoveryRecord, RecoveryChallenge
 from remanence.telemetry.models import AnonymousTelemetryReport
+from remanence.pending.claim_models import PendingDelivery
+from remanence.pending.models import PendingSendRoute, GiftLocator
+from remanence.send_access.models import AccountSendAccess, SendPublication
 
 target_metadata = Base.metadata
 

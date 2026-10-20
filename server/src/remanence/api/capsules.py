@@ -985,6 +985,7 @@ async def finalize_capsule(
                 ),
                 now=datetime.now(timezone.utc),
                 locator_issuance=_v1_locator_issuance(request),
+                send_access_mode=request.app.state.settings.send_access_mode,
             )
             dto, is_replay = _accepted_finalize_response(result)
         status = 200 if is_replay else 201

@@ -30,6 +30,8 @@ from remanence.capsules.signature_service import (
 )
 from remanence.storage import BlobNotFoundError, BlobStore, BlobStoreError
 from remanence.users.models import User
+from remanence.send_access import service as send_access
+from remanence.send_access.policy import SendAccessMode
 
 
 _GENERIC_SERVICE_MESSAGE: Final = "capsule finalize failed"
@@ -188,6 +190,7 @@ class CapsuleFinalizeService:
         now: datetime,
         locator_issuance: LocatorIssuance | None = None,
         clock: Callable[[], datetime] | None = None,
+        send_access_mode: SendAccessMode = SendAccessMode.OFF,
     ) -> CapsuleFinalizeResult:
         _require_uuid(authenticated_sender_user_id)
         _require_uuid(capsule_id)
@@ -214,7 +217,10 @@ class CapsuleFinalizeService:
                 now=now,
                 locator_issuance=locator_issuance,
                 clock=clock,
+                send_access_mode=send_access_mode,
             )
+        except send_access.SendAccessError as exc:
+            raise _error(exc.code) from None
         except CapsuleFinalizeError:
             raise
         except Exception as exc:
@@ -233,6 +239,7 @@ class CapsuleFinalizeService:
         now: datetime,
         locator_issuance: LocatorIssuance | None,
         clock: Callable[[], datetime] | None,
+        send_access_mode: SendAccessMode,
     ) -> CapsuleFinalizeResult:
         with self._session.no_autoflush:
             self._session.execute(
@@ -313,7 +320,12 @@ class CapsuleFinalizeService:
             publication_sequence = self._next_publication_sequence(
                 capsule.recipient_user_id
             )
-            publication_at = check_deadline()
+            allocation = send_access.admit(
+                self._session, capsule, mode=send_access_mode,
+                publication_sha256=hashlib.sha256(statement).digest(),
+                check_deadline=check_deadline,
+            )
+            publication_at = allocation.published_at if allocation is not None else check_deadline()
             result = self._persist_ready(
                 capsule,
                 authorization=authorization,
@@ -324,6 +336,7 @@ class CapsuleFinalizeService:
             )
             # Flush/optional locator work can also wait. Raising here requires
             # the caller's outer rollback, just like any late finalize failure.
+            send_access.record(self._session, capsule, allocation, now=check_deadline())
             check_deadline()
             return result
 
@@ -404,6 +417,7 @@ class CapsuleFinalizeService:
         )
         if not equivalent:
             raise _error("FINALIZE_CONFLICT")
+        send_access.validate_replay(self._session, capsule)
         locator_code, locator_hint = self._read_issued_code(capsule.id, locator_issuance)
         return CapsuleFinalizeResult(
             capsule_id=capsule.id,

@@ -36,6 +36,11 @@ class Capsule(Base):
     __tablename__ = "capsules"
     __table_args__ = (
         CheckConstraint(
+            "send_accounting_version IS NULL OR "
+            "(send_accounting_version = 1 AND state IN ('READY','REVOKED'))",
+            name="ck_capsules_send_accounting",
+        ),
+        CheckConstraint(
             "protocol_version > 0",
             name="ck_capsules_protocol_version_positive",
         ),
@@ -126,6 +131,7 @@ class Capsule(Base):
         nullable=False,
     )
     protocol_version: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    send_accounting_version: Mapped[int | None] = mapped_column(SmallInteger)
     state: Mapped[CapsuleState] = mapped_column(
         SaEnum(CapsuleState, name="capsule_state", native_enum=True),
         nullable=False,

@@ -15,6 +15,7 @@ from remanence.users.handles import normalize_handle
 from remanence.users.key_bundle_validation import validate_public_key_bundle
 from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 from remanence.users.models import User
+from remanence.send_access.service import provision
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ class RegistrationService:
         )
         self._session.add(user)
         self._session.flush()
+        provision(self._session, user_id, now=now)
 
         if password is not None:
             auth_credential = AuthCredential(

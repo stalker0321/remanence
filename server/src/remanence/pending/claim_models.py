@@ -37,6 +37,13 @@ class PendingDelivery(Base):
     __tablename__ = "pending_deliveries"
     __table_args__ = (
         CheckConstraint(
+            "send_accounting_version IS NULL OR (send_accounting_version = 1 "
+            "AND state IN ('PENDING','CLAIMED','CANCELLED','EXPIRED') "
+            "AND publish_statement IS NOT NULL AND publish_statement_sha256 IS NOT NULL "
+            "AND publish_signature IS NOT NULL)",
+            name="ck_pending_deliveries_send_accounting",
+        ),
+        CheckConstraint(
             "channel IN ('email', 'sms')",
             name="ck_pending_deliveries_channel",
         ),
@@ -81,6 +88,7 @@ class PendingDelivery(Base):
     )
     channel: Mapped[str] = mapped_column(String(10), nullable=False)
     state: Mapped[str] = mapped_column(String(10), nullable=False)
+    send_accounting_version: Mapped[int | None] = mapped_column(SmallInteger)
     claim_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     publish_statement: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     publish_statement_sha256: Mapped[bytes | None] = mapped_column(LargeBinary(32), nullable=True)

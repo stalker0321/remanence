@@ -35,6 +35,7 @@ from remanence.music.search.composition import build_music_search
 from remanence.music.search.in_memory import InMemoryMusicSearch
 from remanence.music.search.staging import PostgresStagingSearch
 from remanence.settings import AppMode, MusicSearchBackend, Settings
+from remanence.send_access.api import SendAccessNoStoreMiddleware, router as send_access_router
 from remanence.storage import BlobStore, CiphertextStager, LocalFileBlobStore
 from remanence.telemetry.ingress import TelemetryIngress, install_access_filter, reserved_path
 from remanence.telemetry.store import TelemetryStore
@@ -183,6 +184,7 @@ def create_app(
             engine.dispose()
 
     app = FastAPI(title="Remanence API", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(SendAccessNoStoreMiddleware)
     install_access_filter()
     telemetry = TelemetryIngress(TelemetryStore(lambda: getattr(app.state, "session_factory", None)))
     app.state.telemetry_ingress = telemetry
@@ -244,6 +246,7 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(google_auth_router)
     app.include_router(users_router)
+    app.include_router(send_access_router)
     app.include_router(directory_router)
     app.include_router(capsules_router)
     app.include_router(history_router)

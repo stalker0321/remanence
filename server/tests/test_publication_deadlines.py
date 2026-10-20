@@ -12,6 +12,7 @@ from sqlalchemy import func, select, text
 from tink import tink_config
 
 from remanence.capsules.envelope_models import CapsuleEnvelope
+from remanence.capsules.delivery_models import RecipientDeliveryState
 from remanence.capsules.finalize_service import CapsuleFinalizeError, CapsuleFinalizeService
 from remanence.capsules.models import Capsule, CapsuleState
 from remanence.capsules.locking import capsule_lock_key
@@ -147,6 +148,43 @@ class Clock:
 
     def __call__(self):
         return self.current
+
+
+def test_v1_uses_fresh_admission_timestamp(session_factory, tmp_path):
+    with session_factory() as session:
+        world = _ready_world(session, tmp_path)
+        fresh = world["capsule"].created_at + timedelta(seconds=3, microseconds=123456)
+        result = CapsuleFinalizeService(session, world["store"]).finalize(
+            **v1_request(world), now=world["capsule"].created_at, clock=lambda: fresh,
+        )
+        session.commit()
+        assert result.ready_at == fresh
+        assert session.get(Capsule, result.capsule_id).ready_at == fresh
+        delivery = session.scalar(select(RecipientDeliveryState).where(
+            RecipientDeliveryState.capsule_id == result.capsule_id
+        ))
+        assert delivery.available_at == fresh
+
+
+@pytest.mark.parametrize("at_boundary", [False, True])
+def test_pending_fractional_deadline_uses_truncated_instant(session_factory, at_boundary):
+    with session_factory() as session:
+        setup = _setup_pending(session)
+        # Keep the route valid; its usual TTL is shorter than the claim deadline.
+        canonical = NOW + timedelta(seconds=3)
+        setup["delivery"].claim_expires_at = canonical + timedelta(microseconds=900000)
+        session.commit()
+        request = pending_request(setup)
+        current = canonical if at_boundary else canonical - timedelta(microseconds=1)
+        if at_boundary:
+            with pytest.raises(PublicationError) as error:
+                finalize_delivery(session, **request, now=NOW, clock=lambda: current)
+            assert error.value.code == "GIFT_UNAVAILABLE"
+            assert_pending_rollback(session, request["delivery_id"])
+        else:
+            row, _ = finalize_delivery(session, **request, now=NOW, clock=lambda: current)
+            session.commit()
+            assert row.state == "PENDING"
 
 
 @pytest.mark.parametrize("stage", ["storage", "locator"])

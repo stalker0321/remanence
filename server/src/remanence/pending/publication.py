@@ -336,10 +336,8 @@ def finalize_delivery(
         raise PublicationError("GIFT_UNAVAILABLE")
     # The signed, canonical seconds must bind to the stored deadline too,
     # not just to another copy supplied by the sender in the escrow payload.
-    if (
-        delivery.claim_expires_at.microsecond != 0
-        or statement.claim_expires_at_epoch_seconds != int(delivery.claim_expires_at.timestamp())
-    ):
+    effective_claim_deadline = delivery.claim_expires_at.replace(microsecond=0)
+    if statement.claim_expires_at_epoch_seconds != int(effective_claim_deadline.timestamp()):
         raise PublicationError("PROTOCOL_UNSUPPORTED")
 
     route = None
@@ -353,7 +351,7 @@ def finalize_delivery(
         ):
             raise PublicationError("PROTOCOL_UNSUPPORTED")
         current = max(now, fresh)
-        if delivery.claim_expires_at <= current:
+        if effective_claim_deadline <= current:
             raise PublicationError("GIFT_UNAVAILABLE")
         if route is not None and route.expires_at <= current:
             raise PublicationError("ROUTE_STALE")

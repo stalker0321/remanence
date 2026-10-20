@@ -257,13 +257,15 @@ class CapsuleFinalizeService:
             if capsule.state is not CapsuleState.DRAFT:
                 raise _error("CAPSULE_STATE_INVALID")
 
-            def check_deadline() -> None:
+            def check_deadline() -> datetime:
                 # A request timestamp predates advisory/recipient lock waits.
                 # Preserve the supplied timestamp/explicit test clock, but never
                 # use it alone to authorize a NEW publication after a slow wait.
                 fresh = _require_utc(clock() if clock is not None else datetime.now(timezone.utc))
-                if max(now, fresh) >= capsule.draft_expires_at:
+                current = max(now, fresh)
+                if current >= capsule.draft_expires_at:
                     raise _error("DRAFT_EXPIRED")
+                return current
 
             check_deadline()
             if sender_key_bundle_id != capsule.sender_key_bundle_id:
@@ -311,12 +313,12 @@ class CapsuleFinalizeService:
             publication_sequence = self._next_publication_sequence(
                 capsule.recipient_user_id
             )
-            check_deadline()
+            publication_at = check_deadline()
             result = self._persist_ready(
                 capsule,
                 authorization=authorization,
                 envelope=envelope,
-                now=now,
+                now=publication_at,
                 publication_sequence=publication_sequence,
                 locator_issuance=locator_issuance,
             )

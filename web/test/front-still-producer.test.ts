@@ -5,6 +5,8 @@ import {
   produceFrontStillFingerprint,
   type OwnedRgbaFrame,
 } from '../src/scan/frontStillProducer'
+import { produceQueryFingerprint } from '../src/scan/queryFingerprint'
+import type { StillCapture } from '../src/scan/camera'
 import { parseSiftFingerprint } from '../src/scan/siftFingerprint'
 import type { CvContourRuntime } from '../src/scan/opencvContour'
 import type { CvMat } from '../src/scan/opencvPort'
@@ -388,5 +390,148 @@ describe('T316 producer localize-warp-extract', () => {
       ;(globalThis as { createImageBitmap?: unknown }).createImageBitmap = realCreateImageBitmap
     }
     expect(fakeCanvas.width).toBe(0)
+  })
+})
+
+describe('T343 identity-free receiving query producer', () => {
+  const sift = {
+    detections: [{ x: 800, y: 600, size: 20, angle: 0, response: 10, octave: 0 }],
+    descriptorRows: [new Array(128).fill(3)],
+    dctValues: Array.from({ length: 64 }, (_, i) => i),
+  }
+
+  function plainStill(jpeg: Uint8Array): StillCapture {
+    return { bytes: jpeg, width: 320, height: 240 }
+  }
+
+  it('produces byte-identical wire/profile/provenance for sender and query', async () => {
+    const jpeg = jpegWithDims(320, 240)
+    const sender = await produceFrontStillFingerprint(stillFor(jpeg), {
+      fence: () => true,
+      runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }),
+      decode: async () => workingFrame(),
+    })
+    const query = await produceQueryFingerprint(plainStill(jpeg), {
+      fence: () => true,
+      runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }),
+      decode: async () => workingFrame(),
+    })
+    expect(Array.from(query.wire)).toEqual(Array.from(sender.wire))
+    expect(query.profileId).toBe(sender.profileId)
+    expect(query.provenance).toEqual(sender.provenance)
+    expect('recipient' in query).toBe(false)
+    expect('userId' in query || 'keyBundleId' in query || 'directoryVersion' in query).toBe(false)
+    expect(query.wire.length).toBeGreaterThan(0)
+  })
+
+  it('snapshots the caller still bytes before the deferred decode', async () => {
+    const jpeg = jpegWithDims(320, 240)
+    const control = await produceQueryFingerprint(plainStill(jpeg), {
+      fence: () => true,
+      runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }),
+      decode: async () => workingFrame(),
+    })
+    const source = plainStill(jpeg)
+    let resolveFrame!: (frame: OwnedRgbaFrame) => void
+    const deferred = new Promise<OwnedRgbaFrame>((resolve) => {
+      resolveFrame = resolve
+    })
+    const pending = produceQueryFingerprint(source, {
+      fence: () => true,
+      runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }),
+      decode: () => deferred,
+    })
+    source.bytes = new Uint8Array([9, 9, 9])
+    source.width = 1
+    source.height = 1
+    resolveFrame(workingFrame())
+    const query = await pending
+    expect(Array.from(query.wire)).toEqual(Array.from(control.wire))
+    expect(query.provenance.workingWidth).toBe(320)
+    expect(query.provenance.workingHeight).toBe(240)
+  })
+
+  it('refuses stale/cancelled and leaves caller bytes unchanged', async () => {
+    const jpeg = jpegWithDims(320, 240)
+    const snapshot = jpeg.slice()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      produceQueryFingerprint(plainStill(jpeg), {
+        fence: () => true,
+        signal: controller.signal,
+        runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }),
+        decode: async () => workingFrame(),
+      }),
+    ).rejects.toMatchObject({ code: 'cancelled' })
+    await expect(
+      produceQueryFingerprint(plainStill(jpeg), {
+        fence: () => false,
+        runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }),
+        decode: async () => workingFrame(),
+      }),
+    ).rejects.toMatchObject({ code: 'stale' })
+    expect(Array.from(jpeg)).toEqual(Array.from(snapshot))
+  })
+
+  it('preserves the native empty-feature hard refusal for the query path', async () => {
+    await expect(
+      produceQueryFingerprint(plainStill(jpegWithDims(320, 240)), {
+        fence: () => true,
+        runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], detections: [], descriptorRows: [], dctValues: new Array(64).fill(0) }),
+        decode: async () => workingFrame(),
+      }),
+    ).rejects.toMatchObject({ code: 'features' })
+  })
+
+  it('wipes the transferred wire when the sender wrapper late fence fails', async () => {
+    const jpeg = jpegWithDims(320, 240)
+    let calls = 0
+    const control = await produceFrontStillFingerprint(stillFor(jpeg), {
+      fence: () => {
+        calls += 1
+        return true
+      },
+      runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }),
+      decode: async () => workingFrame(),
+    })
+    const wireLength = control.wire.length
+    control.wire.fill(0)
+
+    const fillRecords: Array<{ before: Uint8Array; after: Uint8Array }> = []
+    const originalFill = Uint8Array.prototype.fill
+    const installFill = originalFill as unknown as (value: number, start?: number, end?: number) => Uint8Array
+    ;(Uint8Array.prototype as { fill: unknown }).fill = function (
+      this: Uint8Array,
+      value: number,
+      start?: number,
+      end?: number,
+    ): Uint8Array {
+      fillRecords.push({ before: this.slice(), after: this })
+      return installFill.call(this, value, start, end)
+    }
+    try {
+      let call = 0
+      await expect(
+        produceFrontStillFingerprint(stillFor(jpeg), {
+          // The final (wrapper) fence evaluation after the core resolves fails.
+          fence: () => {
+            call += 1
+            return call < calls
+          },
+          runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }),
+          decode: async () => workingFrame(),
+        }),
+      ).rejects.toMatchObject({ code: 'stale' })
+    } finally {
+      ;(Uint8Array.prototype as { fill: unknown }).fill = originalFill
+    }
+    const wiped = fillRecords.some(
+      (record) =>
+        record.before.length === wireLength &&
+        record.before.some((byte) => byte !== 0) &&
+        record.after.every((byte) => byte === 0),
+    )
+    expect(wiped).toBe(true)
   })
 })

@@ -13,6 +13,7 @@
 
 import { SOURCE_PHOTO_MAX_BYTES, SOURCE_PHOTO_MAX_EDGE_PX, sourceJpegDimensions } from '../create/normalize'
 import type { FrontStill } from '../create/front'
+import type { StillCapture } from './camera'
 import { orderClockwiseFromTopLeft, type Point2D } from './cornerGeometry'
 import { selectCrop, type CropCandidate, type ProposalSource } from './cropSelection'
 import { planWarp, targetCorners } from './warpGeometry'
@@ -65,12 +66,17 @@ export interface CropProvenance {
   readonly warpedHeight: number
 }
 
-export interface FrontStillFingerprint {
+/** Identity-free localised fingerprint (shared core output). */
+export interface LocalizedFingerprint {
   /** Owned canonical format-3 wire bytes (transferred, not wiped). */
   readonly wire: Uint8Array
   readonly profileId: string
-  readonly recipient: FrontStillRecipient
   readonly provenance: CropProvenance
+}
+
+/** Existing sender output: localised fingerprint plus the captured recipient. */
+export interface FrontStillFingerprint extends LocalizedFingerprint {
+  readonly recipient: FrontStillRecipient
 }
 
 /** Decoded upright RGBA frame (owned pixels). */
@@ -120,8 +126,8 @@ function captureRecipient(still: FrontStill): FrontStillRecipient {
 }
 
 /** Validates the JPEG source bounds and returns an owned copy, pre-await. */
-function captureJpegBytes(still: FrontStill): Uint8Array {
-  const bytes = (still as { bytes?: unknown }).bytes
+function captureJpegBytes(source: StillCapture): Uint8Array {
+  const bytes = (source as { bytes?: unknown }).bytes
   if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > SOURCE_PHOTO_MAX_BYTES) {
     throw refuse('pixels')
   }
@@ -260,8 +266,45 @@ export async function produceFrontStillFingerprint(
   const fence = options.fence
   if (typeof fence !== 'function') throw refuse('stale')
   const signal = options.signal
+  // Capture the recipient tuple and owned JPEG before the first await.
   const recipient = captureRecipient(still)
   const jpeg = captureJpegBytes(still)
+  const localized = await produceLocalizedFromOwnedJpeg(jpeg, options)
+  // The core's promise boundary is an await: recheck the original fence and
+  // signal before attaching caller owner metadata, wiping the transferred
+  // wire if the visit changed or was cancelled in between.
+  try {
+    throwIfFence(fence)
+    throwIfAborted(signal)
+  } catch (error) {
+    localized.wire.fill(0)
+    throw error
+  }
+  return { ...localized, recipient }
+}
+
+/**
+ * Identity-free shared core entry: a plain camera `StillCapture` (bytes only;
+ * upright dimensions come from the real decode, never caller metadata) yields
+ * an owned canonical format-3 wire/profile/provenance with no recipient fields.
+ */
+export async function produceLocalizedFingerprint(
+  source: StillCapture,
+  options: ProduceFrontStillOptions,
+): Promise<LocalizedFingerprint> {
+  const fence = options.fence
+  if (typeof fence !== 'function') throw refuse('stale')
+  const jpeg = captureJpegBytes(source)
+  return produceLocalizedFromOwnedJpeg(jpeg, options)
+}
+
+/** Localize -> warp -> SIFT -> wire over an owned JPEG copy (identity-free). */
+async function produceLocalizedFromOwnedJpeg(
+  jpeg: Uint8Array,
+  options: ProduceFrontStillOptions,
+): Promise<LocalizedFingerprint> {
+  const fence = options.fence
+  const signal = options.signal
   try {
     throwIfFence(fence)
     throwIfAborted(signal)
@@ -300,7 +343,7 @@ export async function produceFrontStillFingerprint(
       }
       throwIfFence(fence)
       throwIfAborted(signal)
-      return extractLocalized(runtime, frame, recipient, fence, signal)
+      return extractLocalized(runtime, frame, fence, signal)
     } finally {
       frame.rgba.fill(0)
     }
@@ -313,10 +356,9 @@ export async function produceFrontStillFingerprint(
 function extractLocalized(
   runtime: CvContourRuntime,
   frame: OwnedRgbaFrame,
-  recipient: FrontStillRecipient,
   fence: () => boolean,
   signal: AbortSignal | undefined,
-): FrontStillFingerprint {
+): LocalizedFingerprint {
   const releases: Array<() => void> = []
   const runReleases = (strict: boolean): unknown => {
     let first: unknown = null
@@ -417,10 +459,9 @@ function extractLocalized(
       warpedWidth: warped.width,
       warpedHeight: warped.height,
     }
-    const result: FrontStillFingerprint = {
+    const result: LocalizedFingerprint = {
       wire,
       profileId: SIFT_FINGERPRINT_PROFILE_ID,
-      recipient,
       provenance,
     }
     warpedBytes = null

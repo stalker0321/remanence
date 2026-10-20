@@ -22,6 +22,7 @@ import org.junit.Assert.*
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowDialog
 import java.io.File
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -53,12 +54,15 @@ class HistoryScreenTest {
     }
     private fun snapshot(name: String) {
         rule.waitForIdle()
-        val semantics = rule.onRoot().printToString()
+        val semantics = rule.onAllNodes(isRoot()).printToString()
         rule.runOnIdle {
             val directory = File("build/t369-review").apply { mkdirs() }
-            val bitmap = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
+            // A Compose dialog owns another window: capture that actual decor,
+            // not the underlying activity while claiming to show confirmation.
+            val view = if (name.contains("confirm")) requireNotNull(ShadowDialog.getLatestDialog().window).decorView else root
+            val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
             try {
-                root.draw(android.graphics.Canvas(bitmap))
+                view.draw(android.graphics.Canvas(bitmap))
                 File(directory, "$name.png").outputStream().use {
                     assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
                 }

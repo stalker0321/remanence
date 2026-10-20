@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.printToString
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -209,8 +210,11 @@ class CreateRecipientConfirmFlowTest {
         }
         composeRule.onNodeWithTag("recent_${otherSnapshot.userId.toRestString()}").performScrollTo().performClick()
         composeRule.waitUntil(10_000) { vm.pendingRecipient.value != null }
+        composeRule.waitForIdle()
         assertEquals(listOf("friend"), calls)
         assertNull(vm.confirmedRecipient.value)
+        File("build/t369-review").apply { mkdirs() }.resolve("recent-confirm-semantics.txt")
+            .writeText(composeRule.onNodeWithTag("create_screen_scroll").printToString())
         composeRule.onNodeWithTag("confirm_handle_text").assertIsDisplayed()
         composeRule.onNodeWithTag("confirm_button").performClick()
         composeRule.runOnIdle {

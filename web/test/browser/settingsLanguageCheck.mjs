@@ -40,6 +40,7 @@ report.executable = executable
 report.executableSha256 = createHash('sha256').update(await readFile(executable)).digest('hex')
 
 const work = join(tmpdir(), `settings-language-${process.pid}`)
+report.work = work
 await mkdir(work, { recursive: true })
 await writeFile(join(work, 'index.tsx'), `import ${JSON.stringify(join(web, 'test', 'browser', 'settingsLanguage.page.tsx'))}\n`)
 await writeFile(join(work, 'index.html'), '<!doctype html><html><head><meta charset="utf-8"></head><body><script type="module" src="./index.tsx"></script></body></html>')
@@ -66,9 +67,12 @@ const server = createServer(async (req, res) => {
       return
     }
     const file = path === dist ? join(dist, 'index.html') : path
-    res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(await readFile(file))
+    // Resolve the file before committing headers: this static-only fixture also
+    // receives unsupported API/font requests, which must be honest 404s.
+    const body = await readFile(file)
+    res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(body)
   } catch {
-    res.writeHead(404).end('missing')
+    if (!res.headersSent && !res.destroyed) res.writeHead(404, { 'cache-control': 'no-store' }).end('missing')
   }
 })
 await new Promise((ok, fail) => {
@@ -153,6 +157,7 @@ try {
       for (const item of result.assertions) assert.equal(item.ok, true, `settings-language :: ${item.name} ${item.detail ?? ''}`)
       assert.ok(result.assertions.length >= 20, `expected >=20 assertions, got ${result.assertions.length}`)
       assert.deepEqual(result.failures, [])
+      assert.deepEqual(report.errors, [])
       assert.equal((report.narrow ?? []).length, 4, `expected 4 narrow OPEN-menu bounds checks, got ${(report.narrow ?? []).length}`)
       for (const check of report.narrow ?? []) {
         assert.equal(check.ok, true, `narrow OPEN-menu bounds ${check.where}/${check.lang}: ${JSON.stringify(check.box)}`)

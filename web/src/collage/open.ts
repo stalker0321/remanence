@@ -140,6 +140,7 @@ export async function openGrantedPostcard(
         'PHOTO',
       )
       plains.push(plain)
+      fresh()
       const size = jpegSize(plain)
       const authored = manifest.expression.input.photos[source.ordinal]
       if (!size || !authored || size.width !== source.width || size.height !== source.height || size.width !== authored.widthPx || size.height !== authored.heightPx) {

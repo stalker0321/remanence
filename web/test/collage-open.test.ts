@@ -51,6 +51,26 @@ describe('content manifest', () => {
 })
 
 describe('granted postcard', () => {
+  for (const failure of ['url', 'owner'] as const) {
+    it(`wipes opened and held bytes when synchronous ${failure} interrupts presentation handoff`, async () => {
+      const material = await jsPressMaterial(), { session, keys, grant } = matched()
+      keys.hold(session.getSnapshot(), material.capabilities())
+      const opened = await openGrantedPostcard(session, keys, grant, material.capsule, material.content, material.photos, fitText)
+      const copies: Uint8Array[] = [], live = new Set<string>()
+      const memory = new PresentationMemory({ create(bytes) {
+        copies.push(bytes)
+        if (failure === 'url' && copies.length === 2) throw new Error('synthetic URL allocation failure')
+        const url = `test:${copies.length}`; live.add(url); return url
+      }, revoke(url) { live.delete(url) } })
+      memory.attach(session)
+      memory.subscribe(() => { if (failure === 'owner' && memory.getSnapshot()) session.signOut() })
+      expect(() => showGrantedPostcard(session, memory, opened)).toThrow()
+      expect([...opened.photos.values(), ...copies].every((bytes) => bytes.every((n) => n === 0))).toBe(true)
+      expect(live.size).toBe(0)
+      expect(memory.getSnapshot()).toBeNull()
+      expect(session.getSnapshot().phase).toBe(failure === 'owner' ? 'signed-out' : 'postcard-matched')
+    })
+  }
   it('decrypts a JS-produced capsule only after the grant and then admits the sheet', async () => {
     const material = await jsPressMaterial()
     let opens = 0

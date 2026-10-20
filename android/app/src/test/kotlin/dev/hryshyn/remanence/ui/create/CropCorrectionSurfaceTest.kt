@@ -165,14 +165,16 @@ class CropCorrectionSurfaceTest {
     @Test fun semanticCropActionsMoveAndZoomTheRealFrame() {
         stage()
         val before = composeRule.onNodeWithTag("crop_frame").getBoundsInRoot()
-        composeRule.onNodeWithTag("crop_frame").performSemanticsAction(SemanticsActions.CustomActions) { actions ->
+        val actions = composeRule.onNodeWithTag("crop_frame").fetchSemanticsNode().config[SemanticsActions.CustomActions]
+        composeRule.runOnIdle {
             assertEquals(6, actions.size)
             assertTrue(actions.single { it.label == "Move crop right" }.action())
         }
         val moved = composeRule.onNodeWithTag("crop_frame").getBoundsInRoot()
         assertTrue(moved.left > before.left)
-        composeRule.onNodeWithTag("crop_frame").performSemanticsAction(SemanticsActions.CustomActions) { actions ->
-            assertTrue(actions.single { it.label == "Zoom in" }.action())
+        val zoomActions = composeRule.onNodeWithTag("crop_frame").fetchSemanticsNode().config[SemanticsActions.CustomActions]
+        composeRule.runOnIdle {
+            assertTrue(zoomActions.single { it.label == "Zoom in" }.action())
         }
         assertTrue(composeRule.onNodeWithTag("crop_frame").getBoundsInRoot().width < moved.width)
     }

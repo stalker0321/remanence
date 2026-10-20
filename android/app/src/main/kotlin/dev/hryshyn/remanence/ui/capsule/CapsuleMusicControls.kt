@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
@@ -24,7 +25,8 @@ internal fun CapsuleListenAction(track: CapsuleTrackSnapshotV1?, action: (() -> 
     if (track == null || action == null) return
     HoldTextButton(onClick = action, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
         .testTag("capsule_track_open")) {
-        Text(stringResource(R.string.track_open_action, track.title, track.artistDisplay))
+        Text(stringResource(R.string.track_open_action, track.title, track.artistDisplay),
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 

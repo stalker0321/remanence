@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,12 +24,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
@@ -120,45 +123,50 @@ internal fun Ber1PresentationHost(
     CapsuleSheetFrame(export, enabled = state.isOpen && exportReady, ratio = 360f / 640f,
         onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_ber1_close",
         actions = { if (exportReady) CapsuleListenAction(state.track, musicAction) }) { sheetModifier ->
-      Column(sheetModifier) {
-       Box(Modifier.fillMaxWidth().weight(1f)) {
-        val result = GeneratorBer1Preview(
-            expression = state.expression,
-            sources = state.bitmaps,
-            modifier = Modifier.fillMaxSize().testTag("capsule_ber1_canvas"),
-        )
-        SideEffect { exportReady = result is GeneratorBer1Renderer.SceneResult.Ready }
-        if (result is GeneratorBer1Renderer.SceneResult.Ready) BoxWithConstraints(Modifier.fillMaxSize()) {
-            val scene = result.scene
-            val scale = minOf(maxWidth.value / scene.canvasWidth, maxHeight.value / scene.canvasHeight)
-            val dx = (maxWidth.value - scene.canvasWidth * scale) / 2f
-            val dy = (maxHeight.value - scene.canvasHeight * scale) / 2f
-            scene.photos.forEachIndexed { index, photo ->
-                val rect = photo.contentRect
-                Box(Modifier.absoluteOffset((dx + rect.x * scale).dp, (dy + rect.y * scale).dp)
-                    .size((rect.width * scale).dp, (rect.height * scale).dp)
-                    .clickable(role = Role.Button, onClickLabel = photoLabel) {
-                        try { check(state.isOpen && exportReady); validateExport(); originalPhoto = photo.contentId }
-                        catch (_: Exception) { state.close(); onClose() }
-                    }.semantics { contentDescription = photoLabel }.testTag("capsule_photo_region_$index"))
+        BoxWithConstraints(sheetModifier) {
+            val captionScale = maxWidth.value / 360f
+            val density = LocalDensity.current.density
+            Column(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxWidth().weight(1f)) {
+                    val result = GeneratorBer1Preview(
+                        expression = state.expression,
+                        sources = state.bitmaps,
+                        modifier = Modifier.fillMaxSize().testTag("capsule_ber1_canvas"),
+                    )
+                    SideEffect { exportReady = result is GeneratorBer1Renderer.SceneResult.Ready }
+                    if (result is GeneratorBer1Renderer.SceneResult.Ready) BoxWithConstraints(Modifier.fillMaxSize()) {
+                        val scene = result.scene
+                        val scale = minOf(maxWidth.value / scene.canvasWidth, maxHeight.value / scene.canvasHeight)
+                        val dx = (maxWidth.value - scene.canvasWidth * scale) / 2f
+                        val dy = (maxHeight.value - scene.canvasHeight * scale) / 2f
+                        scene.photos.forEachIndexed { index, photo ->
+                            val rect = photo.contentRect
+                            Box(Modifier.absoluteOffset((dx + rect.x * scale).dp, (dy + rect.y * scale).dp)
+                                .size((rect.width * scale).dp, (rect.height * scale).dp)
+                                .clickable(role = Role.Button, onClickLabel = photoLabel) {
+                                    try { check(state.isOpen && exportReady); validateExport(); originalPhoto = photo.contentId }
+                                    catch (_: Exception) { state.close(); onClose() }
+                                }.semantics { contentDescription = photoLabel }.testTag("capsule_photo_region_$index"))
+                        }
+                    }
+                    if (result !is GeneratorBer1Renderer.SceneResult.Ready) {
+                        Text(
+                            text = stringResource(R.string.capsule_route_failure),
+                            modifier = Modifier.align(Alignment.Center).testTag("capsule_ber1_blocked"),
+                        )
+                    }
+                }
+                // Supplemental exported metadata scales with the reference sheet,
+                // just like its photos. The separate Listen action keeps the full
+                // accessible label and follows the user's system font size.
+                state.track?.takeIf { exportReady }?.let { track ->
+                    CompositionLocalProvider(LocalDensity provides Density(density, captionScale)) {
+                        TrackSnapshotCard(track = track,
+                            modifier = Modifier.fillMaxWidth().padding((16 * captionScale).dp))
+                    }
+                }
             }
         }
-        if (result !is GeneratorBer1Renderer.SceneResult.Ready) {
-            Text(
-                text = stringResource(R.string.capsule_route_failure),
-                modifier = Modifier.align(Alignment.Center).testTag("capsule_ber1_blocked"),
-            )
-        }
-       }
-        // Legacy track metadata is supplemental to the frozen BER1 canvas.
-        // Give it its own paper area; never cover an authored photo with it.
-        state.track?.takeIf { exportReady }?.let { track ->
-            TrackSnapshotCard(
-                track = track,
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-            )
-        }
-      }
     }
     originalPhoto?.let { id ->
         CapsulePhotoDialog(state.expression.input.photos.sortedBy { it.ordinal }.map { it.contentId }, state.bitmaps, id,

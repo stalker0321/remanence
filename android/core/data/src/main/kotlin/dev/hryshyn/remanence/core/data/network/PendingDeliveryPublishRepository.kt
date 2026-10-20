@@ -38,6 +38,8 @@ import okhttp3.ResponseBody
  * `core:crypto` (`PendingPublishCrypto`).
  */
 enum class PendingPublishFailure {
+    SEND_LIMIT_REACHED,
+    SEND_ACCESS_UNAVAILABLE,
     NETWORK,
     RATE_LIMITED,
     HTTP,
@@ -494,6 +496,14 @@ class PendingDeliveryPublishRepository internal constructor(
     }
 
     private suspend fun finalizeProblem(response: Response, bytes: ByteArray): PendingFinalizeResult {
+        if (isPublishJson(response, "problem+json") || isPublishJson(response, "json")) {
+            finalizeSendAccessProblem(bytes.toString(Charsets.UTF_8), response.code, allowMinimalPending = true)?.let {
+                return PendingFinalizeResult.Failure(
+                    if (it == FinalizeSendAccessProblem.LIMIT) PendingPublishFailure.SEND_LIMIT_REACHED
+                    else PendingPublishFailure.SEND_ACCESS_UNAVAILABLE,
+                    response.code, retryable = it == FinalizeSendAccessProblem.UNAVAILABLE)
+            }
+        }
         val failure = publishProblem(response, bytes)
         return PendingFinalizeResult.Failure(failure.first, response.code, failure.second)
     }

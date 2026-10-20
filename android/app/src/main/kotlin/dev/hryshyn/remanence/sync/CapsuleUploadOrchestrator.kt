@@ -70,6 +70,9 @@ sealed interface CapsuleUploadOutcome {
     /** A06 owns recovery; this marker intentionally parks unique work. */
     data object RecipientKeyStale : CapsuleUploadOutcome
 
+    /** Confirmed admission denial: retained FINALIZING row, no automatic retry. */
+    data object SendLimitReached : CapsuleUploadOutcome
+
     data class Retryable(val errorCode: String) : CapsuleUploadOutcome
 
     data class TerminalFailure(val errorCode: String) : CapsuleUploadOutcome
@@ -118,6 +121,9 @@ class CapsuleUploadOrchestrator(
             return markTerminal(owner, capsuleId, "INTERNAL_ERROR")
         }
 
+        if (capsule.lastErrorCode == "SEND_LIMIT_REACHED") {
+            return CapsuleUploadOutcome.SendLimitReached
+        }
         val staleOrigin = when {
             capsule.state == OutboxCapsuleState.RETRYABLE_FAILURE &&
                 capsule.lastErrorCode == RECIPIENT_KEY_STALE_DRAFT -> StaleRecoveryOrigin.DRAFT
@@ -966,6 +972,11 @@ class CapsuleUploadOrchestrator(
         capsuleId: CapsuleId,
         failure: CapsuleFinalizeResult.Failure,
     ): CapsuleUploadOutcome {
+        if (failure.reason == CapsuleFinalizeFailure.SEND_LIMIT_REACHED) {
+            val persisted = markFinalizeRetryable(owner, capsuleId, "SEND_LIMIT_REACHED")
+            return if (persisted is CapsuleUploadOutcome.Retryable)
+                CapsuleUploadOutcome.SendLimitReached else persisted
+        }
         if (failure.reason == CapsuleFinalizeFailure.RECIPIENT_KEY_STALE) {
             return markRecipientKeyStale(owner, capsuleId, StaleRecoveryOrigin.FINALIZE)
         }
@@ -993,6 +1004,8 @@ class CapsuleUploadOrchestrator(
             CapsuleFinalizeFailure.RECIPIENT_KEY_STALE,
             CapsuleFinalizeFailure.INTERNAL_UNAVAILABLE,
             CapsuleFinalizeFailure.INTERNAL_ERROR,
+            CapsuleFinalizeFailure.SEND_LIMIT_REACHED,
+            CapsuleFinalizeFailure.SEND_ACCESS_UNAVAILABLE,
             -> markTerminal(owner, capsuleId, "INTERNAL_ERROR")
         }
     }

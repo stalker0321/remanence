@@ -28,7 +28,8 @@ import dev.hryshyn.remanence.ui.locale.AppLocale
 fun SettingsScreen(handle: String?, locale: AppLocale, onLocale: (AppLocale) -> Unit,
                    recoveryReady: Boolean, onBack: () -> Unit, onLogout: () -> Unit,
                    telemetryContent: @Composable () -> Unit = {},
-                   safetyContent: @Composable () -> Unit = {}) {
+                   safetyContent: @Composable () -> Unit = {},
+                   sendAccessContent: @Composable () -> Unit = {}) {
     val gutter = HoldSpace.pageGutter()
     var languages by rememberSaveable { mutableStateOf(false) }
     var access by rememberSaveable { mutableStateOf(false) }
@@ -57,6 +58,7 @@ fun SettingsScreen(handle: String?, locale: AppLocale, onLocale: (AppLocale) -> 
                 if (BuildConfig.REMANENCE_RECOVERY_ENABLED) Text(stringResource(R.string.mvp_handle_permanent),
                     Modifier.testTag("settings_handle_permanent"), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
             }
+            sendAccessContent()
             SettingsGroup {
                 SettingsActionRow(stringResource(R.string.settings_design_language), stringResource(localeLabel(locale)),
                     { languages = true }, Modifier.testTag("language_switch_row"))

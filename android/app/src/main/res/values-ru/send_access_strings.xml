@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="send_access_title">доступ к отправке</string>
+    <string name="send_access_loading">Проверяем доступ к отправке…</string>
+    <string name="send_access_unavailable">Сейчас доступ к отправке проверить не удалось. Остаток не подтверждён.</string>
+    <string name="send_access_sign_in">Войди снова, чтобы проверить доступ к отправке.</string>
+    <string name="send_access_return">На главную</string>
+    <string name="send_access_refresh">Обновить доступ</string>
+    <string name="send_access_beta">В бета-версии отправления не ограничены. Бесплатные отправления в этом режиме не расходуются.</string>
+    <string name="send_access_lifetime">Пожизненный доступ: неограниченные отправления себе и другим.</string>
+    <string name="send_access_self">Себе: осталось %1$d из 2 бесплатных отправлений</string>
+    <string name="send_access_other">Другим: осталось %1$d из 2 бесплатных отправлений</string>
+    <string name="send_access_advisory">Доступ проверяется при отправке. Эти сведения не резервируют отправление.</string>
+</resources>

@@ -81,6 +81,13 @@ class RemanenceViewModelFactory(
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         dev.hryshyn.remanence.auth.GoogleAuthViewModel::class.java -> dev.hryshyn.remanence.auth.GoogleAuthViewModel(container) as T
         RegistrationViewModel::class.java -> RegistrationViewModel(container.registrationUseCase) as T
+        dev.hryshyn.remanence.ui.settings.SendAccessViewModel::class.java ->
+            dev.hryshyn.remanence.ui.settings.SendAccessViewModel(
+                port = container.apiStack.sendAccessRepository,
+                captureLease = container.apiStack::captureSessionRequestLease,
+                leaseLive = container.apiStack::isSessionRequestLeaseLive,
+                boundary = container.sessionBoundary,
+            ) as T
         dev.hryshyn.remanence.ui.history.HistoryViewModel::class.java ->
             dev.hryshyn.remanence.ui.history.HistoryViewModel(
                 port = container.apiStack.outgoingHistoryRepository,

@@ -191,6 +191,7 @@ private fun RootSurface(
     val loginViewModel: LoginViewModel = viewModel(factory = factory)
     val registrationViewModel: RegistrationViewModel = viewModel(factory = factory)
     val historyViewModel: dev.hryshyn.remanence.ui.history.HistoryViewModel = viewModel(factory = factory)
+    val sendAccessViewModel: dev.hryshyn.remanence.ui.settings.SendAccessViewModel = viewModel(factory = factory)
     val googleViewModel: dev.hryshyn.remanence.auth.GoogleAuthViewModel = viewModel(factory = factory)
     val googleState by googleViewModel.state.collectAsStateWithLifecycle()
     val activity = androidx.compose.ui.platform.LocalContext.current as android.app.Activity
@@ -454,6 +455,11 @@ private fun RootSurface(
                 safetyContent = {
                     if (BuildConfig.REMANENCE_PLAY_BETA) dev.hryshyn.remanence.ui.settings.BetaSafetyPanel(
                         container.apiStack.safetyRepository, signedIn.userId.toString())
+                },
+                sendAccessContent = {
+                    dev.hryshyn.remanence.ui.settings.SendAccessSettings(
+                        signedIn.userId, container.apiStack.captureSessionRequestLease(),
+                        sendAccessViewModel, rootViewModel::returnToHome)
                 })
         },
         createContent = {

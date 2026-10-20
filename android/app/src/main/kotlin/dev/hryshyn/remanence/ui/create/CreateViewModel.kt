@@ -1428,6 +1428,17 @@ class CreateViewModel(
     // Recipient steps.
     // ---------------------------------------------------------------------
 
+    /** Shared Activity/Compose recent selection entrypoint; still a fresh lookup. */
+    @Suppress("UNUSED_PARAMETER")
+    fun lookupRecentRecipient(
+        suggestion: dev.hryshyn.remanence.core.data.network.RecentRecipient,
+        ownerUserId: String?,
+        epoch: Long,
+    ) {
+        onHandleChange(suggestion.handle)
+        lookupRecipient()
+    }
+
     fun onHandleChange(value: String) {
         selfLookupJob?.cancel()
         selfLookupJob = null

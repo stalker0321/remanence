@@ -509,8 +509,7 @@ private fun RootSurface(
                             },
                             onSelect = { userId ->
                                 historyViewModel.recentForLookup(userId)?.let { suggestion ->
-                                    createViewModel.onHandleChange(suggestion.handle)
-                                    createViewModel.lookupRecipient()
+                                    createViewModel.lookupRecentRecipient(suggestion, authenticatedOwner, createEpoch)
                                 }
                             },
                         )

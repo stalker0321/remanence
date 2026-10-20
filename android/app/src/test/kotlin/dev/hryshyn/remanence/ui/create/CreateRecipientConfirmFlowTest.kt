@@ -206,8 +206,7 @@ class CreateRecipientConfirmFlowTest {
                 CreateScreen(vm, recentRecipientsContent = {
                     dev.hryshyn.remanence.ui.history.RecentRecipients(recent, true, {}, { id ->
                         val suggestion = recent.items.single { it.userId == id }
-                        vm.onHandleChange(suggestion.handle)
-                        vm.lookupRecipient()
+                        vm.lookupRecentRecipient(suggestion, owner, 1L)
                     })
                 })
             }

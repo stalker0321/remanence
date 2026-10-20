@@ -16,8 +16,13 @@ async function fresh() { await page.goto(`${host.url}#/account`); await page.rel
 async function begin(language = 'en') { await (await button('continueGoogle', language)).click(); await phase('handle') }
 async function save(language = 'en', handle = 'ada') { await page.locator('#atomic-handle').fill(handle); await (await button('atomicSave', language)).click() }
 async function shot(name) {
-  check(`${name}: no horizontal overflow`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
   await page.screenshot({ path: join(proof, `${name}.png`), fullPage: true })
+  const geometry = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth,
+    overflow: Array.from(document.querySelectorAll('body *')).map((element) => {
+      const r = element.getBoundingClientRect(); return { tag: element.tagName, class: element.className, left: r.left, right: r.right, width: r.width }
+    }).filter((rect) => rect.right > innerWidth + 0.5 || rect.left < -0.5) }))
+  await writeFile(join(proof, `${name}.geometry.json`), JSON.stringify(geometry, null, 2))
+  check(`${name}: no horizontal overflow`, geometry.scroll <= geometry.width)
 }
 try {
   for (const language of ['en', 'ru', 'uk']) {

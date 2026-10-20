@@ -73,7 +73,7 @@ class RecentRecipientIdentityTest {
 
     private fun viewModel(lookup: suspend (String) -> DirectoryLookupResult): CreateViewModel {
         val kek = SoftwareKekBoundary()
-        val alias = "synthetic-t382"
+        val alias = "synthetic-t382-${java.util.UUID.randomUUID()}"
         kek.createAes256GcmKey(alias)
         val context = ApplicationProvider.getApplicationContext<Context>()
         val roots = AccountScopedFileRoots(File(context.filesDir, "t382"))

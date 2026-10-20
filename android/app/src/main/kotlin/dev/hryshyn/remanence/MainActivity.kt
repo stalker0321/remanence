@@ -433,7 +433,11 @@ private fun RootSurface(
             }
             dev.hryshyn.remanence.ui.history.HistoryScreen(
                 state = if (state.owner == owner) state else dev.hryshyn.remanence.ui.history.HistoryUiState(),
-                onBack = rootViewModel::returnToHome,
+                onBack = {
+                    rootViewModel.returnToHome()
+                    if (state.error == dev.hryshyn.remanence.core.data.network.HistoryFailure.SIGN_IN)
+                        rootViewModel.onAppForegrounded()
+                },
                 onSelect = historyViewModel::select, onBackToList = historyViewModel::backToList,
                 onRefresh = historyViewModel::refresh, onMore = historyViewModel::loadMore,
                 canCancel = historyViewModel::canCancel, onRequestCancel = historyViewModel::requestCancel,
@@ -497,7 +501,12 @@ private fun RootSurface(
                         dev.hryshyn.remanence.ui.history.RecentRecipients(
                             state = if (recent.owner == authenticatedOwner) recent else dev.hryshyn.remanence.ui.history.RecentUiState(),
                             enabled = lookup !is dev.hryshyn.remanence.ui.create.RecipientLookupUiState.LookingUp,
-                            onRetry = historyViewModel::loadRecent,
+                            onRetry = {
+                                if (recent.error == dev.hryshyn.remanence.core.data.network.HistoryFailure.SIGN_IN) {
+                                    rootViewModel.returnToHome()
+                                    rootViewModel.onAppForegrounded()
+                                } else historyViewModel.loadRecent()
+                            },
                             onSelect = { userId ->
                                 historyViewModel.recentForLookup(userId)?.let { suggestion ->
                                     createViewModel.onHandleChange(suggestion.handle)

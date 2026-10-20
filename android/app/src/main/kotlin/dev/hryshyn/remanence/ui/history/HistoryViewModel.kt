@@ -60,9 +60,14 @@ class HistoryViewModel internal constructor(
     fun bind(rawOwner: String?) {
         val next = rawOwner?.let { runCatching { UserId.parseRest(it) }.getOrNull() }
         val nextLease = captureLease()?.takeIf { it.ownerUserId == next && leaseLive(it) }
-        if (owner == next && lease == nextLease && epoch == boundary.currentEpoch()) return
+        if (owner == next && lease == nextLease && epoch == boundary.currentEpoch() &&
+            _state.value.owner == rawOwner) return
         clearSession()
-        if (next == null || nextLease == null) return
+        if (next == null) return
+        if (nextLease == null) {
+            showSessionRequired(rawOwner)
+            return
+        }
         owner = next
         lease = nextLease
         _state.value = HistoryUiState(owner = rawOwner)
@@ -83,9 +88,29 @@ class HistoryViewModel internal constructor(
     private fun live(): Boolean = lease?.let { it.ownerUserId == owner && leaseLive(it) } == true &&
         epoch == boundary.currentEpoch()
 
+    private fun showSessionRequired(rawOwner: String?) {
+        // Retain only the route's owner fence, never its private metadata.
+        _state.value = HistoryUiState(owner = rawOwner, error = HistoryFailure.SIGN_IN)
+        _recent.value = RecentUiState(owner = rawOwner, error = HistoryFailure.SIGN_IN)
+    }
+
+    private fun retireRejectedSession() {
+        val routeOwner = owner?.toRestString()
+        clearSession()
+        showSessionRequired(routeOwner)
+    }
+
     private fun publish(ticket: Long, block: () -> Unit) {
         boundary.withCurrentLease(epoch) {
-            if (generation == ticket && live()) block()
+            if (generation == ticket) {
+                if (live()) block()
+                else {
+                    // HTTP/authenticator can retire the lease before Root
+                    // publishes its next auth state. Do not leave a stale page
+                    // or recents under an eternal loading indicator meanwhile.
+                    retireRejectedSession()
+                }
+            }
         }
     }
 
@@ -104,6 +129,10 @@ class HistoryViewModel internal constructor(
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { HistoryResult.Failed(HistoryFailure.SERVER) }
             publish(ticket) {
+                if (result is HistoryResult.Failed && result.reason == HistoryFailure.SIGN_IN) {
+                    retireRejectedSession()
+                    return@publish
+                }
                 _state.value = when (result) {
                     is HistoryResult.Loaded -> {
                         val items = (if (more) previous.items + result.value.items else result.value.items)
@@ -128,6 +157,10 @@ class HistoryViewModel internal constructor(
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { HistoryResult.Failed(HistoryFailure.SERVER) }
             publish(ticket) {
+                if (result is HistoryResult.Failed && result.reason == HistoryFailure.SIGN_IN) {
+                    retireRejectedSession()
+                    return@publish
+                }
                 _recent.value = when (result) {
                     is HistoryResult.Loaded -> RecentUiState(expectedOwner.toRestString(), loaded = true, items = result.value)
                     is HistoryResult.Failed -> RecentUiState(expectedOwner.toRestString(), error = result.reason)
@@ -174,6 +207,10 @@ class HistoryViewModel internal constructor(
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { HistoryCancelResult.UNKNOWN }
             publish(ticket) {
+                if (outcome == HistoryCancelResult.SIGN_IN) {
+                    retireRejectedSession()
+                    return@publish
+                }
                 _state.value = _state.value.copy(cancelling = false, outcome = outcome)
                 // POST is never retried. GET refetches authoritative status even
                 // after conflict/lost ACK; a failed GET stays an honest error.

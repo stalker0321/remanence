@@ -130,6 +130,47 @@ class HistoryViewModelTest {
         assertFalse(f.vm.state.value.loading)
     }
 
+    @Test fun routeWithoutLiveLeaseShowsSignInInsteadOfBlankOrEmptySuccess() = runTest {
+        val f = Fixture(this)
+        f.lease = null
+        f.vm.bind(HISTORY_OWNER)
+        assertEquals(HISTORY_OWNER, f.vm.state.value.owner)
+        assertEquals(HistoryFailure.SIGN_IN, f.vm.state.value.error)
+        assertFalse(f.vm.state.value.loaded)
+        f.vm.refresh(); f.vm.loadRecent(); runCurrent()
+        assertEquals(0, f.port.loads); assertEquals(0, f.port.recentLoads)
+        f.vm.bind(null)
+        assertEquals(HistoryUiState(), f.vm.state.value)
+        assertEquals(RecentUiState(), f.vm.recent.value)
+    }
+
+    @Test fun explicitAuthRejectionClearsBothSurfacesEvenBeforeLeaseObserverUpdates() = runTest {
+        for (surface in listOf("history", "recent", "cancel")) {
+            val f = Fixture(this)
+            f.vm.refresh(); f.vm.loadRecent(); runCurrent()
+            when (surface) {
+                "history" -> {
+                    f.port.load = { _, _ -> HistoryResult.Failed(HistoryFailure.SIGN_IN) }
+                    f.vm.refresh()
+                }
+                "recent" -> {
+                    f.port.suggestions = { HistoryResult.Failed(HistoryFailure.SIGN_IN) }
+                    f.vm.loadRecent()
+                }
+                else -> {
+                    f.port.cancellation = { HistoryCancelResult.SIGN_IN }
+                    f.vm.requestCancel(historyItem().key); f.vm.confirmCancel()
+                }
+            }
+            runCurrent()
+            assertTrue(surface, f.vm.state.value.items.isEmpty())
+            assertTrue(surface, f.vm.recent.value.items.isEmpty())
+            assertEquals(HistoryFailure.SIGN_IN, f.vm.state.value.error)
+            assertNull(f.vm.codeForCopy(historyItem().key))
+            assertNull(f.vm.recentForLookup(HISTORY_FRIEND))
+        }
+    }
+
     @Test fun cancellationRequiresConfirmationIsSingleFlightAndRefetchesWithoutLocalRewrite() = runTest {
         val f = Fixture(this)
         f.vm.refresh(); runCurrent()

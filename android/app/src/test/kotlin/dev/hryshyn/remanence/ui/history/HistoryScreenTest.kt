@@ -150,6 +150,26 @@ class HistoryScreenTest {
         rule.onNodeWithTag("history_copy_result").assertTextEquals("Could not copy the code.")
     }
 
+    @Test fun expiredSessionOffersWorkingReturnHomeNotAnInertRetry() {
+        port.load = { _, _ -> HistoryResult.Failed(HistoryFailure.SIGN_IN) }
+        vm.refresh(); mount()
+        rule.onNodeWithTag("history_retry").performScrollTo().performClick()
+        assertEquals(1, exited)
+        assertEquals(1, port.loads)
+    }
+
+    @Test fun recentSessionFailureOffersExitWithoutSelectingRecipient() {
+        var exits = 0
+        var selections = 0
+        rule.setContent {
+            HoldTheme { RecentRecipients(RecentUiState(HISTORY_OWNER, error = HistoryFailure.SIGN_IN),
+                true, { exits++ }, { selections++ }) }
+        }
+        rule.onNodeWithTag("recent_error").assertIsDisplayed()
+        rule.onNodeWithTag("recent_retry").performClick()
+        assertEquals(1, exits); assertEquals(0, selections)
+    }
+
     @Test fun deepListSelectionStartsDetailAtTopAndBackRestoresListPosition() {
         val rows = (1..20).map { historyItem("20000000-0000-4000-8000-" + it.toString().padStart(12, '0')) }
         port.load = { _, _ -> HistoryResult.Loaded(OutgoingPage(rows, null)) }

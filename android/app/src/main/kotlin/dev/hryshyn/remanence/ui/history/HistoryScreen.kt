@@ -101,9 +101,14 @@ fun HistoryScreen(
                 }
             }
             item {
-                HoldTextButton(onClick = onRefresh, enabled = !state.loading && !state.cancelling,
+                HoldTextButton(onClick = if (state.error == HistoryFailure.SIGN_IN) onBack else onRefresh,
+                    enabled = !state.loading && !state.cancelling,
                     modifier = Modifier.fillMaxWidth().testTag("history_retry")) {
-                    Text(stringResource(if (state.error != null) R.string.mvp_retry_connection else R.string.history_refresh))
+                    Text(stringResource(when {
+                        state.error == HistoryFailure.SIGN_IN -> R.string.hold_back_to_home
+                        state.error != null -> R.string.mvp_retry_connection
+                        else -> R.string.history_refresh
+                    }))
                 }
             }
         }
@@ -176,7 +181,7 @@ fun RecentRecipients(state: RecentUiState, enabled: Boolean, onRetry: () -> Unit
             state.error != null -> {
                 Text(stringResource(historyFailureCopy(state.error)), Modifier.testTag("recent_error"), color = HoldColors.Muted)
                 HoldTextButton(onClick = onRetry, enabled = enabled, modifier = Modifier.testTag("recent_retry")) {
-                    Text(stringResource(R.string.mvp_retry_connection))
+                    Text(stringResource(if (state.error == HistoryFailure.SIGN_IN) R.string.hold_back_to_home else R.string.mvp_retry_connection))
                 }
             }
             state.loaded && state.items.isEmpty() -> Text(stringResource(R.string.history_recent_empty), Modifier.testTag("recent_empty"), color = HoldColors.Muted)

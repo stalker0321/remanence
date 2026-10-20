@@ -27,7 +27,7 @@ import { signPublishStatement } from '../../src/crypto/publish'
 import { openRecipientEnvelope } from '../../src/crypto/hpke'
 import { decryptArtifact } from '../../src/crypto/artifact'
 import type { KeyCapabilities } from '../../src/crypto/keyOwner'
-import { PresentationMemory } from '../../src/collage/memory'
+import { PresentationMemory, browserUrls } from '../../src/collage/memory'
 import { FrontHold } from '../../src/create/front'
 import { FrontFingerprintHold } from '../../src/create/frontFingerprint'
 import { sealCapsule } from '../../src/create/sealCapsule'
@@ -449,26 +449,37 @@ async function main(): Promise<void> {
       const keys = new MemoryKeys()
       keys.attach(store)
       keys.hold(store.getSnapshot(), caps)
-      const memory = new PresentationMemory()
+      const liveUrls = new Set<string>(), heldCopies: Uint8Array[] = []
+      const memory = new PresentationMemory({
+        create(bytes, type) { heldCopies.push(bytes); const url = browserUrls.create(bytes, type); liveUrls.add(url); return url },
+        revoke(url) { liveUrls.delete(url); browserUrls.revoke(url) },
+      })
       memory.attach(store) // Same lifecycle wiring as production main.tsx.
-      return { store, keys, memory }
+      return { store, keys, memory, caps, liveUrls, heldCopies }
     }
 
     let scanQuad: Uint8Array = quad.slice()
+    let cameraStops = 0
+    const capturedBytes: Uint8Array[] = []
     const scanCamera: CameraPort = {
       open: async () => ({
         preview: document.createElement('video') as HTMLVideoElement,
-        capture: async (): Promise<StillCapture> => ({ bytes: scanQuad.slice(), width: 640, height: 480 }),
-        stop: () => undefined,
+        capture: async (): Promise<StillCapture> => {
+          const bytes = scanQuad.slice(); capturedBytes.push(bytes)
+          return { bytes, width: 640, height: 480 }
+        },
+        stop: () => { cameraStops++ },
       }),
     }
 
     // T392 regression: delay delivery of the original HTTP result, not its
     // request/commit. A native event releases it before passive React cleanup.
     let delayedAdmission: { wait: Promise<void>; entered: () => void } | null = null
+    let lastAdmissionSignal: AbortSignal | undefined
     const realTransport = fetchTransport(window.location.origin)
     const scheduledTransport = { ...realTransport, async request(input: Parameters<typeof realTransport.request>[0]) {
       const gate = input.path.endsWith('/first-open') ? delayedAdmission : null
+      if (gate) lastAdmissionSignal = input.signal
       const response = await realTransport.request(input)
       if (gate) { gate.entered(); await gate.wait }
       return response
@@ -630,21 +641,97 @@ async function main(): Promise<void> {
       delayedAdmission = { wait, entered: reached }
       await runScan('native navigation ' + navigationKind)
       await entered
+      const stopsBeforeDeparture = cameraStops
+      let synchronousCleanup = false
       let offRouteAdmission = false
       const stopObservation = rec.store.subscribe(() => {
         if (rec.store.getSnapshot().phase === 'presentation-admitted' && location.hash !== '#/scan') offRouteAdmission = true
       })
-      window.addEventListener(navigationKind === 'hash' ? 'hashchange' : 'popstate', () => releaseResponse(), { once: true })
+      window.addEventListener(navigationKind === 'hash' ? 'hashchange' : 'popstate', () => {
+        synchronousCleanup = lastAdmissionSignal?.aborted === true && cameraStops > stopsBeforeDeparture
+          && capturedBytes.at(-1)!.every((byte) => byte === 0)
+        releaseResponse()
+      }, { once: true })
       if (navigationKind === 'hash') location.hash = '#/'
       else history.back()
       await new Promise((ok) => setTimeout(ok, 300))
       assert('native ' + navigationKind + ': no admission after route departure', !offRouteAdmission)
       assert('native ' + navigationKind + ': late reply leaves no sheet', rec.memory.getSnapshot() === null && rec.store.getSnapshot().phase === 'keys-unlocked')
+      assert('native ' + navigationKind + ': synchronous abort/camera/capture cleanup', synchronousCleanup)
+      assert('native ' + navigationKind + ': decrypted bytes zero and no URLs', allZero() && rec.liveUrls.size === 0)
       report['native-' + navigationKind] = { offRouteAdmission, phase: rec.store.getSnapshot().phase, sheet: rec.memory.getSnapshot() !== null, hash: location.hash }
       await fetch('/__shot', { method: 'POST', body: JSON.stringify({ name: 'native-' + navigationKind, width: 320 }) })
       delayedAdmission = null
       stopObservation()
+      if (navigationKind === 'browser-back') {
+        history.forward()
+        await waitFor(() => location.hash === '#/scan' && buttonByText(t('useCamera')) !== null, 'forward returns idle scan')
+        assert('forward cannot resurrect cancelled admission', rec.memory.getSnapshot() === null && !stageShown())
+        await runScan('explicit scan after forward')
+        await waitFor(stageShown, 'forward explicit replay')
+        assert('forward explicit replay admits real photos and URLs', rec.memory.getSnapshot()?.photos.size === 3 && rec.liveUrls.size === 3)
+      }
       rec.store.lock()
+      assert('native ' + navigationKind + ': eventual held copies/URLs released', rec.liveUrls.size === 0
+        && rec.heldCopies.every((bytes) => bytes.every((byte) => byte === 0)))
+      rootRef.current?.unmount()
+    }
+
+    // Local crypto completion at the same native event boundary must not even
+    // request first-open. Unlike the response case there is no server commit.
+    for (const navigationKind of ['hash', 'browser-back'] as const) {
+      history.replaceState(null, '', '#/')
+      rec = makeRecipient(); mountApp(rec)
+      prepareGate = new Promise<void>((ok) => { releasePrepare = ok })
+      const before = await captureCounts(), byteCount = preparedBytes.length
+      await runScan('native prepare ' + navigationKind)
+      await waitFor(() => preparedBytes.length >= byteCount + 3, 'native photo decrypt held')
+      const stops = cameraStops
+      let syncCleanup = false
+      window.addEventListener(navigationKind === 'hash' ? 'hashchange' : 'popstate', () => {
+        syncCleanup = cameraStops > stops && capturedBytes.at(-1)!.every((byte) => byte === 0)
+        prepareGate = null; releasePrepare()
+      }, { once: true })
+      if (navigationKind === 'hash') location.hash = '#/'
+      else history.back()
+      await waitFor(() => location.hash === '#/' && allZero(), 'native prepared bytes wiped')
+      assert('native prepare ' + navigationKind + ': synchronous camera/capture cleanup', syncCleanup)
+      assert('native prepare ' + navigationKind + ': zero first-open, sheet, URLs', (await captureCounts()).admissions.length === before.admissions.length
+        && rec.memory.getSnapshot() === null && rec.liveUrls.size === 0 && rec.store.getSnapshot().phase === 'keys-unlocked')
+      rootRef.current?.unmount()
+    }
+
+    // A newer completed sheet in the SAME stores must survive both a late
+    // success and a late transport failure from the old session generation.
+    for (const mode of ['ok', 'unknown'] as const) {
+      rec = makeRecipient(); mountApp(rec)
+      await postJson('/__admission', { mode })
+      let reached!: () => void, release!: () => void
+      const entered = new Promise<void>((ok) => { reached = ok })
+      delayedAdmission = { wait: new Promise<void>((ok) => { release = ok }), entered: reached }
+      const oldBytesStart = preparedBytes.length
+      await runScan('old owner ' + mode); await entered
+      const oldBytes = preparedBytes.slice(oldBytesStart)
+      rec.store.signOut()
+      const oldSignalAborted = lastAdmissionSignal?.aborted === true
+      rec.store.signIn({ accountId: RECIPIENT_ID, bundleId: RECIPIENT_BUNDLE, handle: 'ada',
+        accessToken: 'new', refreshToken: 'new', accessExpiresAt: '', refreshExpiresAt: '' })
+      rec.store.unlock()
+      rec.keys.hold(rec.store.getSnapshot(), { ...rec.caps })
+      delayedAdmission = null
+      await postJson('/__admission', { mode: 'ok' })
+      await runScan('new owner ' + mode)
+      await waitFor(stageShown, 'newer owner sheet')
+      const newerSession = rec.store.getSnapshot(), newerSheet = rec.memory.getSnapshot()
+      const urls = [...rec.liveUrls], copies = rec.heldCopies.slice()
+      release()
+      await waitFor(() => oldBytes.every((bytes) => bytes.every((byte) => byte === 0)), 'old owner private bytes wiped')
+      assert('newer owner survives late ' + mode + ' unchanged', oldSignalAborted && rec.store.getSnapshot() === newerSession
+        && rec.memory.getSnapshot() === newerSheet && urls.every((url) => rec.liveUrls.has(url))
+        && copies.every((bytes) => bytes.some((byte) => byte !== 0)) && stageShown())
+      rec.store.lock()
+      assert('newer owner ' + mode + ': own final cleanup wipes copies/revokes URLs', rec.liveUrls.size === 0
+        && copies.every((bytes) => bytes.every((byte) => byte === 0)))
       rootRef.current?.unmount()
     }
 

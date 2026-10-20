@@ -141,6 +141,33 @@ class SessionReplacementOrderingTest {
         currentAccountOwner = { accountOwner.get() },
     )
 
+    @Test
+    fun staleReplacementAfterLogoutCannotClobberNewLogin() = runBlocking {
+        val stored = AtomicReference(BoundRefreshCredential(ownerA, "pm_rt_a"))
+        val accountOwner = AtomicReference<UserId?>(ownerA)
+        val tokens = AuthTokenHolder("pm_at_a", "pm_rt_a")
+        val apiStack = stack(stored, tokens)
+        val replacement = replacement(apiStack, accountOwner)
+        val staleLease = replacement.acquireLease()
+        logoutUseCase(apiStack, tokens, stored, accountOwner).logout()
+        replacement.replace(replacement.acquireLease(), ownerC, "pm_at_c", "pm_rt_c") {
+            accountOwner.set(ownerC)
+        }
+        var staleWrites = 0
+        val stale = runCatching {
+            replacement.replace(staleLease, ownerB, "pm_at_b", "pm_rt_b") {
+                staleWrites++
+                accountOwner.set(ownerB)
+            }
+        }
+        assertTrue(stale.isFailure)
+        assertEquals(0, staleWrites)
+        assertEquals(ownerC, accountOwner.get())
+        assertEquals(BoundRefreshCredential(ownerC, "pm_rt_c"), stored.get())
+        assertEquals("pm_at_c", tokens.accessToken)
+        assertEquals("Bearer pm_at_c", attachedAuthorization(apiStack.sessionRefreshCoordinator))
+    }
+
     private fun attachedAuthorization(coordinator: SessionRefreshCoordinator): String? {
         var captured: String? = null
         val client = OkHttpClient.Builder()
@@ -335,6 +362,7 @@ class SessionReplacementOrderingTest {
 
         assertEquals(LoginUseCase.Outcome.InvalidResponse, login.await())
         assertEquals(0, tracking.installCount)
+        assertNull("late login must not recreate the logged-out account row", accountOwner.get())
         assertDomainClosedNoOrdinaryBearer(apiStack)
         assertNull(tokens.accessToken)
         assertNull(stored.get())
@@ -389,6 +417,7 @@ class SessionReplacementOrderingTest {
 
         assertEquals(RegistrationUseCase.Outcome.InvalidResponse, register.await())
         assertEquals(0, tracking.installCount)
+        assertNull("late registration must not recreate the logged-out account row", accountOwner.get())
         assertDomainClosedNoOrdinaryBearer(apiStack)
         assertNull(tokens.accessToken)
         assertNull(stored.get())

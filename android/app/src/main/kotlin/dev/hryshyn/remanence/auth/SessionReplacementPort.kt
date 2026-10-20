@@ -13,11 +13,12 @@ interface SessionReplacementPort {
     fun acquireLease(): Long
 
     /**
-     * Serializes account replacement: close refresh admission, run
+     * Serializes account replacement: reject a retired lease without mutation;
+     * otherwise close refresh admission, run
      * [commitAccount], then atomically publish bound credentials and open
      * the domain only if [lease] is still current and the current account
-     * owner equals [expectedOwner]. On failure the domain stays closed with
-     * no usable published credentials. Must not perform server auth.
+     * owner equals [expectedOwner]. Failure after admission leaves the domain
+     * closed with no usable published credentials. Must not perform server auth.
      */
     suspend fun replace(
         lease: Long,

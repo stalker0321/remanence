@@ -244,13 +244,17 @@ class SessionRefreshCoordinator internal constructor(
     /**
      * Replacement start: close refresh admission without retiring the
      * caller's lease and without clearing the live bearer.
+     * When supplied, validate [lease] under the same fence before any mutation.
+     * A retired login must not close a newer account's domain.
      */
-    fun closeAdmission() {
+    fun closeAdmission(lease: Long? = null): Boolean {
         publicationFence.lock()
         try {
+            if (lease != null && accountLeaseEpoch.get() != lease) return false
             invalidationEpoch.incrementAndGet()
             installedOwner.set(null)
             domainOpen.set(false)
+            return true
         } finally {
             publicationFence.unlock()
         }

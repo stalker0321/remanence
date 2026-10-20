@@ -29,7 +29,9 @@ class BoundSessionReplacement(
         commitAccount: suspend () -> Unit,
     ) {
         replacementMutex.withLock {
-            coordinator.closeAdmission()
+            // Reject a retired response before account writes or fail-closed
+            // cleanup. Neither belongs to this attempt after logout/new login.
+            check(coordinator.closeAdmission(lease)) { "bound session lease retired" }
             var opened = false
             try {
                 commitAccount()

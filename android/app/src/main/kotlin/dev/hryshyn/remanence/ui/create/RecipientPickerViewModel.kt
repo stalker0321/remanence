@@ -97,17 +97,26 @@ class RecipientPickerViewModel(
     }
 
     fun lookup() {
-        val token = accessTokenProvider()
-        if (token == null) {
-            // BUG-014: a transient outage can empty the in-memory token while
-            // the local session is intact. Cancel any in-flight attempt, run
-            // exactly one bounded recovery, then re-read the provider and
-            // perform that same lookup only if recovery succeeded.
-            lookupJob?.cancel()
-            if (_state.value is RecipientLookupUiState.LookingUp) {
-                _state.value = RecipientLookupUiState.Idle
+        if (!canLookup) return
+        val rawHandle = _handle.value
+        val lookupGeneration = ++generation
+        val boundaryEpoch = sessionBoundaryEpoch()
+        lookupJob?.cancel()
+        // Recovery and directory lookup are one user attempt. Mark it busy
+        // before launching so a second tap cannot cancel/restart recovery.
+        _state.value = RecipientLookupUiState.LookingUp
+        lookupJob = scope.launch {
+            fun isCurrent(): Boolean {
+                if (generation != lookupGeneration || _handle.value != rawHandle) return false
+                if (sessionBoundaryEpoch() != boundaryEpoch) {
+                    _state.value = RecipientLookupUiState.Idle
+                    return false
+                }
+                return true
             }
-            lookupJob = scope.launch {
+            if (accessTokenProvider() == null) {
+                // One bounded recovery; its result belongs to the same input
+                // and session boundary even when the provider ignores cancel.
                 val recovery = try {
                     sessionRefresh()
                 } catch (cancelled: CancellationException) {
@@ -115,34 +124,24 @@ class RecipientPickerViewModel(
                 } catch (_: Exception) {
                     SessionRecovery.NETWORK_FAILED
                 }
+                if (!isCurrent()) return@launch
                 val fresh = accessTokenProvider()
-                if (recovery == SessionRecovery.RECOVERED && fresh != null) {
-                    startLookup()
-                } else if (recovery == SessionRecovery.NETWORK_FAILED) {
-                    _state.value = RecipientLookupUiState.Failed("Network unreachable. Try again later.", RecipientLookupUiState.Failure.NETWORK)
-                } else {
-                    _state.value = RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+                if (recovery != SessionRecovery.RECOVERED || fresh == null) {
+                    _state.value = if (recovery == SessionRecovery.NETWORK_FAILED) {
+                        RecipientLookupUiState.Failed("Network unreachable. Try again later.", RecipientLookupUiState.Failure.NETWORK)
+                    } else {
+                        RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+                    }
+                    return@launch
                 }
             }
-            return
-        }
-        startLookup()
-    }
-
-    private fun startLookup() {
-        if (!canLookup) return
-        val rawHandle = _handle.value
-        val lookupGeneration = ++generation
-        val boundaryEpoch = sessionBoundaryEpoch()
-        lookupJob?.cancel()
-        _state.value = RecipientLookupUiState.LookingUp
-        lookupJob = scope.launch {
             val expectedOwner = sessionOwnerProvider() ?: run {
-                if (generation == lookupGeneration) {
+                if (isCurrent()) {
                     _state.value = RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
                 }
                 return@launch
             }
+            if (!isCurrent()) return@launch
             val result = try {
                 mapResult(directory.lookup(rawHandle))
             } catch (cancelled: CancellationException) {
@@ -151,10 +150,7 @@ class RecipientPickerViewModel(
                 RecipientLookupUiState.Failed("Unexpected error. Try again later.")
             }
             val currentOwner = sessionOwnerProvider()
-            if (generation == lookupGeneration &&
-                _handle.value == rawHandle &&
-                sessionBoundaryEpoch() == boundaryEpoch
-            ) {
+            if (isCurrent()) {
                 _state.value = if (currentOwner == expectedOwner) {
                     result
                 } else {

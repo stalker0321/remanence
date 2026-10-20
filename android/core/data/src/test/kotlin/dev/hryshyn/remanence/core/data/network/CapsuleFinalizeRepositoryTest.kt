@@ -19,6 +19,21 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 
 class CapsuleFinalizeRepositoryTest {
 
+    @Test fun sendLimitFinalizeIsTypedWithoutChangingRequest() = accessOutcome(409, "SEND_LIMIT_REACHED", false)
+    @Test fun sendAccessUnavailableFinalizeIsTypedWithoutChangingRequest() = accessOutcome(503, "SEND_ACCESS_UNAVAILABLE", true)
+
+    private fun accessOutcome(status: Int, code: String, retryable: Boolean) = runTest {
+        withServer { server ->
+            server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", "application/problem+json")
+                .body(problemJson(code, status, retryable)).build())
+            val result = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "synthetic"))
+            assertEquals(code, result.reason.name)
+            assertEquals(retryable, result.retryable)
+            assertFalse(result.toString().contains(SECRET_DETAIL))
+            assertEquals(1, server.requestCount)
+        }
+    }
+
     private val capsuleId = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000ca01")
     private val senderKeyBundleId = KeyBundleId.parseRest("0198f0a0-0000-7000-8000-00000000ba01")
     private val recipientKeyBundleId = KeyBundleId.parseRest("0198f0a0-0000-7000-8000-00000000ba02")

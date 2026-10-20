@@ -17,6 +17,21 @@ import mockwebserver3.MockWebServer
  */
 class PendingDeliveryPublishRepositoryTest {
 
+    @Test fun sendLimitFinalizeIsTypedWithoutChangingRequest() = accessOutcome(409, "SEND_LIMIT_REACHED", false)
+    @Test fun sendAccessUnavailableFinalizeIsTypedWithoutChangingRequest() = accessOutcome(503, "SEND_ACCESS_UNAVAILABLE", true)
+
+    private fun accessOutcome(status: Int, code: String, retryable: Boolean) = runTest {
+        withServer { server ->
+            server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", "application/json")
+                .body("""{"type":"about:blank","title":"$code","status":$status,"code":"$code"}""").build())
+            val result = assertIs<PendingFinalizeResult.Failure>(repository(server).finalize(
+                "d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic"))
+            assertEquals(code, result.reason.name)
+            assertEquals(retryable, result.retryable)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
     private suspend fun <T> withServer(block: suspend (MockWebServer) -> T): T {
         val server = MockWebServer()
         server.start()

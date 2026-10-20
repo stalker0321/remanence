@@ -1,5 +1,5 @@
 /* Scoped new registration form only. Shared shell/settings/composer belong to T406. */
-.atomic-account { overflow-wrap: anywhere; }
+.atomic-account { overflow-wrap: anywhere; padding-inline: clamp(.4rem, 4vw, 1.15rem); }
 .atomic-account form { display: grid; gap: .65rem; margin-top: 1rem; min-width: 0; }
 .atomic-account input {
   box-sizing: border-box;

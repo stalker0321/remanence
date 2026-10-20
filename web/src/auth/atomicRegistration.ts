@@ -32,23 +32,26 @@ export class AtomicRegistration {
   #owner: Owner | null = null
   #view: AtomicView = { phase: 'idle', busy: false, error: null, reservationState: null, credentialCount: 0 }
   #listeners = new Set<() => void>()
-  #unsubscribe: () => void
+  #unsubscribe: (() => void) | null = null
   constructor(private readonly ports: {
     session: SessionStore; keys: MemoryKeys; setup: AtomicPort; api: ApiTransport
     google: GoogleIdentityPort; passkeys: PasskeyPort
-  }) {
-    this.#unsubscribe = ports.session.subscribe(() => {
+  }) {}
+  #observe(): void {
+    if (this.#unsubscribe) return
+    this.#unsubscribe = this.ports.session.subscribe(() => {
       const owner = this.#owner
       if (owner && !this.#sameSession(owner)) this.#release(owner)
     })
   }
   subscribe = (listener: () => void): (() => void) => { this.#listeners.add(listener); return () => { this.#listeners.delete(listener) } }
   getSnapshot = (): AtomicView => this.#view
-  dispose(): void { this.leave(); this.#unsubscribe(); this.#listeners.clear() }
+  dispose(): void { this.leave(); this.#unsubscribe?.(); this.#unsubscribe = null }
 
   begin(): Promise<void> {
     if (this.#owner?.pending) return this.#owner.pending
     if (this.ports.session.getSnapshot().phase !== 'signed-out') return Promise.resolve()
+    this.#observe() // No external effects in a React render/StrictMode initializer.
     if (this.#owner) this.#release(this.#owner)
     const owner: Owner = { controller: new AbortController(), expected: this.ports.session.getSnapshot(), setup: null,
       buffers: new Set(), candidate: null, intent: null, grant: null, credential: null, login: null, pending: null }
@@ -252,6 +255,7 @@ export class AtomicRegistration {
     }
     const accepted = outcome(reply.outcome)
     if (reply.status !== 'ACTIVE' || accepted.operation_id !== intent.operation_id || accepted.account_id !== intent.record.account_id || accepted.bundle_id !== intent.key_bundle.key_bundle_id || accepted.credential_id !== intent.record.credential_id || accepted.handle !== intent.handle) throw new AtomicError('SETUP_REJECTED')
+    owner.setup = { ...owner.setup!, reservation: { ...owner.setup!.reservation, state: 'ACTIVE', outcome: accepted, credential_ids: [accepted.credential_id] } }
     if (reply.reauthenticate === true) {
       this.#wipe(owner)
       this.#show('restore-required')

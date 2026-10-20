@@ -31,6 +31,43 @@ function gate(f: AtomicFixture, point: string) {
 async function saved(c = context()) { await c.controller.begin(); await c.controller.save('@Ada'); return c }
 
 describe('atomic A document ownership / real ADR011 crypto', () => {
+  it('construction has no session subscription; effect cleanup/re-attach remains usable', async () => {
+    const session = new SessionStore(); const subscribe = vi.spyOn(session, 'subscribe'); const f = new AtomicFixture()
+    const controller = new AtomicRegistration({ session, keys: new MemoryKeys(), setup: f.setup, api: f.api, google: f.google, passkeys: f.passkeys })
+    expect(subscribe).not.toHaveBeenCalled()
+    controller.dispose(); await controller.begin(); expect(subscribe).toHaveBeenCalledTimes(1)
+    controller.dispose(); await controller.begin(); expect(subscribe).toHaveBeenCalledTimes(2)
+    expect(controller.getSnapshot().phase).toBe('handle'); controller.dispose()
+  })
+
+  it.each(['credential/options', 'setup/options'] as const)('wrong %s source owner never generates/finalizes', async (action) => {
+    const c = context(); const generate = vi.spyOn(identity, 'generateLocalIdentity')
+    c.f.after = (point, result) => point === action ? { status: 200, body: { flow: '11111111-1111-4111-8111-111111111111', options: { user: { id: 'AQ' }, allowCredentials: [{ id: 'AQ' }] } } } : result
+    await saved(c); expect(generate).not.toHaveBeenCalled(); expect(c.f.intents).toHaveLength(0)
+  })
+
+  it('selected credential returning a different PRF cannot rewrap or replace candidate', async () => {
+    const c = context(); c.f.finalMode = 'expired-grant'; await saved(c)
+    const original = c.f.passkeys.get
+    c.f.passkeys.get = async (...args) => { const assertion = await original(...args); assertion.prf!.fill(8); return assertion }
+    c.f.finalMode = 'ok'; await c.controller.save('ada')
+    expect(c.f.intents).toHaveLength(1); expect(c.session.getSnapshot().phase).toBe('signed-out')
+  })
+
+  it('reentrant session replacement at intentional sign-in cannot unlock or wipe the replacement', async () => {
+    const c = context(); let replaced = false
+    c.session.subscribe(() => {
+      if (!replaced && c.session.getSnapshot().phase === 'authenticated') {
+        replaced = true
+        c.session.signIn({ accountId: RESERVATION, bundleId: RESERVATION, handle: 'replacement', accessToken: 'new', refreshToken: 'new', accessExpiresAt: '', refreshExpiresAt: '' })
+      }
+    })
+    await saved(c)
+    expect(c.session.getSnapshot().accountId).toBe(RESERVATION)
+    expect(c.session.getSnapshot().phase).toBe('authenticated')
+    expect(c.keys.capabilities(c.session.getSnapshot())).toBeNull()
+  })
+
   it('generates only after a verified assertion, reads actual stored bytes, drops generation and PRF before READY', async () => {
     const c = context(); const generate = vi.spyOn(identity, 'generateLocalIdentity')
     await c.controller.begin()

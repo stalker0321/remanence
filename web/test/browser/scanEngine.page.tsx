@@ -43,7 +43,7 @@ import type { DraftPhoto } from '../../src/create/photos'
 import type { CameraPort, StillCapture } from '../../src/scan/camera'
 import { unavailableRecognition, type RecognitionEngine } from '../../src/scan/grant'
 import { bytesToHex } from '../../src/protocol/bytes'
-import { catalog as i18nCatalog, type MessageKey } from '../../src/i18n/catalog'
+import { catalog as i18nCatalog, type MessageKey, type Language } from '../../src/i18n/catalog'
 import { b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
 import hpkeVector from '../../../protocol/fixtures/recipient-envelope-v1.json'
 import signatureVector from '../../../protocol/fixtures/publish-signature-v1.json'
@@ -424,6 +424,8 @@ async function main(): Promise<void> {
     }
 
     // ---- recipient helper + REAL App mount (production default engine) ----
+    let prepareGate: Promise<void> | null = null
+    const preparedBytes: Uint8Array[] = []
     const makeRecipient = () => {
       const store = new SessionStore('en')
       store.signIn({
@@ -435,7 +437,12 @@ async function main(): Promise<void> {
       const caps: KeyCapabilities = {
         accountId: RECIPIENT_ID, bundleId: RECIPIENT_BUNDLE,
         openEnvelope: (info, ciphertext) => openRecipientEnvelope(HPKE_PRIVATE, info, ciphertext),
-        decryptArtifact,
+        decryptArtifact: async (...args) => {
+          const bytes = await decryptArtifact(...args)
+          preparedBytes.push(bytes)
+          if (args[3] === 'PHOTO' && prepareGate) await prepareGate
+          return bytes
+        },
         sign: async () => { throw new Error('unused') },
         lock: () => {},
       }
@@ -489,6 +496,7 @@ async function main(): Promise<void> {
       recognition: number
       content: number
       photo: number
+      admissions: Array<{ capsule: string; bearer: boolean; bodyLength: number; content: number; photo: number }>
       incoming?: Array<{ cursor: string | null; limit: string | null }>
     }>('/__capture')
     const waitNotice = (key: MessageKey) => waitFor(() => bodyText().includes(t(key)), `notice ${key}`)
@@ -511,7 +519,86 @@ async function main(): Promise<void> {
     assert('positive: memory note is the sealed note', memorySheet !== null && memorySheet.scene.note?.text === NOTE_TEXT)
     assert('positive: content manifest downloaded only after unique match', positiveCounts.content > beforePositive.content)
     assert('positive: photo blobs downloaded only after unique match', positiveCounts.photo > beforePositive.photo)
+    assert('positive: exactly one authenticated admission after all preparation', positiveCounts.admissions.length === beforePositive.admissions.length + 1
+      && positiveCounts.admissions.at(-1)?.bearer === true && positiveCounts.admissions.at(-1)?.bodyLength === 0)
     report.positive = { phase: rec.store.getSnapshot().phase, photos: memorySheet?.scene.photos.length ?? 0 }
+    rootRef.current?.unmount()
+
+    // T388 actual App/default engine/real crypto with controlled admission HTTP.
+    // Cached, still-readable encrypted bodies must not bypass a revoke denial.
+    const allZero = () => preparedBytes.every((bytes) => bytes.every((value) => value === 0))
+    for (const [mode, notice] of [['deny', 'openDenied'], ['unknown', 'openUnconfirmed'], ['lost', 'openUnconfirmed'],
+      ['offline', 'openUnconfirmed'], ['auth', 'openSignIn']] as const) {
+      await postJson('/__admission', { mode })
+      rec = makeRecipient(); mountApp(rec)
+      const before = await captureCounts()
+      await runScan(`admission ${mode}`)
+      await waitNotice(notice)
+      const after = await captureCounts()
+      assert(`${mode}: prepared cached bodies cannot display without admission`, after.content > before.content && after.photo > before.photo
+        && after.admissions.length > before.admissions.length && !stageShown() && rec.memory.getSnapshot() === null)
+      assert(`${mode}: owned retry phase and plaintext wiped`, rec.store.getSnapshot().phase === 'keys-unlocked' && allZero())
+      if (mode === 'deny' || mode === 'lost') {
+        for (const language of ['en', 'ru', 'uk'] as Language[]) {
+          rec.store.setLanguage(language)
+          await waitFor(() => bodyText().includes(i18nCatalog[language][notice]), 'localized admission error')
+          for (const width of [320, 1280]) {
+            const shot = await fetch('/__shot', { method: 'POST', body: JSON.stringify({ name: `${mode}-${language}-${width}`, width }) }).then((r) => r.json())
+            assert(`${mode} ${language} ${width}: no horizontal overflow`, shot.overflow === false)
+          }
+        }
+        rec.store.setLanguage('en')
+      }
+      await postJson('/__admission', { mode: 'ok' })
+      await clickText(t('matchPicture'), 'explicit retry same held capture')
+      await waitFor(() => stageShown(), 'replay after failed admission')
+      assert(`${mode}: explicit replay displays three photos`, rec.memory.getSnapshot()?.photos.size === 3)
+      rec.store.lock(); await waitFor(() => !stageShown(), 'clear admitted replay')
+      assert(`${mode}: close wipes held plaintext`, rec.memory.getSnapshot() === null && allZero())
+      rootRef.current?.unmount()
+    }
+    for (const interruption of ['cancel', 'back', 'logout', 'reentry', 'owner'] as const) {
+      rec = makeRecipient(); mountApp(rec)
+      await postJson('/__admission', { mode: 'ok', hold: true })
+      const before = await captureCounts()
+      await runScan(`pending admission ${interruption}`)
+      await waitFor(() => bodyText().includes(t('openChecking')), 'waiting admission UI')
+      // The next control request is ordered after the actual first-open request
+      // by waiting on the host's captured counter, not a fixed sleep.
+      const deadline = Date.now() + 120000
+      while ((await captureCounts()).admissions.length === before.admissions.length) {
+        if (Date.now() > deadline) throw new Error('admission request did not arrive')
+        await new Promise((ok) => setTimeout(ok, 20))
+      }
+      assert(`${interruption}: no presentation while admission unresolved`, !stageShown() && rec.memory.getSnapshot() === null)
+      if (interruption === 'cancel') await clickText(t('closeCamera'), 'cancel admission')
+      else if (interruption === 'back') { location.hash = '#/'; await waitFor(() => !buttonByText(t('matchPicture')), 'back unmount') }
+      else {
+        rec.store.signOut()
+        if (interruption !== 'logout') {
+          rec.store.signIn({ accountId: interruption === 'owner' ? SENDER_ID : RECIPIENT_ID, bundleId: RECIPIENT_BUNDLE,
+            handle: 'replacement', accessToken: 'new', refreshToken: 'new', accessExpiresAt: '', refreshExpiresAt: '' })
+        }
+      }
+      const newer = rec.store.getSnapshot()
+      await postJson('/__admission', { mode: 'ok', hold: false })
+      await waitFor(allZero, 'late prepared bytes wiped')
+      assert(`${interruption}: late reply cannot present or overwrite newer owner`, !stageShown() && rec.memory.getSnapshot() === null
+        && (interruption === 'cancel' || interruption === 'back' ? rec.store.getSnapshot().phase === 'keys-unlocked' : rec.store.getSnapshot() === newer))
+      rootRef.current?.unmount()
+    }
+    // Abort during local decrypt/preparation must never send first-open.
+    rec = makeRecipient(); mountApp(rec)
+    let releasePrepare!: () => void
+    prepareGate = new Promise<void>((ok) => { releasePrepare = ok })
+    const beforePrepare = await captureCounts(), beforeBytes = preparedBytes.length
+    await runScan('abort local preparation')
+    await waitFor(() => preparedBytes.length >= beforeBytes + 3, 'photo decrypt held')
+    await clickText(t('closeCamera'), 'abort during local preparation')
+    prepareGate = null; releasePrepare()
+    await waitFor(allZero, 'aborted preparation bytes zero')
+    assert('prepare cancellation never admits or presents', (await captureCounts()).admissions.length === beforePrepare.admissions.length
+      && !stageShown() && rec.memory.getSnapshot() === null && rec.store.getSnapshot().phase === 'keys-unlocked')
     rootRef.current?.unmount()
 
     // ---- MANY: two distinct IDs sharing the same genuine visual reference ----

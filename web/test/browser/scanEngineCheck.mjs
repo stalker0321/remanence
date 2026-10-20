@@ -43,7 +43,7 @@ report.executableSha256 = createHash('sha256').update(await readFile(executable)
 const work = join(tmpdir(), `scan-engine-${process.pid}`)
 await mkdir(work, { recursive: true })
 await writeFile(join(work, 'index.ts'), 'import ' + JSON.stringify(join(web, 'test', 'browser', 'scanEngine.page.tsx')) + '\n')
-await writeFile(join(work, 'index.html'), '<!doctype html><html><head><meta charset="utf-8"></head><body><script type="module" src="./index.ts"></script></body></html>')
+await writeFile(join(work, 'index.html'), '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><script type="module" src="./index.ts"></script></body></html>')
 await writeFile(
   join(work, 'vite.config.mjs'),
   'import react from ' + JSON.stringify(requireTool.resolve('@vitejs/plugin-react', { paths: [web] })) + '\n' +
@@ -69,6 +69,10 @@ const downloads = { recognition: 0, content: 0, photo: 0, paths: [] }
 const incomingRequests = []
 let delayCursor = null
 let delayMs = 0
+// T388 labelled admission fixtures; this host is NOT FastAPI/PG evidence.
+let admissionMode = 'ok', admissionHeld = false, releaseAdmission = null
+const admitted = new Set(), admissions = []
+let activePage = null
 const json = { 'content-type': 'application/json', 'cache-control': 'no-store' }
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1')
@@ -78,8 +82,39 @@ const server = createServer((req, res) => {
     try {
       const body = Buffer.concat(chunks)
       if (req.method === 'GET' && url.pathname === '/__capture') {
-        res.writeHead(200, json).end(JSON.stringify({ ...downloads, incoming: incomingRequests }))
+        res.writeHead(200, json).end(JSON.stringify({ ...downloads, incoming: incomingRequests, admissions }))
         return
+      }
+      if (req.method === 'POST' && url.pathname === '/__admission') {
+        const config = JSON.parse(body.toString('utf8'))
+        admissionMode = config.mode ?? 'ok'
+        admissionHeld = config.hold === true
+        if (!admissionHeld) { releaseAdmission?.(); releaseAdmission = null }
+        res.writeHead(200, json).end('{}'); return
+      }
+      if (req.method === 'POST' && url.pathname === '/__shot') {
+        const shot = JSON.parse(body.toString('utf8'))
+        assert.match(shot.name, /^[a-z0-9-]+$/)
+        assert.ok([320, 1280].includes(shot.width))
+        await activePage.setViewportSize({ width: shot.width, height: 900 })
+        await activePage.screenshot({ path: join(outDir, `${shot.name}.png`), fullPage: true })
+        const overflow = await activePage.evaluate(() => document.documentElement.scrollWidth > innerWidth)
+        res.writeHead(200, json).end(JSON.stringify({ overflow })); return
+      }
+      const opening = /^\/v1\/capsules\/([0-9a-f-]{36})\/first-open$/.exec(url.pathname)
+      if (req.method === 'POST' && opening) {
+        admissions.push({ capsule: opening[1], bearer: Boolean(req.headers.authorization), bodyLength: body.length,
+          content: downloads.content, photo: downloads.photo })
+        if (admissionHeld) await new Promise((resolve) => { releaseAdmission = resolve })
+        if (admissionMode === 'lost') { admitted.add(opening[1]); res.destroy(); return }
+        if (admissionMode === 'offline') { res.destroy(); return }
+        if (admissionMode === 'deny') { res.writeHead(409, json).end(JSON.stringify({ code: 'CAPSULE_STATE_INVALID' })); return }
+        if (admissionMode === 'auth') { res.writeHead(401, json).end('{}'); return }
+        if (admissionMode === 'unknown') { res.writeHead(503, json).end('{}'); return }
+        const replay = admitted.has(opening[1])
+        admitted.add(opening[1])
+        res.writeHead(200, json).end(JSON.stringify({ capsule_id: opening[1], state: 'OPENED',
+          first_opened_at: '2026-10-20T01:00:00Z', is_replay: replay })); return
       }
       if (req.method === 'POST' && url.pathname === '/__catalog') {
         const parsed = JSON.parse(body.toString('utf8'))
@@ -178,6 +213,7 @@ try {
   try {
     report.browser = browser.version()
     const page = await browser.newPage({ viewport: { width: 900, height: 900 } })
+    activePage = page
     page.on('console', (msg) => report.console.push({ type: msg.type(), text: msg.text() }))
     page.on('pageerror', (error) => report.errors.push(String(error)))
     await page.route('**/*', async (route) => {
@@ -211,7 +247,8 @@ try {
       assert.equal(result.report?.positive?.photos, 3, 'positive memory photos')
       assert.ok(downloads.recognition >= 1, 'recognition blob downloaded')
       assert.deepEqual(report.errors, [], 'no page/route/runtime errors')
-      assert.deepEqual(report.console.filter((item) => item.type === 'error'), [], 'no console errors')
+      // Deliberate denied/offline/lost first-open responses emit browser network errors.
+      assert.ok(report.console.filter((item) => item.type === 'error').every((item) => /Failed to load resource/.test(item.text)), 'only controlled network errors')
     } catch (error) {
       failure = error
     }

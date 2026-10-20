@@ -30,15 +30,18 @@ export async function enrollHeldIdentity(
   const generation = view.generation
   const accountId = view.accountId
   const bundleId = view.bundleId
+  const epoch = draft.epoch
   const token = () => {
     if (signal?.aborted) throw new AuthError('CANCELLED')
     session.bind(generation)()
     const secrets = session.secretsFor(generation)
-    if (!secrets || session.getSnapshot().accountId !== accountId) throw new AuthError('STALE')
+    if (!secrets || session.getSnapshot().accountId !== accountId || session.getSnapshot().bundleId !== bundleId
+      || draft.epoch !== epoch || draft.bundleId() !== bundleId) throw new AuthError('STALE')
     return secrets.accessToken
   }
   if (!passkeys.canAuthenticate()) throw new AuthError('PASSKEY_UNAVAILABLE')
   const status = await transport.request({ path: '/v1/recovery/status', method: 'GET', token: token(), signal })
+  token()
   const state = readStatus(status.status === 200 ? status.body : null)
   if (!state) throw new AuthError('RECOVERY_REJECTED')
   let credentialId = state.kind === 'absent' ? '' : state.credentialId
@@ -52,6 +55,7 @@ export async function enrollHeldIdentity(
     })
     const ceremony = readCeremony(begin.status === 200 ? begin.body : null)
     if (!ceremony) throw new AuthError('RECOVERY_REJECTED')
+    token()
     const created = await passkeys.create(ceremony.options, signal)
     const verified = await transport.request({
       path: '/v1/recovery/register/verify',
@@ -61,6 +65,7 @@ export async function enrollHeldIdentity(
       signal,
     })
     const proof = record(verified.status === 200 ? verified.body : null)
+    token()
     if (proof?.registered !== true || typeof proof.credential_id !== 'string' || proof.credential_id !== created.id) {
       throw new AuthError('RECOVERY_REJECTED')
     }
@@ -75,9 +80,11 @@ export async function enrollHeldIdentity(
   })
   const ceremony = readCeremony(begin.status === 200 ? begin.body : null)
   if (!ceremony) throw new AuthError('RECOVERY_REJECTED')
+  token()
   const assertion = await passkeys.get(ceremony.options, signal)
   const secret = assertion.prf
   try {
+    token()
     if (secret === null || secret.length !== 32) throw new AuthError('PRF_UNAVAILABLE')
     if (assertion.id !== credentialId || assertion.publicResponse.id !== credentialId) throw new AuthError('WRONG_CREDENTIAL')
     if (Object.keys(assertion.publicResponse.clientExtensionResults).length !== 0) throw new AuthError('RECOVERY_REJECTED')
@@ -89,6 +96,7 @@ export async function enrollHeldIdentity(
       signal,
     })
     const proof = record(verified.status === 200 ? verified.body : null)
+    token()
     if (proof?.authentication_verified !== true || proof.credential_id !== credentialId || typeof proof.flow !== 'string') {
       throw new AuthError('RECOVERY_REJECTED')
     }
@@ -98,6 +106,7 @@ export async function enrollHeldIdentity(
       return { kind: 'restored' }
     }
     const identity = await draft.identity()
+    token()
     const seeds = identity.copySeeds()
     const bundle = identity.publicBundle()
     let code: Uint8Array | null = null
@@ -121,6 +130,7 @@ export async function enrollHeldIdentity(
         signal,
       })
       const stored = record(saved.status === 200 ? saved.body : null)
+      token()
       if (stored?.stored !== true || stored.generation !== 1) throw new AuthError('RECOVERY_REJECTED')
       await readback(session, transport, keys, token, generation, accountId, bundleId, credentialId, secret, signal)
       draft.wipe()
@@ -156,6 +166,7 @@ async function readback(
     signal,
   })
   const reply = readReply(loaded.status === 200 ? loaded.body : null)
+  token()
   if (
     !reply
     || reply.record.account_id !== accountId
@@ -166,6 +177,7 @@ async function readback(
   }
   const caps = await unlockAccount(reply, secret)
   try {
+    token()
     if (signal?.aborted) throw new AuthError('CANCELLED')
     session.bind(generation)()
     const current = session.getSnapshot()

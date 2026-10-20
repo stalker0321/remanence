@@ -148,7 +148,9 @@ async function main() {
     const receive = () => receivePostcard(receiveSession, receiveKeys, receiveMemory,
       { match: async () => ({ kind: 'one', capsuleId: jsPressIds.capsule }) },
       jsPressCapture, { items: [material.capsule], hasMore: false, nextCursor: null },
-      { read: async (_item, id) => material.ciphertext(id).slice() }, fitText, new AbortController().signal)
+      { read: async (_item, id) => material.ciphertext(id).slice() }, fitText, new AbortController().signal, undefined,
+      { request: async () => ({ status: 200, body: { capsule_id: jsPressIds.capsule, state: 'OPENED',
+        first_opened_at: '2026-10-20T01:00:00Z', is_replay: false } }) }) // Labelled admission fixture, not backend proof.
     let refused = false
     try { await receive() } catch { refused = true }
     check('receive crypto failure refuses presentation and permits retry',

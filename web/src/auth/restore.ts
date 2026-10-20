@@ -33,7 +33,7 @@ export async function restoreSignedInAccount(
     if (signal?.aborted) throw new AuthError('CANCELLED')
     session.bind(generation)()
     const secrets = session.secretsFor(generation)
-    if (!secrets || session.getSnapshot().accountId !== accountId) throw new AuthError('STALE')
+    if (!secrets || session.getSnapshot().accountId !== accountId || session.getSnapshot().bundleId !== bundleId) throw new AuthError('STALE')
     return secrets.accessToken
   }
   if (!passkeys.canAuthenticate()) throw new AuthError('PASSKEY_UNAVAILABLE')
@@ -44,6 +44,7 @@ export async function restoreSignedInAccount(
     signal,
   })
   const state = readStatus(status.status === 200 ? status.body : null)
+  token()
   if (!state) throw new AuthError('RECOVERY_REJECTED')
   if (state.kind === 'absent') throw new AuthError('RECOVERY_NOT_STARTED')
   if (state.kind === 'pending') return { kind: 'pending-verification' }
@@ -57,9 +58,11 @@ export async function restoreSignedInAccount(
   })
   const ceremony = readCeremony(begin.status === 200 ? begin.body : null)
   if (!ceremony) throw new AuthError('RECOVERY_REJECTED')
+  token()
   const assertion = await passkeys.get(ceremony.options, signal)
   const secret = assertion.prf
   try {
+    token()
     if (secret === null || secret.length !== 32) throw new AuthError('PRF_UNAVAILABLE')
     if (assertion.id !== credentialId || assertion.publicResponse.id !== credentialId) {
       throw new AuthError('WRONG_CREDENTIAL')
@@ -75,6 +78,7 @@ export async function restoreSignedInAccount(
       signal,
     })
     const proof = record(verified.status === 200 ? verified.body : null)
+    token()
     if (proof?.authentication_verified !== true || proof.credential_id !== credentialId) {
       throw new AuthError('RECOVERY_REJECTED')
     }
@@ -85,6 +89,7 @@ export async function restoreSignedInAccount(
       signal,
     })
     const reply = readReply(loaded.status === 200 ? loaded.body : null)
+    token()
     if (
       !reply
       || reply.record.account_id !== accountId

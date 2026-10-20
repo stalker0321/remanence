@@ -1318,6 +1318,7 @@ function Account({
   const [choosing, setChoosing] = useState(() => draft.hasTicket())
   const [recoveryCode, setRecoveryCode] = useState('')
   const busyRef = useRef(false)
+  const primary = useRef<HTMLButtonElement>(null)
   const abort = useRef<AbortController | null>(null)
   const signedIn = view.phase !== 'signed-out'
   const unlocked = signedIn && view.phase !== 'authenticated'
@@ -1344,6 +1345,7 @@ function Account({
     abort.current = null
     busyRef.current = false
     setBusy(false)
+    primary.current?.focus()
   }
 
   async function run(action: (signal: AbortSignal) => Promise<MessageKey | null>) {
@@ -1377,6 +1379,7 @@ function Account({
           <button
             type="button"
             className="primary"
+            ref={primary}
             aria-disabled={busy}
             onClick={() => {
               void run(async (signal) => {
@@ -1393,7 +1396,8 @@ function Account({
           <button
             type="button"
             className="primary"
-            disabled={busy}
+            ref={primary}
+            aria-disabled={busy}
             onClick={() => {
               void run(async (signal) => {
                 const outcome = await enrollHeldIdentity(store, transport, passkeys, keys, draft, signal)
@@ -1412,7 +1416,8 @@ function Account({
           <button
             type="button"
             className="primary"
-            disabled={busy}
+            ref={primary}
+            aria-disabled={busy}
             onClick={() => {
               void run((signal) => restoreSignedInAccount(store, transport, passkeys, keys, signal).then(explainRestore))
             }}

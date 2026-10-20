@@ -147,7 +147,7 @@ class OutgoingHistoryRepositoryTest {
         assertEquals(HistoryCancelResult.SUCCEEDED, stack.outgoingHistoryRepository.cancel(owner, v1))
         val post = server.takeRequest()
         assertEquals("/v1/capsules/$capsule/revoke", post.url.encodedPath)
-        assertEquals("POST", post.method); assertEquals(0L, post.body?.size ?: 0L)
+        assertEquals("POST", post.method); assertEquals(0, post.body?.size ?: 0)
         server.enqueue(MockResponse.Builder().code(409).setHeader("Content-Type", "application/problem+json")
             .body("""{"type":"https://remanence.invalid/problems/window_expired","title":"safe","status":409,"code":"WINDOW_EXPIRED","detail":"safe","request_id":"$capsule","retryable":false}""").build())
         assertEquals(HistoryCancelResult.CONFLICT, stack.outgoingHistoryRepository.cancel(owner, v1))
@@ -165,7 +165,7 @@ class OutgoingHistoryRepositoryTest {
             assertEquals(outcome, stack.outgoingHistoryRepository.cancel(owner, v2))
             val request = server.takeRequest()
             assertEquals("/v2/pending-deliveries/$delivery/cancel", request.url.encodedPath)
-            assertEquals("POST", request.method); assertEquals(0L, request.body?.size ?: 0L)
+            assertEquals("POST", request.method); assertEquals(0, request.body?.size ?: 0)
         }
     } }
 }

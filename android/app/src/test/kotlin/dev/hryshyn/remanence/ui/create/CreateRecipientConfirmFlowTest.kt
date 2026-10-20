@@ -184,6 +184,41 @@ class CreateRecipientConfirmFlowTest {
         }
     }
 
+    @Test
+    fun recentSuggestionRunsFreshLookupThenExistingExplicitConfirmation() {
+        val calls = mutableListOf<String>()
+        val owner = selfSnapshot.userId.toRestString()
+        val vm = viewModel(RecipientDirectoryPort { raw ->
+            calls += raw
+            DirectoryLookupResult.Found(otherSnapshot)
+        }, ownerProvider = { owner })
+        vm.beginSession(1L, owner)
+        val recent = dev.hryshyn.remanence.ui.history.RecentUiState(owner = owner, loaded = true,
+            items = listOf(dev.hryshyn.remanence.core.data.network.RecentRecipient(
+                otherSnapshot.userId.toRestString(), "friend", "2026-10-20T10:01:00Z")))
+        composeRule.setContent {
+            MaterialTheme {
+                CreateScreen(vm, recentRecipientsContent = {
+                    dev.hryshyn.remanence.ui.history.RecentRecipients(recent, true, {}, { id ->
+                        val suggestion = recent.items.single { it.userId == id }
+                        vm.onHandleChange(suggestion.handle)
+                        vm.lookupRecipient()
+                    })
+                })
+            }
+        }
+        composeRule.onNodeWithTag("recent_${otherSnapshot.userId.toRestString()}").performScrollTo().performClick()
+        composeRule.waitUntil(10_000) { vm.pendingRecipient.value != null }
+        assertEquals(listOf("friend"), calls)
+        assertNull(vm.confirmedRecipient.value)
+        composeRule.onNodeWithTag("confirm_handle_text").assertIsDisplayed()
+        composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.runOnIdle {
+            assertEquals(otherSnapshot, vm.confirmedRecipient.value)
+            assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        }
+    }
+
     /** Types the handle and resolves it through the REAL picker + lookup. */
     private fun resolveThroughUi(handle: String) {
         composeRule.onNodeWithTag("create_handle_input").performTextInput(handle)

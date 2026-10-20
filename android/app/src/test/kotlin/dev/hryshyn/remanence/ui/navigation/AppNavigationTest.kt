@@ -9,6 +9,19 @@ class AppNavigationTest {
     private val owner = "1f0a1234-5678-4abc-9def-aabbccdd1001"
 
     @Test
+    fun historyIsAuthenticatedMetadataAndItsRowIsNeverAnOpeningGrant() {
+        for (auth in listOf(AuthUiState.SignedOut, AuthUiState.RecoveryRequired, AuthUiState.Resolving)) {
+            assertEquals(AppDestination.Authentication, RouteGuard.resolve(auth, AppDestination.History))
+        }
+        val controller = authenticatedController()
+        controller.navigate(AppDestination.History)
+        assertEquals(AppDestination.History, controller.current)
+        assertEquals(CapsuleAccess.None, controller.capsuleAccess)
+        controller.navigate(AppDestination.Capsule("20000000-0000-4000-8000-000000000001"))
+        assertEquals(AppDestination.Home, controller.current)
+    }
+
+    @Test
     fun signedOutStartsOnAuthenticationSurface() {
         val controller = AppNavigationController(AuthUiState.SignedOut)
         assertEquals(AppDestination.Authentication, controller.current)

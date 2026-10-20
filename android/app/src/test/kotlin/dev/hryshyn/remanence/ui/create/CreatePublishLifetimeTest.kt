@@ -61,10 +61,10 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  * publish can neither stage an outbox row nor mutate step/error of any newer
  * session. Duplicate taps stay a single publish.
  */
-private fun lifetimeSynthetic(side: FingerprintSide): ProcessedStill.Accepted {
+private fun lifetimeSynthetic(seed: Int): ProcessedStill.Accepted {
         return ProcessedStill.Accepted(
         profileId = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.PROFILE_ID,
-        serializedBytes = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(6),
+        serializedBytes = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(seed),
     )
 }
 
@@ -76,6 +76,7 @@ class CreatePublishLifetimeTest {
 
     private val testDispatcher = UnconfinedTestDispatcher()
     private val ownedViewModels = CreateTestViewModels(testDispatcher.scheduler)
+    private var nextFrontSeed = 6
 
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var stagingDir: File
@@ -118,8 +119,8 @@ class CreatePublishLifetimeTest {
     // Fixtures.
     // ------------------------------------------------------------------
 
-    private class Accepting(private val side: FingerprintSide) : StillProcessor {
-        override fun process(jpegBytes: ByteArray): ProcessedStill = lifetimeSynthetic(side)
+    private class Accepting(private val seed: Int) : StillProcessor {
+        override fun process(jpegBytes: ByteArray): ProcessedStill = lifetimeSynthetic(seed)
     }
 
 
@@ -242,7 +243,10 @@ class CreatePublishLifetimeTest {
                     )
                 }
             },
-            frontProcessor = Accepting(FingerprintSide.FRONT),
+            // The real duplicate guard hashes canonical FRONT fingerprint
+            // bytes, not the input JPEG. Independent scenarios need distinct
+            // valid fingerprints; never disable or clear duplicate protection.
+            frontProcessor = Accepting(nextFrontSeed++),
             // C3 authoritative cutover: normalization runs once inside the
             // G4B bind; the publisher consumes bind results through the bridge.
             generatorBridgeProvider = bridge.provider,
@@ -267,10 +271,7 @@ class CreatePublishLifetimeTest {
         vm.frontAttempt.onPermissionResult(true, false)
         vm.frontAttempt.onPreviewBound()
         assertTrue(vm.beginFrontCapture())
-        // Each independent VM scenario sends a different postcard. Constant
-        // FRONT bytes legitimately trip the real exact-duplicate reservation
-        // on a second publication in the same test database.
-        vm.deliverFrontJpeg("front-${vm.capsuleId}".toByteArray())
+        vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         // ADR-018: publish with no note (non-empty notes are typed unsupported).

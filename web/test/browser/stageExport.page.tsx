@@ -262,8 +262,10 @@ async function main(): Promise<void> {
     assert('null encode: no URL/download', created.length === beforeNull.created && downloads.length === beforeNull.downloads)
     assert('null encode: export re-enabled after honest failure', !exportButton().disabled)
 
+    render(c.held)
+    await waitFor(() => !exportButton().disabled && canvasStatus() === '', 'fresh composition ready')
     const beforeThrow = { created: created.length, downloads: downloads.length, revoked: revoked.length }
-    render(a.held, { encode: () => Promise.reject(new Error('SecurityError: tainted')) })
+    render(c.held, { encode: () => Promise.reject(new Error('SecurityError: tainted')) })
     await waitFor(() => !exportButton().disabled, 'throw-encode ready')
     exportButton().click()
     await waitFor(() => canvasStatus() === t('sheetSaveFailed'), 'throw encode failure')

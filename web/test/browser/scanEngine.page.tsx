@@ -463,6 +463,16 @@ async function main(): Promise<void> {
       }),
     }
 
+    // T392 regression: delay delivery of the original HTTP result, not its
+    // request/commit. A native event releases it before passive React cleanup.
+    let delayedAdmission: { wait: Promise<void>; entered: () => void } | null = null
+    const realTransport = fetchTransport(window.location.origin)
+    const scheduledTransport = { ...realTransport, async request(input: Parameters<typeof realTransport.request>[0]) {
+      const gate = input.path.endsWith('/first-open') ? delayedAdmission : null
+      const response = await realTransport.request(input)
+      if (gate) { gate.entered(); await gate.wait }
+      return response
+    } }
     const rootRef: { current: Root | null } = { current: null }
     const mountApp = (rec: ReturnType<typeof makeRecipient>, engine?: RecognitionEngine): void => {
       rootRef.current?.unmount()
@@ -479,7 +489,7 @@ async function main(): Promise<void> {
           preferences={preferences()}
           keys={rec.keys}
           memory={rec.memory}
-          transport={fetchTransport(window.location.origin)}
+          transport={scheduledTransport}
           engine={engine}
           camera={scanCamera}
           recipient={new RecipientDraft()}
@@ -608,6 +618,35 @@ async function main(): Promise<void> {
     assert('prepare cancellation never admits or presents', (await captureCounts()).admissions.length === beforePrepare.admissions.length
       && !stageShown() && rec.memory.getSnapshot() === null && rec.store.getSnapshot().phase === 'keys-unlocked')
     rootRef.current?.unmount()
+
+    // Real native Back/popstate, not a hash assignment followed by unmount.
+    // Keep the original reviewer's response/event ordering as the RED control.
+    for (const navigationKind of ['hash', 'browser-back'] as const) {
+      history.replaceState(null, '', '#/')
+      rec = makeRecipient(); mountApp(rec)
+      let reached!: () => void, releaseResponse!: () => void
+      const entered = new Promise<void>((ok) => { reached = ok })
+      const wait = new Promise<void>((ok) => { releaseResponse = ok })
+      delayedAdmission = { wait, entered: reached }
+      await runScan('native navigation ' + navigationKind)
+      await entered
+      let offRouteAdmission = false
+      const stopObservation = rec.store.subscribe(() => {
+        if (rec.store.getSnapshot().phase === 'presentation-admitted' && location.hash !== '#/scan') offRouteAdmission = true
+      })
+      window.addEventListener(navigationKind === 'hash' ? 'hashchange' : 'popstate', () => releaseResponse(), { once: true })
+      if (navigationKind === 'hash') location.hash = '#/'
+      else history.back()
+      await new Promise((ok) => setTimeout(ok, 300))
+      assert('native ' + navigationKind + ': no admission after route departure', !offRouteAdmission)
+      assert('native ' + navigationKind + ': late reply leaves no sheet', rec.memory.getSnapshot() === null && rec.store.getSnapshot().phase === 'keys-unlocked')
+      report['native-' + navigationKind] = { offRouteAdmission, phase: rec.store.getSnapshot().phase, sheet: rec.memory.getSnapshot() !== null, hash: location.hash }
+      await fetch('/__shot', { method: 'POST', body: JSON.stringify({ name: 'native-' + navigationKind, width: 320 }) })
+      delayedAdmission = null
+      stopObservation()
+      rec.store.lock()
+      rootRef.current?.unmount()
+    }
 
     // ---- MANY: two distinct IDs sharing the same genuine visual reference ----
     await serveCatalog([item1, item2])

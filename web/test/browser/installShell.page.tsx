@@ -29,7 +29,7 @@ async function waitFor(cond: () => boolean, what: string, timeoutMs = 15000): Pr
 }
 
 const PAPER = [244, 242, 236]
-interface IconMeasure { width: number; height: number; inkPixels: number; maxForegroundRadius: number; cornerPaper: boolean }
+interface IconMeasure { width: number; height: number; inkPixels: number; maxForegroundRadius: number; cornerPaper: boolean; opaque: boolean }
 
 async function measureIcon(url: string): Promise<IconMeasure> {
   const response = await fetch(url, { cache: 'no-store' })
@@ -45,9 +45,11 @@ async function measureIcon(url: string): Promise<IconMeasure> {
   const cy = bitmap.height / 2
   let inkPixels = 0
   let maxForegroundRadius = 0
+  let opaque = true
   for (let y = 0; y < bitmap.height; y++) {
     for (let x = 0; x < bitmap.width; x++) {
       const i = (y * bitmap.width + x) * 4
+      if (data[i + 3] !== 255) opaque = false
       const delta = Math.abs(data[i]! - PAPER[0]!) + Math.abs(data[i + 1]! - PAPER[1]!) + Math.abs(data[i + 2]! - PAPER[2]!)
       if (delta > 30) {
         inkPixels += 1
@@ -62,6 +64,7 @@ async function measureIcon(url: string): Promise<IconMeasure> {
     height: bitmap.height,
     inkPixels,
     maxForegroundRadius,
+    opaque,
     cornerPaper: Math.abs(corner[0]! - PAPER[0]!) <= 2 && Math.abs(corner[1]! - PAPER[1]!) <= 2 && Math.abs(corner[2]! - PAPER[2]!) <= 2,
   }
 }
@@ -102,7 +105,7 @@ async function main(): Promise<void> {
       check(`icon ${size} same-origin under base`, url.pathname.startsWith(basePath) && url.origin === location.origin)
       check(`icon ${size} dimensions`, measured.width === expected && measured.height === expected, `${measured.width}x${measured.height}`)
       check(`icon ${size} contains the ink mark`, measured.inkPixels > 100, String(measured.inkPixels))
-      check(`icon ${size} opaque paper background`, measured.cornerPaper)
+      check(`icon ${size} opaque paper background`, measured.cornerPaper && measured.opaque)
       if (String(icon.purpose) === 'maskable') {
         check('maskable foreground inside 40% radius', measured.maxForegroundRadius <= expected * 0.4, String(measured.maxForegroundRadius))
         report.maskableMaxForegroundRadius = measured.maxForegroundRadius

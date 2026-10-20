@@ -33,7 +33,8 @@ const rootBuild = spawnSync('npx', ['vite', 'build', '--outDir', rootOut], {
 })
 const prefixBuild = spawnSync('npx', ['vite', 'build', '--base=/test-prefix/', '--outDir', prefixOut], {
   cwd: web,
-  env: { ...process.env, REMANENCE_STATIC_BASE: '/test-prefix/' },
+  // The CLI base must override an independently configured default.
+  env: { ...process.env, REMANENCE_STATIC_BASE: '/' },
   encoding: 'utf8',
 })
 report.builds.root = { status: rootBuild.status, log: (rootBuild.stdout ?? '') + (rootBuild.stderr ?? '') }

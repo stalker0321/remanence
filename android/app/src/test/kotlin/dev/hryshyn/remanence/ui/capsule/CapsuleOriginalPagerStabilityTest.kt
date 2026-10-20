@@ -7,6 +7,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.InputModeManager
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.unit.Density
@@ -65,7 +68,9 @@ class CapsuleOriginalPagerStabilityTest {
         }
         var validations = 0
         var dismissals = 0
+        lateinit var inputMode: InputModeManager
         rule.setContent {
+            inputMode = LocalInputModeManager.current
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
                 HoldTheme {
                     CapsulePhotoDialog(ids, ids.zip(images).toMap(), "wide",
@@ -74,6 +79,7 @@ class CapsuleOriginalPagerStabilityTest {
                 }
             }
         }
+        rule.runOnIdle { inputMode.requestInputMode(InputMode.Keyboard) }
         rule.onNodeWithTag("capsule_photo_close").assertIsDisplayed()
         rule.onNodeWithTag("capsule_photo_close").assertIsFocused()
         rule.onNodeWithTag("capsule_photo_previous").assertIsNotEnabled()

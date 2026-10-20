@@ -74,12 +74,14 @@ class CapsuleMediaRenderTest {
                 HoldTheme {
                     scope = rememberCoroutineScope()
                     val measurer = rememberCollageTextMeasurer()
-                    val ready = state.status as CollagePresentationState.Status.Ready
+                    val ready = state.status as? CollagePresentationState.Status.Ready
+                    if (ready != null) {
                     val prepared = CollageRenderer.prepare(expression, null, state.track,
                         ready.bitmaps.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) },
                         measurer, ready.artwork?.let { CollageRenderer.SourcePhoto(it.width, it.height) })
                     check(prepared is CollageRenderer.SceneResult.Ready) { prepared.toString() }
                     scene = prepared.scene
+                    }
                     CollagePresentationHost(state, "Synthetic postcard", {}, openTrackUrl = {
                         urls += it; launchSucceeds
                     }, exportFactory = { rememberCapsuleImageExport(it).also { value -> export = value } })

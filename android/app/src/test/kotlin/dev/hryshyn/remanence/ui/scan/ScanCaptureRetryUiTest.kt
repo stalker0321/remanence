@@ -1,14 +1,22 @@
 package dev.hryshyn.remanence.ui.scan
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.material3.MaterialTheme
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
@@ -23,6 +31,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.runBlocking
+import dev.hryshyn.remanence.ui.create.CreateTestViewModels
+import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -33,6 +44,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.recognition.QualityReason
@@ -48,12 +60,14 @@ import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ScanCaptureRetryUiTest {
 
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     private val testDispatcher = UnconfinedTestDispatcher()
+    private val owned = CreateTestViewModels(testDispatcher.scheduler)
 
     private lateinit var database: RemanenceLocalDatabase
 
@@ -68,6 +82,7 @@ class ScanCaptureRetryUiTest {
 
     @After
     fun tearDown() {
+        runBlocking { owned.clearAndJoin() }
         Dispatchers.resetMain()
         if (::database.isInitialized) database.close()
     }
@@ -117,13 +132,23 @@ class ScanCaptureRetryUiTest {
 
     @Test
     fun rejectionRendersPanelRetakeWorksTwiceAndExceptionShowsFailure() {
+        verifyReceiverCopyAndRetakes(1f)
+    }
+
+    @Test @Config(qualifiers = "ru-w320dp-h640dp-xhdpi")
+    fun russianReceiverCopyAfterRetakesFont18() = verifyReceiverCopyAndRetakes(1.8f)
+
+    @Test @Config(qualifiers = "uk-w390dp-h844dp-xhdpi")
+    fun ukrainianReceiverCopyAfterRetakesFont15() = verifyReceiverCopyAndRetakes(1.5f)
+
+    private fun verifyReceiverCopyAndRetakes(fontScale: Float) {
         val front = ScriptedProcessor(
             ProcessedStill.Rejected(setOf(QualityReason.TOO_BLURRY)),
             ProcessedStill.Rejected(setOf(QualityReason.TOO_BLURRY)),
             "sift extraction failed",
             synthetic(),
         )
-        val vm = ScanViewModel(
+        val vm = owned.own(ScanViewModel(
             persistence = NoPersistence(),
             database = database,
             profile = RecognitionProfile.postcardSiftRootSiftV1(),
@@ -140,13 +165,14 @@ class ScanCaptureRetryUiTest {
             incomingPresentationPreparation = null,
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
-        )
+        ))
 
         // One fake adapter per binding cycle; keep the live one reachable.
         val live = AtomicReference<FakeStillCameraAdapter?>(null)
         var bindCount = 0
 
         composeRule.setContent {
+          CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
             MaterialTheme {
                 ScanScreen(
                     viewModel = vm,
@@ -157,6 +183,7 @@ class ScanCaptureRetryUiTest {
                     },
                 )
             }
+          }
         }
 
         /** Lets the surface finish its binding cycle, then completes it. */
@@ -171,6 +198,17 @@ class ScanCaptureRetryUiTest {
                 else -> "Capture the picture side of the postcard you received to open the memory."
             }
             composeRule.onNodeWithText(copy).assertIsDisplayed()
+            val tree = composeRule.onRoot(useUnmergedTree = true).printToString()
+            composeRule.runOnIdle {
+                val view = composeRule.activity.window.decorView
+                val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+                view.draw(Canvas(bitmap))
+                val dir = File("build/t389-review").apply { mkdirs() }
+                val name = "scan-$locale-font$fontScale-bind$bindCount"
+                File(dir, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                File(dir, "$name-semantics.txt").writeText(tree)
+                bitmap.recycle()
+            }
         }
 
         fun shutter() {

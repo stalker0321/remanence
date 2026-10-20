@@ -18,6 +18,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -61,7 +63,12 @@ internal fun CapsulePhotoDialog(
     val maxHeight = configuration.screenHeightDp.dp * .7f
     Dialog(onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn)) {
-        LaunchedEffect(Unit) { closeFocus.requestFocus() }
+        val inputMode = LocalInputModeManager.current.inputMode
+        LaunchedEffect(inputMode) {
+            // Material buttons accept keyboard focus only in keyboard mode.
+            // Entering that mode is an event, not a delayed focus retry.
+            if (inputMode == InputMode.Keyboard) closeFocus.requestFocus()
+        }
         val previousLabel = stringResource(R.string.media_photo_previous)
         val nextLabel = stringResource(R.string.media_photo_next)
         val positionLabel = stringResource(R.string.media_photo_position, pager.currentPage + 1, photoIds.size)

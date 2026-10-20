@@ -1330,7 +1330,7 @@ function Account({
     return store.subscribe(() => {
       const next = store.getSnapshot()
       if (next.accountId !== previous.accountId || next.bundleId !== previous.bundleId ||
-        (next.generation !== previous.generation && next.phase === 'signed-out')) {
+        (next.generation !== previous.generation && (next.phase === 'signed-out' || next.phase === 'authenticated'))) {
         cancel()
         setRecoveryCode('')
         setChoosing(false)

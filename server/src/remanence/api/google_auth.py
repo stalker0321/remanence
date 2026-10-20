@@ -7,14 +7,14 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from sqlalchemy import select, delete, func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from remanence.api.dependencies import get_db_session
 from remanence.api.auth_schemas import RegistrationKeyBundleRequest, RegistrationUserResponse, ActiveKeyBundleResponse, LoginResponse
-from remanence.api.recovery import b64, active_bundle
+from remanence.api.recovery import b64, unb64, active_bundle
 from remanence.auth.google_models import GoogleIdentity, GoogleFlow
 from remanence.auth.google_verifier import verify_google_token
 from remanence.auth.registration import RegistrationService
@@ -50,6 +50,17 @@ class GoogleProof(Strict):
     nonce: str = Field(min_length=43, max_length=43)
     id_token: SecretStr = Field(repr=False)
     onboarding_version: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonical_onboarding_wire(cls, value):
+        # New interface is canonical; absent-version legacy parsing is unchanged.
+        if isinstance(value, dict) and "onboarding_version" in value:
+            flow = value.get("flow")
+            if not isinstance(flow, str) or str(uuid.UUID(flow)) != flow:
+                raise ValueError("canonical onboarding flow required")
+            unb64(value.get("nonce"), 32, 32)
+        return value
 
     @field_validator("onboarding_version", mode="before")
     @classmethod

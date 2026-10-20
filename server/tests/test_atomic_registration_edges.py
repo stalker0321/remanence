@@ -223,3 +223,13 @@ def test_malformed_and_private_public_credential_dto_never_echoes_secrets(atomic
         assert "sentinel-private-secret" not in response.text
         assert response.headers["cache-control"] == "no-store"
     post(atomic, a, "credential/verify", {"flow": begin["flow"], "response": valid})
+
+
+def test_new_google_wire_requires_canonical_flow_and_nonce_without_burning_proof(atomic):
+    begin = options(atomic[0])
+    body = {"flow": begin["flow"], "nonce": begin["nonce"], "id_token": atomic[2](begin), "onboarding_version": 1}
+    for field, value in (("flow", "{" + begin["flow"] + "}"), ("flow", begin["flow"].replace("-", "")),
+                         ("nonce", begin["nonce"][:-1] + "B")):
+        response = atomic[0].post("/v1/auth/google/verify", json={**body, field: value})
+        assert response.status_code == 422 and response.headers["cache-control"] == "no-store"
+    assert atomic[0].post("/v1/auth/google/verify", json=body).json()["status"] == "SETUP_REQUIRED"

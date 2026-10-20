@@ -131,8 +131,9 @@ private fun HistoryDetail(item: OutgoingItem, cancellable: Boolean,
         item.expiresAt?.let { DetailDate(R.string.history_expires, it) }
         item.firstOpenedAt?.let { DetailDate(R.string.history_opened, it) }
         item.revokedAt?.let { DetailDate(R.string.history_revoked, it) }
-        if (item.code != null) {
-            Text(item.code, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.testTag("history_code"))
+        val displayedCode = item.code
+        if (displayedCode != null) {
+            Text(displayedCode, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.testTag("history_code"))
             HoldButton(onClick = {
                 copied = runCatching {
                     val code = codeForCopy(item.key) ?: error("code is no longer available")
@@ -192,7 +193,8 @@ fun RecentRecipients(state: RecentUiState, enabled: Boolean, onRetry: () -> Unit
 }
 @Composable private fun historyDate(raw: String): String {
     val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales[0] ?: Locale.getDefault()
-    return runCatching { OffsetDateTime.parse(raw).format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM).withLocale(locale)) }
+    return runCatching { OffsetDateTime.parse(raw).atZoneSameInstant(java.time.ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM).withLocale(locale)) }
         .getOrDefault(raw)
 }
 internal fun historyFailureCopy(reason: HistoryFailure): Int = when (reason) {

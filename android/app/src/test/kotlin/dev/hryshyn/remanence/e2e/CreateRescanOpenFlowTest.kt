@@ -347,7 +347,7 @@ class CreateRescanOpenFlowTest {
         controller.navigate(AppDestination.Scan)
         assertEquals(AppDestination.Scan, controller.current)
 
-        // No gallery/history route exists to navigate to at all.
+        // Metadata history is not a gallery and cannot authorize an opening.
         RouteInventoryProbe.assertNoGalleryRoutes()
     }
 
@@ -355,7 +355,11 @@ class CreateRescanOpenFlowTest {
         fun assertNoGalleryRoutes() {
             val names = dev.hryshyn.remanence.ui.navigation.RouteGuard.allDestinations()
                 .map { it.javaClass.simpleName }
-            assertFalse("Gallery" in names || "History" in names || "Inbox" in names)
+            assertFalse("Gallery" in names || "Inbox" in names)
+            val controller = AppNavigationController(AuthUiState.Authenticated("user-1", "mykola"))
+            controller.navigate(AppDestination.History)
+            controller.navigate(AppDestination.Capsule("history-row-is-not-a-grant"))
+            assertEquals(AppDestination.Home, controller.current)
         }
     }
 

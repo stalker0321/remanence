@@ -824,6 +824,7 @@ private fun ScanFlowSurface(
                 AppDestination.Authentication,
                 AppDestination.Create,
                 AppDestination.Settings,
+                AppDestination.History,
                 -> scanViewModel.resetSession()
                 AppDestination.Scan,
                 is AppDestination.Capsule,

@@ -217,19 +217,20 @@ export function createRecognitionEngine(deps: RecognitionEngineDeps = {}): Recog
         throw refuse('invalid')
       }
 
-      // Snapshot every reference fingerprint synchronously (caller/index is
-      // never mutated; later mutations cannot relabel the result).
-      const references: SiftFingerprint[] = []
+      // Snapshot every routing ID together with its DEEP reference copy
+      // synchronously. Scoring/output must use only these tuples; the caller's
+      // entries array is never reread after an await.
+      const snapshotEntries: Array<{ capsuleId: string; fingerprint: SiftFingerprint }> = []
       try {
         for (const entry of rawEntries) {
           try {
-            references.push(copyReference(entry.fingerprint))
+            snapshotEntries.push({ capsuleId: entry.capsuleId, fingerprint: copyReference(entry.fingerprint) })
           } catch (error) {
             throw mapError(error)
           }
         }
       } catch (error) {
-        for (const reference of references) wipeFingerprint(reference)
+        for (const snapshot of snapshotEntries) wipeFingerprint(snapshot.fingerprint)
         throw error
       }
 
@@ -260,31 +261,38 @@ export function createRecognitionEngine(deps: RecognitionEngineDeps = {}): Recog
         try {
           produced = await produceQuery(capture, { fence, signal })
         } catch (error) {
+          // Captured cancellation wins over a rejected dependency.
+          if (signal?.aborted === true) throw refuse('cancelled')
           throw mapError(error)
         }
-        assertLive()
+        // Own the transferred wire immediately, before ANY post-await fence,
+        // so stale/cancelled/parse failures all wipe it.
         try {
-          queryDomain = parseSiftFingerprint(produced.wire)
-        } catch (error) {
-          throw mapError(error)
+          assertLive()
+          try {
+            queryDomain = parseSiftFingerprint(produced.wire)
+          } catch (error) {
+            throw mapError(error)
+          }
         } finally {
           produced.wire.fill(0)
         }
 
         const query = queryDomain!
         const scored: ScoredCandidateRow[] = []
-        for (let indexRef = 0; indexRef < references.length; indexRef++) {
+        for (let indexRef = 0; indexRef < snapshotEntries.length; indexRef++) {
           assertLive()
-          const reference = references[indexRef]!
+          const snapshot = snapshotEntries[indexRef]!
           let side: SideMatchResult
           try {
-            side = await runSide(query, reference, { fence, signal })
+            side = await runSide(query, snapshot.fingerprint, { fence, signal })
           } catch (error) {
+            if (signal?.aborted === true) throw refuse('cancelled')
             throw mapError(error)
           }
           assertLive()
           scored.push({
-            candidateId: rawEntries[indexRef]!.capsuleId,
+            candidateId: snapshot.capsuleId,
             compositeScore: side.report.sideScore,
             frontScore: side.report.sideScore,
             frontWeakPassed: side.report.weakGatePassed,
@@ -337,7 +345,7 @@ export function createRecognitionEngine(deps: RecognitionEngineDeps = {}): Recog
         throw mapError(error)
       } finally {
         wipeFingerprint(queryDomain)
-        for (const reference of references) wipeFingerprint(reference)
+        for (const snapshot of snapshotEntries) wipeFingerprint(snapshot.fingerprint)
       }
     },
   }

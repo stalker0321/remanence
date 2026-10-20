@@ -286,4 +286,92 @@ describe('T346 connected receiving engine', () => {
     expect(Array.from(reference.quantizedSiftDescriptors[0]!)).toEqual(referenceSnapshot)
     expect(records.some((record) => record.before.some((byte) => byte !== 0) && record.after.every((byte) => byte === 0))).toBe(true)
   })
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    let reject!: (reason: unknown) => void
+    const promise = new Promise<T>((yes, no) => {
+      resolve = yes
+      reject = no
+    })
+    return { promise, resolve, reject }
+  }
+
+  it('keeps the original routing ID paired with the copied reference across await', async () => {
+    const entries = [
+      { capsuleId: 'c1', fingerprint: domain(1) },
+      { capsuleId: 'c2', fingerprint: domain(2) },
+    ]
+    const index = makeIndex(entries)
+    const ready = deferred<QueryFingerprint>()
+    const engine = createRecognitionEngine({
+      produceQuery: (() => ready.promise) as never,
+      matchSide: (async (_query: SiftFingerprint, snapshot: SiftFingerprint) =>
+        sideResult(report(snapshot.quantizedSiftDescriptors[0]![0] === 1 ? 0.9 : 0, true, true))) as never,
+    })
+    const pending = engine.match(CAPTURE, catalogOf(['c1', 'c2']), { index: index as unknown as RecognitionIndex })
+    entries[0]!.capsuleId = 'c2'
+    ready.resolve(queryOf())
+    await expect(pending).resolves.toEqual({ kind: 'one', capsuleId: 'c1' })
+  })
+
+  it('wipes the transferred query wire when ownership dies at the post-query handover', async () => {
+    let current = true
+    const entries = [{ capsuleId: 'c1', fingerprint: domain(1) }]
+    const index = {
+      hasMore: false,
+      nextCursor: null,
+      entries: () => {
+        if (!current) throw new RecognitionIndexError('stale')
+        return entries
+      },
+    } as unknown as RecognitionIndex
+    const ready = deferred<QueryFingerprint>()
+    const produced = queryOf()
+    const engine = createRecognitionEngine({
+      produceQuery: (() => ready.promise) as never,
+      matchSide: (async () => sideResult(report(0.9, true, true))) as never,
+    })
+    const pending = engine.match(CAPTURE, catalogOf(['c1']), { index })
+    expect(produced.wire.some((byte) => byte !== 0)).toBe(true)
+    current = false
+    ready.resolve(produced)
+    await expect(codeOf(pending)).resolves.toBe('stale')
+    expect(produced.wire.every((byte) => byte === 0)).toBe(true)
+  })
+
+  it('gives captured cancellation precedence over a rejected query dependency', async () => {
+    const controller = new AbortController()
+    const ready = deferred<QueryFingerprint>()
+    const index = makeIndex([{ capsuleId: 'c1', fingerprint: domain() }])
+    const engine = createRecognitionEngine({
+      signal: controller.signal,
+      produceQuery: (() => ready.promise) as never,
+      matchSide: (async () => sideResult(report(0.9, true, true))) as never,
+    })
+    const pending = engine.match(CAPTURE, catalogOf(['c1']), { index: index as unknown as RecognitionIndex })
+    controller.abort()
+    ready.reject(new Error('synthetic dependency failure'))
+    await expect(codeOf(pending)).resolves.toBe('cancelled')
+  })
+
+  it('gives captured cancellation precedence over a rejected side dependency', async () => {
+    const controller = new AbortController()
+    const queryReady = deferred<QueryFingerprint>()
+    const sideReady = deferred<SideMatchResult>()
+    const index = makeIndex([{ capsuleId: 'c1', fingerprint: domain() }])
+    const engine = createRecognitionEngine({
+      signal: controller.signal,
+      produceQuery: (() => queryReady.promise) as never,
+      matchSide: (() => sideReady.promise) as never,
+    })
+    const pending = engine.match(CAPTURE, catalogOf(['c1']), { index: index as unknown as RecognitionIndex })
+    queryReady.resolve(queryOf())
+    // Let the engine reach the side await, then abort before rejecting it.
+    await Promise.resolve()
+    await Promise.resolve()
+    controller.abort()
+    sideReady.reject(new Error('synthetic side failure'))
+    await expect(codeOf(pending)).resolves.toBe('cancelled')
+  })
 })

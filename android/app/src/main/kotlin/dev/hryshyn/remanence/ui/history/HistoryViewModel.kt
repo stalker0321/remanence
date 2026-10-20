@@ -139,7 +139,10 @@ class HistoryViewModel internal constructor(
                             .distinctBy { it.key }
                         _state.value.copy(loading = false, loaded = true, items = items,
                             nextCursor = result.value.nextCursor,
-                            selectedKey = previous.selectedKey?.takeIf { key -> items.any { it.key == key } })
+                            // Navigation can change while GET is in flight.
+                            // Never reopen a detail the user has left, or undo
+                            // a newer selection made during pagination.
+                            selectedKey = _state.value.selectedKey?.takeIf { key -> items.any { it.key == key } })
                     }
                     is HistoryResult.Failed -> _state.value.copy(loading = false, error = result.reason)
                 }

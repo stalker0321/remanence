@@ -5,6 +5,12 @@ import {
   produceFrontStillFingerprint,
   type OwnedRgbaFrame,
 } from '../src/scan/frontStillProducer'
+import {
+  CaptureQualityError,
+  evaluateCaptureQualityGate,
+  type CaptureQualityMeter,
+  type CaptureQualitySignals,
+} from '../src/scan/captureQuality'
 import { produceQueryFingerprint } from '../src/scan/queryFingerprint'
 import type { StillCapture } from '../src/scan/camera'
 import { parseSiftFingerprint } from '../src/scan/siftFingerprint'
@@ -151,6 +157,70 @@ const BIG_QUAD = {
 
 function workingFrame(width = 320, height = 240): OwnedRgbaFrame {
   return { rgba: new Uint8Array(width * height * 4).fill(9), width, height }
+}
+
+interface MeterCall {
+  readonly bytes: Uint8Array
+  readonly snapshot: Uint8Array
+  readonly width: number
+  readonly height: number
+}
+
+function fakeMeter(
+  calls: MeterCall[],
+  order: string[],
+  signals: CaptureQualitySignals,
+  fail?: CaptureQualityError,
+  onMeasure?: () => void,
+): CaptureQualityMeter {
+  return {
+    measure(bytes, width, height) {
+      order.push('meter')
+      calls.push({ bytes, snapshot: bytes.slice(), width, height })
+      onMeasure?.()
+      if (fail) throw fail
+      return { ...signals }
+    },
+  }
+}
+
+function spyRuntime(
+  base: CvContourRuntime,
+  order: string[],
+): { runtime: CvContourRuntime; warped: { bytes: Uint8Array | null } } {
+  const warped: { bytes: Uint8Array | null } = { bytes: null }
+  const runtime = new Proxy(base, {
+    get(target, prop) {
+      if (prop === 'warpRgbaQuad') {
+        return (...args: unknown[]) => {
+          order.push('warp')
+          const run = target.warpRgbaQuad as (...a: unknown[]) => { bytes: Uint8Array; width: number; height: number }
+          const out = run(...args)
+          warped.bytes = out.bytes
+          return out
+        }
+      }
+      if (prop === 'createSift') {
+        return (...parameters: Parameters<CvContourRuntime['createSift']>) => {
+          const sift = target.createSift(...parameters)
+          return {
+            ...sift,
+            compute: (...args: Parameters<typeof sift.compute>) => {
+              order.push('sift')
+              return sift.compute(...args)
+            },
+          }
+        }
+      }
+      const value = (target as unknown as Record<string | symbol, unknown>)[prop]
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as CvContourRuntime
+  return { runtime, warped }
+}
+
+function queryStill(jpeg: Uint8Array): StillCapture {
+  return { bytes: jpeg, width: 320, height: 240 }
 }
 
 describe('T316 producer input capture and guards', () => {
@@ -624,5 +694,228 @@ describe('T343 identity-free receiving query producer', () => {
     )
     expect(outcome.code).toBe('cancelled')
     expect(outcome.wiped).toBe(true)
+  })
+})
+
+describe('T348 query quality opt-in', () => {
+  const sift = {
+    detections: [{ x: 800, y: 600, size: 20, angle: 0, response: 10, octave: 0 }],
+    descriptorRows: [new Array(128).fill(3)],
+    dctValues: Array.from({ length: 64 }, (_, index) => index),
+  }
+  const passSignals: CaptureQualitySignals = {
+    laplacianVariance: 500,
+    nearBlackFraction: 0,
+    clippedWhiteFraction: 0,
+    largestGlareFraction: 0.05,
+  }
+
+  it('measures the exact post-warp buffer once, before SIFT, and returns advisory diagnostics', async () => {
+    const handles: FakeHandles = { deleted: [] }
+    const order: string[] = []
+    const calls: MeterCall[] = []
+    const { runtime, warped } = spyRuntime(makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }, handles), order)
+    const query = await produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), {
+      fence: () => true,
+      runtime,
+      meter: fakeMeter(calls, order, passSignals),
+      quality: true,
+      decode: async () => workingFrame(),
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.bytes).toBe(warped.bytes)
+    expect(calls[0]!.width).toBe(1600)
+    expect(calls[0]!.height).toBe(1200)
+    expect(calls[0]!.snapshot.every((value) => value === 7)).toBe(true)
+    expect(order).toEqual(['warp', 'meter', 'sift'])
+    expect(query.quality).toBeDefined()
+    expect(query.quality!.signals).toEqual(passSignals)
+    expect(query.quality!.reasons).toEqual(
+      evaluateCaptureQualityGate({
+        signals: query.quality!.signals,
+        detectedAreaRatio: query.provenance.areaRatio,
+        rectangularity: query.provenance.rectangularity,
+        cropAspectRatio: query.provenance.warpedWidth / query.provenance.warpedHeight,
+        croppedShortEdgePx: Math.min(query.provenance.warpedWidth, query.provenance.warpedHeight),
+      }),
+    )
+    expect(query.quality!.reasons).toEqual([])
+    expect(parseSiftFingerprint(query.wire).keypoints).toHaveLength(1)
+    expect(warped.bytes!.every((value) => value === 0)).toBe(true)
+    expect(handles.deleted.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('keeps valid warning reasons advisory and still returns the query wire', async () => {
+    const order: string[] = []
+    const calls: MeterCall[] = []
+    const { runtime } = spyRuntime(makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }), order)
+    const warnings: CaptureQualitySignals = {
+      laplacianVariance: 50,
+      nearBlackFraction: 0.5,
+      clippedWhiteFraction: 0.5,
+      largestGlareFraction: 0.5,
+    }
+    const query = await produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), {
+      fence: () => true,
+      runtime,
+      meter: fakeMeter(calls, order, warnings),
+      quality: true,
+      decode: async () => workingFrame(),
+    })
+    expect(query.quality!.reasons).toEqual(['TOO_BLURRY', 'TOO_DARK', 'GLARE_EXCESSIVE'])
+    expect(parseSiftFingerprint(query.wire).keypoints).toHaveLength(1)
+  })
+
+  it('never measures for the sender or the default query; wires stay equal', async () => {
+    const order: string[] = []
+    const calls: MeterCall[] = []
+    const { runtime } = spyRuntime(makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }), order)
+    const meter = fakeMeter(calls, order, passSignals)
+    const jpeg = jpegWithDims(320, 240)
+    const sender = await produceFrontStillFingerprint(stillFor(jpeg), {
+      fence: () => true,
+      runtime,
+      meter,
+      quality: true,
+      decode: async () => workingFrame(),
+    })
+    expect(calls).toHaveLength(0)
+    expect('quality' in sender).toBe(false)
+    const plain = await produceQueryFingerprint(queryStill(jpeg), {
+      fence: () => true,
+      runtime,
+      decode: async () => workingFrame(),
+    })
+    expect(calls).toHaveLength(0)
+    expect('quality' in plain).toBe(false)
+    const requested = await produceQueryFingerprint(queryStill(jpeg), {
+      fence: () => true,
+      runtime,
+      meter,
+      quality: true,
+      decode: async () => workingFrame(),
+    })
+    expect(calls).toHaveLength(1)
+    expect('quality' in requested).toBe(true)
+    expect(requested.wire).toEqual(plain.wire)
+    expect(sender.wire).toEqual(plain.wire)
+  })
+
+  it('snapshots quality/meter/runtime before the first await', async () => {
+    const order: string[] = []
+    const calls: MeterCall[] = []
+    const { runtime } = spyRuntime(makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }), order)
+    const otherCalls: MeterCall[] = []
+    const otherMeter = fakeMeter(otherCalls, [], passSignals)
+    let resolveRuntime!: (value: CvContourRuntime) => void
+    const deferred = new Promise<CvContourRuntime>((resolve) => {
+      resolveRuntime = resolve
+    })
+    const options: {
+      fence: () => boolean
+      quality?: boolean
+      meter?: CaptureQualityMeter
+      runtime?: CvContourRuntime | Promise<CvContourRuntime>
+      decode?: (jpeg: Uint8Array, signal?: AbortSignal) => Promise<OwnedRgbaFrame>
+    } = {
+      fence: () => true,
+      quality: true,
+      meter: fakeMeter(calls, order, passSignals),
+      runtime: deferred,
+      decode: async () => workingFrame(),
+    }
+    const pending = produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), options)
+    options.quality = false
+    options.meter = otherMeter
+    options.runtime = makeFakeContourRuntime({ quads: [], ...sift })
+    resolveRuntime(runtime)
+    const query = await pending
+    expect(calls).toHaveLength(1)
+    expect(otherCalls).toHaveLength(0)
+    expect(query.quality!.signals).toEqual(passSignals)
+    expect(query.provenance.source).toBe('LEGACY_CONTOUR')
+  })
+
+  it('maps meter faults, preserves stale/cancel precedence, and wipes owned buffers', async () => {
+    const base = makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift })
+    const frame = workingFrame()
+    const order: string[] = []
+    const { runtime, warped } = spyRuntime(base, order)
+    await expect(
+      reason(
+        produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), {
+          fence: () => true,
+          runtime,
+          meter: fakeMeter([], order, passSignals, new CaptureQualityError('unavailable')),
+          quality: true,
+          decode: async () => frame,
+        }),
+      ),
+    ).resolves.toBe('unavailable')
+    expect(frame.rgba.every((value) => value === 0)).toBe(true)
+    expect(warped.bytes!.every((value) => value === 0)).toBe(true)
+
+    const internalOrder: string[] = []
+    const internal = spyRuntime(base, internalOrder)
+    await expect(
+      reason(
+        produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), {
+          fence: () => true,
+          runtime: internal.runtime,
+          meter: fakeMeter([], internalOrder, passSignals, new CaptureQualityError('internal')),
+          quality: true,
+          decode: async () => workingFrame(),
+        }),
+      ),
+    ).resolves.toBe('internal')
+
+    let owner = true
+    const staleOrder: string[] = []
+    const stale = spyRuntime(base, staleOrder)
+    await expect(
+      reason(
+        produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), {
+          fence: () => owner,
+          runtime: stale.runtime,
+          meter: fakeMeter([], staleOrder, passSignals, new CaptureQualityError('internal'), () => {
+            owner = false
+          }),
+          quality: true,
+          decode: async () => workingFrame(),
+        }),
+      ),
+    ).resolves.toBe('stale')
+
+    const controller = new AbortController()
+    const cancelOrder: string[] = []
+    const cancelled = spyRuntime(base, cancelOrder)
+    await expect(
+      reason(
+        produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), {
+          fence: () => true,
+          signal: controller.signal,
+          runtime: cancelled.runtime,
+          meter: fakeMeter([], cancelOrder, passSignals, new CaptureQualityError('internal'), () => {
+            controller.abort()
+          }),
+          quality: true,
+          decode: async () => workingFrame(),
+        }),
+      ),
+    ).resolves.toBe('cancelled')
+  })
+
+  it('refuses an explicit runtime without an explicit meter for a requested query', async () => {
+    const runtime = makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift })
+    await expect(
+      reason(
+        produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), {
+          fence: () => true,
+          quality: true,
+          runtime,
+          decode: async () => workingFrame(),
+        }),
+      ),
+    ).resolves.toBe('internal')
   })
 })

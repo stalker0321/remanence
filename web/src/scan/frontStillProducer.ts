@@ -19,7 +19,18 @@ import { selectCrop, type CropCandidate, type ProposalSource } from './cropSelec
 import { planWarp, targetCorners } from './warpGeometry'
 import { extractWithRuntime, rint, SiftExtractionError } from './siftExtractor'
 import { serializeSiftFingerprint, SIFT_FINGERPRINT_PROFILE_ID } from './siftFingerprint'
-import { loadOpenCvRuntime } from './opencvRuntime'
+import {
+  createCaptureQualityMeter,
+  evaluateCaptureQualityGate,
+  type CaptureQualityMeter,
+  type QualityReason,
+} from './captureQuality'
+import {
+  CaptureQualityError,
+  type CaptureQualitySignals,
+  type QualityRawCv,
+} from './opencvQualityPort'
+import { loadOpenCvModule, loadOpenCvRuntime, wrapOpenCvRuntime } from './opencvRuntime'
 import type { CvContourRuntime, CvDetectedQuad } from './opencvContour'
 
 export const FRONT_PRODUCER_WORKING_LONG_EDGE_PX = 1600
@@ -66,12 +77,20 @@ export interface CropProvenance {
   readonly warpedHeight: number
 }
 
+/** Copied post-warp quality diagnostics (scalars + advisory reasons only). */
+export interface CaptureQualityDiagnostics {
+  readonly signals: CaptureQualitySignals
+  readonly reasons: readonly QualityReason[]
+}
+
 /** Identity-free localised fingerprint (shared core output). */
 export interface LocalizedFingerprint {
   /** Owned canonical format-3 wire bytes (transferred, not wiped). */
   readonly wire: Uint8Array
   readonly profileId: string
   readonly provenance: CropProvenance
+  /** Present only for a query that explicitly requested post-warp quality. */
+  readonly quality?: CaptureQualityDiagnostics
 }
 
 /** Existing sender output: localised fingerprint plus the captured recipient. */
@@ -97,6 +116,10 @@ export interface ProduceFrontStillOptions {
    * a bounded test can suspend the load/decode.
    */
   readonly decode?: (jpeg: Uint8Array, signal?: AbortSignal) => Promise<OwnedRgbaFrame>
+  /** Receiving-query opt-in: measure exact post-warp quality (advisory only). */
+  readonly quality?: boolean
+  /** Test seam only; production default is created from the shared cached RawCv. */
+  readonly meter?: CaptureQualityMeter
 }
 
 function throwIfFence(fence: () => boolean): void {
@@ -253,6 +276,24 @@ function mapNativeError(stage: 'detect' | 'warp' | 'extract', error: unknown, fe
   return refuse('unavailable')
 }
 
+function mapQualityError(
+  error: unknown,
+  fence: () => boolean,
+  signal: AbortSignal | undefined,
+): FrontStillError {
+  if (signal?.aborted) return refuse('cancelled')
+  try {
+    if (!fence()) return refuse('stale')
+  } catch {
+    return refuse('stale')
+  }
+  if (error instanceof CaptureQualityError) {
+    if (error.code === 'unavailable') return refuse('unavailable')
+    return refuse('internal')
+  }
+  return refuse('internal')
+}
+
 /**
  * Genuine producer entry point. Captures the owner tuple, validated JPEG
  * bytes and source bounds synchronously before the first await; never
@@ -269,7 +310,13 @@ export async function produceFrontStillFingerprint(
   // Capture the recipient tuple and owned JPEG before the first await.
   const recipient = captureRecipient(still)
   const jpeg = captureJpegBytes(still)
-  const localized = await produceLocalizedFromOwnedJpeg(jpeg, options)
+  // Sender NEVER measures or returns query quality diagnostics, even when a
+  // caller passes the shared `quality`/`meter` shape.
+  const localized = await produceLocalizedFromOwnedJpeg(jpeg, {
+    ...options,
+    quality: false,
+    meter: undefined,
+  })
   // The core's promise boundary is an await: recheck the original fence and
   // signal before attaching caller owner metadata, wiping the transferred
   // wire if the visit changed or was cancelled in between.
@@ -319,10 +366,15 @@ async function produceLocalizedFromOwnedJpeg(
 ): Promise<LocalizedFingerprint> {
   const fence = options.fence
   const signal = options.signal
+  // Snapshot ALL consumed options BEFORE the first await; callers must not be
+  // able to swap the quality flag/meter/runtime/decode while loading.
+  const runtimeOption = options.runtime
+  const decode = options.decode ?? defaultDecode
+  const qualityRequested = options.quality === true
+  const meterOption = options.meter ?? null
   try {
     throwIfFence(fence)
     throwIfAborted(signal)
-    const decode = options.decode ?? defaultDecode
     let frame: OwnedRgbaFrame
     try {
       frame = await decode(jpeg, signal)
@@ -348,8 +400,20 @@ async function produceLocalizedFromOwnedJpeg(
       throwIfFence(fence)
       throwIfAborted(signal)
       let runtime: CvContourRuntime
+      let meter: CaptureQualityMeter | null = meterOption
       try {
-        runtime = options.runtime ? await options.runtime : await loadOpenCvRuntime(signal)
+        if (runtimeOption !== undefined) {
+          runtime = await runtimeOption
+          // An isolated runtime seam must be paired with an explicit meter
+          // seam; never fabricate metrics or silently ignore the request.
+          if (qualityRequested && meter === null) throw refuse('internal')
+        } else if (qualityRequested) {
+          const cv = await loadOpenCvModule(signal)
+          runtime = wrapOpenCvRuntime(cv)
+          if (meter === null) meter = createCaptureQualityMeter(cv as unknown as QualityRawCv)
+        } else {
+          runtime = await loadOpenCvRuntime(signal)
+        }
       } catch (error) {
         if (signal?.aborted) throw refuse('cancelled')
         if (error instanceof FrontStillError) throw error
@@ -357,7 +421,7 @@ async function produceLocalizedFromOwnedJpeg(
       }
       throwIfFence(fence)
       throwIfAborted(signal)
-      return extractLocalized(runtime, frame, fence, signal)
+      return extractLocalized(runtime, frame, fence, signal, meter)
     } finally {
       frame.rgba.fill(0)
     }
@@ -372,6 +436,7 @@ function extractLocalized(
   frame: OwnedRgbaFrame,
   fence: () => boolean,
   signal: AbortSignal | undefined,
+  meter: CaptureQualityMeter | null,
 ): LocalizedFingerprint {
   const releases: Array<() => void> = []
   const runReleases = (strict: boolean): unknown => {
@@ -435,6 +500,30 @@ function extractLocalized(
     warpedBytes = warped.bytes
     throwIfFence(fence)
     throwIfAborted(signal)
+    // Exact post-warp measurement, once, before SIFT. Warnings stay advisory.
+    let quality: CaptureQualityDiagnostics | null = null
+    if (meter !== null) {
+      const measured = (() => {
+        try {
+          const signals = meter.measure(warped.bytes, warped.width, warped.height)
+          return {
+            signals,
+            reasons: evaluateCaptureQualityGate({
+              signals,
+              detectedAreaRatio: selection.candidate.areaRatio,
+              rectangularity: selection.candidate.rectangularity,
+              cropAspectRatio: warped.width / warped.height,
+              croppedShortEdgePx: Math.min(warped.width, warped.height),
+            }),
+          }
+        } catch (error) {
+          throw mapQualityError(error, fence, signal)
+        }
+      })()
+      throwIfFence(fence)
+      throwIfAborted(signal)
+      quality = { signals: { ...measured.signals }, reasons: [...measured.reasons] }
+    }
     let fingerprint
     try {
       fingerprint = extractWithRuntime(runtime, warped.bytes, warped.width, warped.height, signal)
@@ -477,6 +566,7 @@ function extractLocalized(
       wire,
       profileId: SIFT_FINGERPRINT_PROFILE_ID,
       provenance,
+      ...(quality === null ? {} : { quality }),
     }
     warpedBytes = null
     return result

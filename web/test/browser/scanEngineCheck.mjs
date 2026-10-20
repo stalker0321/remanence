@@ -41,6 +41,7 @@ report.executable = executable
 report.executableSha256 = createHash('sha256').update(await readFile(executable)).digest('hex')
 
 const work = join(tmpdir(), `scan-engine-${process.pid}`)
+report.work = work
 await mkdir(work, { recursive: true })
 await writeFile(join(work, 'index.ts'), 'import ' + JSON.stringify(join(web, 'test', 'browser', 'scanEngine.page.tsx')) + '\n')
 await writeFile(join(work, 'index.html'), '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><script type="module" src="./index.ts"></script></body></html>')

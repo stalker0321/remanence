@@ -586,6 +586,10 @@ async function main(): Promise<void> {
       const newer = rec.store.getSnapshot()
       await postJson('/__admission', { mode: 'ok', hold: false })
       await waitFor(allZero, 'late prepared bytes wiped')
+      if (interruption === 'cancel') {
+        await waitFor(() => document.activeElement === buttonByText(t('useCamera')), 'cancel returns camera focus')
+        assert('cancel admission restores camera keyboard focus', document.activeElement === buttonByText(t('useCamera')))
+      }
       assert(`${interruption}: late reply cannot present or overwrite newer owner`, !stageShown() && rec.memory.getSnapshot() === null
         && (interruption === 'cancel' || interruption === 'back' ? rec.store.getSnapshot().phase === 'keys-unlocked' : rec.store.getSnapshot() === newer))
       rootRef.current?.unmount()

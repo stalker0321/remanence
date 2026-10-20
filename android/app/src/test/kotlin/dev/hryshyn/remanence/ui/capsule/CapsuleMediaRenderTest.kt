@@ -188,7 +188,8 @@ class CapsuleMediaRenderTest {
         val before = png("ber1-landscape-ru-f18")
         val pixels = IntArray(before.width * before.height)
         before.getPixels(pixels, 0, before.width, 0, 0, before.width, before.height)
-        mediaPhotoColors.forEach { c -> assertTrue("legacy landscape must retain every photo", pixels.count { it == c } > 20) }
+        mediaPhotoColors.forEach { c -> assertTrue("each legacy photo must occupy at least 1% of the exported sheet, not a tiny colour speck",
+            pixels.count { it == c } >= pixels.size / 100) }
         rule.onNodeWithTag("capsule_track_open").performClick()
         rule.onNodeWithTag("capsule_track_open_spotify").performClick()
         assertTrue(before.sameAs(png("ber1-landscape-player-success")))
@@ -205,7 +206,8 @@ class CapsuleMediaRenderTest {
         val image = png("ber1-long-track-landscape")
         val pixels = IntArray(image.width * image.height)
         image.getPixels(pixels, 0, image.width, 0, 0, image.width, image.height)
-        mediaPhotoColors.forEach { c -> assertTrue("track text must leave room for photos", pixels.count { it == c } > 20) }
+        mediaPhotoColors.forEach { c -> assertTrue("track text must leave at least 1% of the sheet for each photo",
+            pixels.count { it == c } >= pixels.size / 100) }
         val action = rule.onNodeWithTag("capsule_track_open").fetchSemanticsNode().boundsInRoot
         assertTrue(action.bottom <= rule.activity.window.decorView.height)
     }

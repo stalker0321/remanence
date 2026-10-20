@@ -919,3 +919,62 @@ describe('T348 query quality opt-in', () => {
     ).resolves.toBe('internal')
   })
 })
+
+describe('T348 R2 a supplied meter requires the captured explicit opt-in', () => {
+  const sift = {
+    detections: [{ x: 800, y: 600, size: 20, angle: 0, response: 10, octave: 0 }],
+    descriptorRows: [new Array(128).fill(3)],
+    dctValues: Array.from({ length: 64 }, (_, index) => index),
+  }
+  const signals: CaptureQualitySignals = {
+    laplacianVariance: 500,
+    nearBlackFraction: 0,
+    clippedWhiteFraction: 0,
+    largestGlareFraction: 0.05,
+  }
+
+  for (const quality of [false, undefined] as const) {
+    it(`never runs a supplied (throwing) meter when quality=${String(quality)} and keeps the wire equal`, async () => {
+      const order: string[] = []
+      const calls: MeterCall[] = []
+      const { runtime } = spyRuntime(makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }), order)
+      const withMeter = await produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), {
+        fence: () => true,
+        quality,
+        runtime,
+        meter: fakeMeter(calls, order, signals, new CaptureQualityError('unavailable')),
+        decode: async () => workingFrame(),
+      })
+      expect(calls).toHaveLength(0)
+      expect(order).not.toContain('meter')
+      expect('quality' in withMeter).toBe(false)
+      expect(parseSiftFingerprint(withMeter.wire).keypoints).toHaveLength(1)
+
+      const control = await produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), {
+        fence: () => true,
+        quality,
+        runtime,
+        decode: async () => workingFrame(),
+      })
+      expect(calls).toHaveLength(0)
+      expect(withMeter.wire).toEqual(control.wire)
+    })
+  }
+
+  it('control: explicit true runs the supplied meter once and returns diagnostics', async () => {
+    const order: string[] = []
+    const calls: MeterCall[] = []
+    const { runtime } = spyRuntime(makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }), order)
+    const requested = await produceQueryFingerprint(queryStill(jpegWithDims(320, 240)), {
+      fence: () => true,
+      quality: true,
+      runtime,
+      meter: fakeMeter(calls, order, signals),
+      decode: async () => workingFrame(),
+    })
+    expect(calls).toHaveLength(1)
+    expect(order).toContain('meter')
+    expect(requested.quality!.signals).toEqual(signals)
+    expect(parseSiftFingerprint(requested.wire).keypoints).toHaveLength(1)
+  })
+})

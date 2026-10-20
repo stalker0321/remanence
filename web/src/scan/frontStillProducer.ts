@@ -400,7 +400,9 @@ async function produceLocalizedFromOwnedJpeg(
       throwIfFence(fence)
       throwIfAborted(signal)
       let runtime: CvContourRuntime
-      let meter: CaptureQualityMeter | null = meterOption
+      // A supplied meter is only active with the captured explicit opt-in.
+      // quality:false/absent must never measure (default behavior unchanged).
+      let meter: CaptureQualityMeter | null = qualityRequested ? meterOption : null
       try {
         if (runtimeOption !== undefined) {
           runtime = await runtimeOption

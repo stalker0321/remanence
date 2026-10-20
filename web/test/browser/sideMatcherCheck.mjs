@@ -106,6 +106,11 @@ try {
     report.pages['index'] = { status, assertions: result?.assertions ?? [], failures: result?.failures ?? [], report: result?.report ?? null }
     await page.close()
     try {
+      // Error-bearing executions MUST hard-fail; green semantic assertions alone
+      // are not a pass. Never suppress pageerror/console/route callbacks.
+      assert.deepEqual(report.errors, [], `page/route errors recorded: ${JSON.stringify(report.errors)}`)
+      const consoleErrors = report.console.filter((entry) => entry.type === 'error')
+      assert.deepEqual(consoleErrors, [], `console errors recorded: ${JSON.stringify(consoleErrors)}`)
       assert.equal(status, 'done', `page status "${status}"`)
       assert.ok(result, 'window.__sideMatcher missing')
       for (const item of result.assertions) assert.equal(item.ok, true, `side-matcher :: ${item.name} ${item.detail ?? ''}`)

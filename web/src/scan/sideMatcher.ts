@@ -35,7 +35,11 @@ import {
   GeometryEstimatorError,
 } from './geometryEstimator'
 import type { GeometryEvaluationResult, GeometryFailure } from './geometryEvaluation'
-import { createPinnedMatcherRuntime, type PinnedMatcherRuntime } from './opencvMatcherPort'
+import {
+  createPinnedMatcherRuntime,
+  PinnedMatcherError,
+  type PinnedMatcherRuntime,
+} from './opencvMatcherPort'
 import { loadOpenCvModule } from './opencvRuntime'
 import {
   evaluateSide,
@@ -237,6 +241,14 @@ function mapCorrespondenceError(error: unknown, signal: AbortSignal | undefined)
     if (error.code === 'cancelled') return new SideMatchError('cancelled')
     if (error.code === 'unavailable') return new SideMatchError('unavailable')
     if (error.code === 'shape' || error.code === 'native-contract') return new SideMatchError('contract')
+    return new SideMatchError('internal')
+  }
+  // Real `matchDescriptors` propagates accepted PinnedMatcherError unchanged;
+  // preserve its provenance instead of collapsing native faults to `internal`.
+  // Unknown native failures stay `internal`; abort precedence is checked above.
+  if (error instanceof PinnedMatcherError) {
+    if (error.code === 'unavailable') return new SideMatchError('unavailable')
+    if (error.code === 'native-contract') return new SideMatchError('contract')
     return new SideMatchError('internal')
   }
   return new SideMatchError('internal')

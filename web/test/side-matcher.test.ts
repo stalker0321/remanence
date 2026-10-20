@@ -9,7 +9,12 @@ import {
 import { GeometryEstimatorError } from '../src/scan/geometryEstimator'
 import type { GeometryEvaluationResult } from '../src/scan/geometryEvaluation'
 import type { EstimateAndEvaluateInput } from '../src/scan/geometryEstimator'
-import type { PinnedMatcherRuntime } from '../src/scan/opencvMatcherPort'
+import {
+  createPinnedMatcherRuntime,
+  PinnedMatcherError,
+  type PinnedMatcherRuntime,
+} from '../src/scan/opencvMatcherPort'
+import type { RawCv } from '../src/scan/opencvRuntime'
 import type { SiftFingerprint, SiftFingerprintKeypoint } from '../src/scan/siftFingerprint'
 
 function keypoint(xMicro: number, yMicro: number): SiftFingerprintKeypoint {
@@ -364,5 +369,90 @@ describe('T341 connected side pipeline — ownership, abort/fence, faults', () =
     expect(result.correspondence.pairs[0]).not.toBe(produced.pairs[0])
     expect(result.geometry!.matrix).not.toBe(matrix)
     expect(result.geometry!.matrix).toEqual(matrix)
+  })
+})
+
+function zeroRowsFingerprint(): SiftFingerprint {
+  const base = fingerprint(1600, 1200, spreadKeypoints(6))
+  return { ...base, quantizedSiftDescriptors: base.quantizedSiftDescriptors.map(() => new Uint8Array(128)) }
+}
+
+describe('T341 actual pinned-bridge fault provenance through real correspondence', () => {
+  const query = fingerprint(1600, 1200, spreadKeypoints(6))
+  const reference = fingerprint(1600, 1200, spreadKeypoints(6))
+
+  it('real correspondence short-circuits genuine zero rows before loading any matcher', async () => {
+    let loaded = 0
+    const result = await matchSide(zeroRowsFingerprint(), zeroRowsFingerprint(), {
+      matcherFactory: async () => {
+        loaded += 1
+        throw new Error('must not load')
+      },
+    })
+    expect(result.diagnostics.failure).toBe('NO_USABLE_ROWS')
+    expect(loaded).toBe(0)
+  })
+
+  it('actual createPinnedMatcherRuntime unavailable refusal survives real correspondence', async () => {
+    await expect(
+      matchSide(query, reference, {
+        matcherFactory: async () => createPinnedMatcherRuntime({ Mat: class {} } as unknown as RawCv),
+      }),
+    ).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('actual knnMatch2 native-contract refusal survives real correspondence', async () => {
+    await expect(
+      matchSide(query, reference, {
+        matcherFactory: async () => ({
+          kind: 'pinned-opencv',
+          knnMatch2: async () => {
+            throw new PinnedMatcherError('native-contract')
+          },
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'contract' })
+  })
+
+  it('actual knnMatch2 internal refusal stays internal', async () => {
+    await expect(
+      matchSide(query, reference, {
+        matcherFactory: async () => ({
+          kind: 'pinned-opencv',
+          knnMatch2: async () => {
+            throw new PinnedMatcherError('internal')
+          },
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'internal' })
+  })
+
+  it('unknown native failure stays internal', async () => {
+    await expect(
+      matchSide(query, reference, {
+        matcherFactory: async () => ({
+          kind: 'pinned-opencv',
+          knnMatch2: async () => {
+            throw new Error('unexpected')
+          },
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'internal' })
+  })
+
+  it('abort during a native refusal keeps cancelled precedence', async () => {
+    const controller = new AbortController()
+    await expect(
+      matchSide(query, reference, {
+        signal: controller.signal,
+        matcherFactory: async () => ({
+          kind: 'pinned-opencv',
+          knnMatch2: async () => {
+            controller.abort()
+            throw new PinnedMatcherError('native-contract')
+          },
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'cancelled' })
   })
 })

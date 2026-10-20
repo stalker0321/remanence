@@ -189,16 +189,22 @@ class RecentRecipientIdentityTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         private val returned = CompletableDeferred<Unit>()
-        suspend fun answer(): DirectoryLookupResult = try {
-            withContext(NonCancellable) {
-                entered.complete(Unit)
-                release.await()
-                DirectoryLookupResult.Found(snapshot)
-            }
-        } finally { returned.complete(Unit) }
+        private lateinit var requestJob: Job
+        suspend fun answer(): DirectoryLookupResult {
+            requestJob = currentCoroutineContext().job
+            return try {
+                withContext(NonCancellable) {
+                    entered.complete(Unit)
+                    release.await()
+                    DirectoryLookupResult.Found(snapshot)
+                }
+            } finally { returned.complete(Unit) }
+        }
         fun finish() = runBlocking {
             release.complete(Unit)
-            withTimeout(10_000) { returned.await() }
+            // Directory return is not the end of picker owner/admission work.
+            // Assert only after the entire retired request has completed.
+            withTimeout(10_000) { returned.await(); requestJob.join() }
         }
     }
 

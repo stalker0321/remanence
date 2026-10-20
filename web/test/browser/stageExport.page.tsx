@@ -123,7 +123,11 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
 async function waitFor(condition: () => boolean, what: string, timeoutMs = 30000): Promise<void> {
   const deadline = performance.now() + timeoutMs
   while (performance.now() < deadline) {
-    if (condition()) return
+    try {
+      if (condition()) return
+    } catch {
+      // The queried control may be transiently absent during a React commit.
+    }
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
   throw new Error(`timeout: ${what}`)

@@ -137,7 +137,8 @@ def test_real_crypto_browser_admission_revoke(session_factory, tmp_path):
             else: assert line and monotonic() < until
         listeners = remote(f"ss -ltnH 'sport = :{tunnel_port}'").splitlines()
         assert listeners and all(row.split()[3] in (f"127.0.0.1:{tunnel_port}", f"[::1]:{tunnel_port}") for row in listeners)
-        command = (f"source /srv/remanence/tools/env.sh && test ! -e '{remote_proof}' && mkdir '{remote_proof}' && "
+        command = (f"source /srv/remanence/tools/env.sh && test ! -e '{remote_proof}' && "
+                   f"mkdir '{remote_proof}' '{remote_proof}/tmp' && export TMPDIR='{remote_proof}/tmp' && "
                    f"flock -n -E 75 /tmp/remanence-web.lock timeout 600 node "
                    f"'{snapshot}/web/test/browser/realAdmissionCheck.mjs' '{snapshot}/web' '{remote_proof}'")
         with (proof / "browser-stderr.raw.log").open("w") as errors:

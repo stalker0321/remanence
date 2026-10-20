@@ -2,21 +2,27 @@
 
 import hashlib
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Event
+from time import monotonic
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from tink import tink_config
 
 from remanence.capsules.envelope_models import CapsuleEnvelope
 from remanence.capsules.finalize_service import CapsuleFinalizeError, CapsuleFinalizeService
 from remanence.capsules.models import Capsule, CapsuleState
+from remanence.capsules.locking import capsule_lock_key
 from remanence.pending import domains
+from remanence.pending import publication
 from remanence.pending.claim_models import PendingDelivery
 from remanence.pending.models import GiftLocator
 from remanence.pending.publication import PublicationError, finalize_delivery
 from remanence.pending.vault import DevSealedVault
 from remanence.protocol.delivery_v2 import delivery_v2_pb2 as dv2
+from remanence.users.models import User
 
 from test_capsule_finalize_service import _protocol_blobs, _ready_world, _sign, _statement_bytes
 from test_pending_m3_pg import (
@@ -133,3 +139,196 @@ def test_v1_rejects_expired_draft_with_stale_request_time(session_factory, tmp_p
         session.rollback()
         assert session.get(Capsule, capsule.id).state is CapsuleState.DRAFT
         assert session.get(CapsuleEnvelope, capsule.id) is None
+
+
+class Clock:
+    def __init__(self, current):
+        self.current = current
+
+    def __call__(self):
+        return self.current
+
+
+@pytest.mark.parametrize("stage", ["storage", "locator"])
+def test_v1_rechecks_after_slow_work(session_factory, tmp_path, monkeypatch, stage):
+    with session_factory() as session:
+        world = _ready_world(session, tmp_path)
+        clock = Clock(world["capsule"].created_at)
+        service = CapsuleFinalizeService(session, world["store"])
+        if stage == "storage":
+            original = world["store"].stat
+
+            def delayed(*args):
+                result = original(*args)
+                clock.current = world["capsule"].draft_expires_at
+                return result
+
+            monkeypatch.setattr(world["store"], "stat", delayed)
+        else:
+            original = service._maybe_issue_locator
+
+            def delayed(*args):
+                result = original(*args)
+                clock.current = world["capsule"].draft_expires_at
+                return result
+
+            monkeypatch.setattr(service, "_maybe_issue_locator", delayed)
+        with pytest.raises(CapsuleFinalizeError) as error:
+            service.finalize(**v1_request(world), now=world["capsule"].created_at, clock=clock)
+        assert error.value.code == "DRAFT_EXPIRED"
+        session.rollback()
+        assert session.get(Capsule, world["capsule"].id).state is CapsuleState.DRAFT
+        assert session.get(CapsuleEnvelope, world["capsule"].id) is None
+
+
+@pytest.mark.parametrize("stage", ["storage", "vault", "locator", "route"])
+def test_pending_rechecks_after_slow_work(session_factory, monkeypatch, stage):
+    with session_factory() as session:
+        setup = _setup_pending(session)
+        request = pending_request(setup)
+        clock = Clock(NOW)
+        expired = (
+            setup["route"].expires_at if stage == "route"
+            else setup["delivery"].claim_expires_at
+        )
+        if stage == "storage":
+            def delayed(_):
+                clock.current = expired
+                return (505, "55" * 32)
+
+            request["blob_stat"] = delayed
+        elif stage in ("vault", "route"):
+            original = request["vault"].seal
+
+            def delayed(*args):
+                result = original(*args)
+                clock.current = expired
+                return result
+
+            monkeypatch.setattr(request["vault"], "seal", delayed)
+        else:
+            original = publication.allocate_reserved
+
+            def delayed(*args, **kwargs):
+                result = original(*args, **kwargs)
+                clock.current = expired
+                return result
+
+            monkeypatch.setattr(publication, "allocate_reserved", delayed)
+        with pytest.raises(PublicationError) as error:
+            finalize_delivery(session, **request, now=NOW, clock=clock)
+        assert error.value.code == ("ROUTE_STALE" if stage == "route" else "GIFT_UNAVAILABLE")
+        assert_pending_rollback(session, request["delivery_id"])
+
+
+def test_committed_replays_do_not_read_expired_clock(session_factory, tmp_path):
+    def forbidden_clock():
+        raise AssertionError("replay must not apply NEW publication deadline")
+
+    with session_factory() as session:
+        world = _ready_world(session, tmp_path)
+        request = v1_request(world)
+        original = CapsuleFinalizeService(session, world["store"]).finalize(
+            **request, now=world["capsule"].created_at, clock=lambda: world["capsule"].created_at
+        )
+        session.commit()
+        replay = CapsuleFinalizeService(session, world["store"]).finalize(
+            **request, now=world["capsule"].draft_expires_at + timedelta(days=1),
+            clock=forbidden_clock,
+        )
+        assert replay.is_replay and replay.ready_at == original.ready_at
+        conflicting = {**request, "signature": bytes([request["signature"][0] ^ 1]) + request["signature"][1:]}
+        with pytest.raises(CapsuleFinalizeError) as error:
+            CapsuleFinalizeService(session, world["store"]).finalize(
+                **conflicting, now=world["capsule"].draft_expires_at + timedelta(days=1),
+                clock=forbidden_clock,
+            )
+        assert error.value.code == "FINALIZE_CONFLICT"
+        session.rollback()
+        setup = _setup_pending(session)
+        request = pending_request(setup)
+        _, code = finalize_delivery(session, **request, now=NOW, clock=lambda: NOW)
+        session.commit()
+        replay, replay_code = finalize_delivery(
+            session, **request, now=setup["delivery"].claim_expires_at + timedelta(days=1),
+            clock=forbidden_clock,
+        )
+        assert replay.state == "PENDING" and replay_code == code
+        with pytest.raises(PublicationError) as error:
+            finalize_delivery(
+                session, **{**request, "operation_id": uuid.uuid4()},
+                now=setup["delivery"].claim_expires_at + timedelta(days=1),
+                clock=forbidden_clock,
+            )
+        assert error.value.code == "IDEMPOTENCY_CONFLICT"
+
+
+@pytest.mark.parametrize("lock_kind", ["v1_capsule", "v1_recipient", "pending_delivery"])
+def test_deadline_crosses_real_pg_lock_wait(session_factory, tmp_path, lock_kind):
+    """Independently connected writer really waits in PG; no mock lock proof."""
+    with session_factory() as seed:
+        if lock_kind.startswith("v1"):
+            world = _ready_world(seed, tmp_path)
+            request = v1_request(world)
+            clock = Clock(world["capsule"].created_at)
+            expired = world["capsule"].draft_expires_at
+        else:
+            setup = _setup_pending(seed)
+            request = pending_request(setup)
+            clock = Clock(NOW)
+            expired = setup["delivery"].claim_expires_at
+        seed.commit()
+    initial_time = clock.current
+    connected = Event()
+    worker_pid = []
+
+    def worker():
+        with session_factory() as session:
+            session.execute(text("SET LOCAL lock_timeout = '5s'"))
+            worker_pid.append(session.scalar(select(func.pg_backend_pid())))
+            connected.set()
+            try:
+                if lock_kind.startswith("v1"):
+                    CapsuleFinalizeService(session, world["store"]).finalize(
+                        **request, now=initial_time, clock=clock
+                    )
+                else:
+                    finalize_delivery(session, **request, now=initial_time, clock=clock)
+                session.commit()
+                return "unexpected_publication"
+            except (CapsuleFinalizeError, PublicationError) as error:
+                session.rollback()
+                return error.code
+
+    with session_factory() as holder:
+        if lock_kind == "v1_capsule":
+            holder.execute(select(func.pg_advisory_xact_lock(capsule_lock_key(request["capsule_id"]))))
+        elif lock_kind == "v1_recipient":
+            holder.scalar(select(User).where(User.id == world["recipient"].id).with_for_update())
+        else:
+            holder.scalar(select(PendingDelivery).where(
+                PendingDelivery.id == request["delivery_id"]
+            ).with_for_update())
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(worker)
+            try:
+                assert connected.wait(3)
+                wait_until = monotonic() + 3
+                while not holder.scalar(text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid=:pid AND NOT granted)"
+                ), {"pid": worker_pid[0]}):
+                    assert monotonic() < wait_until, "worker did not wait on a real PG lock"
+                    Event().wait(0.01)
+                assert not future.done()
+                clock.current = expired
+            finally:
+                holder.rollback()
+            assert future.result(timeout=5) == (
+                "DRAFT_EXPIRED" if lock_kind.startswith("v1") else "GIFT_UNAVAILABLE"
+            )
+    with session_factory() as check:
+        if lock_kind.startswith("v1"):
+            assert check.get(Capsule, request["capsule_id"]).state is CapsuleState.DRAFT
+            assert check.get(CapsuleEnvelope, request["capsule_id"]) is None
+        else:
+            assert_pending_rollback(check, request["delivery_id"])

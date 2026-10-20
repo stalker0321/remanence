@@ -155,6 +155,8 @@ def _publish_package(
     sender_bundle_id: uuid.UUID,
     service_key_id: uuid.UUID,
     salt: bytes = bytes(range(32)),
+    created_at: datetime = NOW,
+    claim_expires_at: datetime = NOW + timedelta(days=180),
     **kwargs,
 ):
     """Canonical S + escrow payload with correctly recomputed D/KC."""
@@ -200,8 +202,8 @@ def _publish_package(
         delivery_target_id=target_id.bytes,
         address_commitment=d,
         key_commitment=kc,
-        created_at_epoch_seconds=int(NOW.timestamp()),
-        claim_expires_at_epoch_seconds=int(NOW.timestamp()) + 180 * 86400,
+        created_at_epoch_seconds=int(created_at.timestamp()),
+        claim_expires_at_epoch_seconds=int(claim_expires_at.timestamp()),
         claim_policy_version=1,
         claim_signing_key_id=service_key_id.bytes,
         artifacts=bindings,

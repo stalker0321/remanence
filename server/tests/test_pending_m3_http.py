@@ -408,13 +408,14 @@ def test_http_finalize_verify_claim_round_trip(session_factory) -> None:
         "ciphertext_sha256_hex": hashlib.sha256(bytes([0x77]) * 505).hexdigest(),
     }
     draft_blob_bytes = bytes([0x77]) * 505
+    publish_now = datetime.now(timezone.utc).replace(microsecond=0)
+    claim_deadline = publish_now + timedelta(days=179)
     draft = sender_client.post(
         "/v2/pending-deliveries",
         json={"route_id": str(route_id), "capsule_id": str(capsule_id),
               "delivery_target_id": str(target_id), "channel": "email",
               "destination": ADDRESS, "salt_b64": _b64.b64encode(bytes(range(32))).decode(),
-              "claim_expires_at": int((
-                  datetime.now(timezone.utc) + timedelta(days=179)).timestamp()),
+              "claim_expires_at": int(claim_deadline.timestamp()),
               "claim_policy_version": 1, "artifacts": [draft_artifact],
               "idempotency_key": str(uuid.uuid4())},
     )
@@ -431,6 +432,7 @@ def test_http_finalize_verify_claim_round_trip(session_factory) -> None:
         capsule_id=capsule_id, target_id=target_id, sender_id=sender_id,
         sender_bundle_id=sender_bundle.id, service_key_id=service_key_id,
         artifacts=[draft_artifact],
+        created_at=publish_now, claim_expires_at=claim_deadline,
     )
     finalize = sender_client.post(
         f"/v2/pending-deliveries/{delivery_id}/finalize",
@@ -1089,6 +1091,7 @@ def test_r8_phone_consent_and_r6_channel(session_factory) -> None:
             capsule_id=delivery.capsule_id, target_id=delivery.delivery_target_id,
             sender_id=sender.id, sender_bundle_id=sender_bundle.id,
             service_key_id=service_key_id, artifacts=declarations,
+            claim_expires_at=delivery.claim_expires_at,
         )
         finalized, code = finalize_delivery(
             session, delivery_id=delivery.id, principal_user_id=sender.id,
@@ -1550,13 +1553,14 @@ def test_http_claim_bind_then_r1_routes_known_v1_distinct_keys(session_factory) 
         "ciphertext_size": 505,
         "ciphertext_sha256_hex": hashlib.sha256(bytes([0x77]) * 505).hexdigest(),
     }
+    publish_now = datetime.now(timezone.utc).replace(microsecond=0)
+    claim_deadline = publish_now + timedelta(days=179)
     draft = sender_client.post(
         "/v2/pending-deliveries",
         json={"route_id": str(route_id), "capsule_id": str(capsule_id),
               "delivery_target_id": str(target_id), "channel": "email",
               "destination": known_address, "salt_b64": _b64.b64encode(bytes(range(32))).decode(),
-              "claim_expires_at": int((
-                  datetime.now(timezone.utc) + timedelta(days=179)).timestamp()),
+              "claim_expires_at": int(claim_deadline.timestamp()),
               "claim_policy_version": 1, "artifacts": [draft_artifact],
               "idempotency_key": str(uuid.uuid4())},
     )
@@ -1570,6 +1574,7 @@ def test_http_claim_bind_then_r1_routes_known_v1_distinct_keys(session_factory) 
         capsule_id=capsule_id, target_id=target_id, sender_id=sender_id,
         sender_bundle_id=sender_bundle.id, service_key_id=service_key_id,
         artifacts=[draft_artifact],
+        created_at=publish_now, claim_expires_at=claim_deadline,
     )
     finalize = sender_client.post(
         f"/v2/pending-deliveries/{delivery_id}/finalize",

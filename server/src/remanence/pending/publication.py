@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from typing import BinaryIO
 
 from sqlalchemy import select
@@ -277,6 +278,7 @@ def finalize_delivery(
     now: datetime,
     blob_stat=None,
     operation_id: uuid.UUID | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> tuple[PendingDelivery, str]:
     """Finalize a DRAFT into PENDING + ACTIVE locator in one flush.
 
@@ -332,6 +334,32 @@ def finalize_delivery(
         return delivery, code
     if delivery.state != "DRAFT":
         raise PublicationError("GIFT_UNAVAILABLE")
+    # The signed, canonical seconds must bind to the stored deadline too,
+    # not just to another copy supplied by the sender in the escrow payload.
+    if (
+        delivery.claim_expires_at.microsecond != 0
+        or statement.claim_expires_at_epoch_seconds != int(delivery.claim_expires_at.timestamp())
+    ):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+
+    route = None
+
+    def check_deadlines() -> datetime:
+        fresh = clock() if clock is not None else datetime.now(timezone.utc)
+        if (
+            not isinstance(fresh, datetime)
+            or fresh.tzinfo is None
+            or fresh.utcoffset() != timedelta(0)
+        ):
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+        current = max(now, fresh)
+        if delivery.claim_expires_at <= current:
+            raise PublicationError("GIFT_UNAVAILABLE")
+        if route is not None and route.expires_at <= current:
+            raise PublicationError("ROUTE_STALE")
+        return current
+
+    current = check_deadlines()
     if (
         uuid.UUID(bytes=bytes(statement.capsule_id)) != delivery.capsule_id
         or uuid.UUID(bytes=bytes(statement.delivery_target_id)) != delivery.delivery_target_id
@@ -341,13 +369,13 @@ def finalize_delivery(
     if uuid.UUID(bytes=bytes(statement.claim_signing_key_id)) != expected_service_key_id:
         raise PublicationError("PROTOCOL_UNSUPPORTED")
     if delivery.route_id is not None:
-        check_finalize_route(
+        route = check_finalize_route(
             session,
             route_id=delivery.route_id,
             sender_user_id=delivery.sender_user_id,
             capsule_id=delivery.capsule_id,
             mode="PENDING_V2",
-            now=now,
+            now=current,
         )
     bundle = _sender_bundle_or_raise(session, delivery.sender_user_id)
     if uuid.UUID(bytes=bytes(statement.sender_key_bundle_id)) != bundle.id:
@@ -399,10 +427,12 @@ def finalize_delivery(
         claim_policy_version=1,
         claim_expires_at_epoch_seconds=statement.claim_expires_at_epoch_seconds,
     )
+    check_deadlines()
     try:
         handle = vault.seal(escrow_payload, aad)
     except VaultError as exc:
         raise PublicationError("PROVIDER_UNAVAILABLE") from exc
+    check_deadlines()
     locator, code = allocate_reserved(
         session, capsule_id=delivery.capsule_id, hint_mask=hint_mask, hmac_key=locator_hmac_key
     )
@@ -429,6 +459,8 @@ def finalize_delivery(
     delivery.finalize_request_digest = request_digest
     delivery.state = "PENDING"
     session.flush()
+    # Cover locator/flush waits as well. Caller retains commit/rollback ownership.
+    check_deadlines()
     return delivery, code
 
 

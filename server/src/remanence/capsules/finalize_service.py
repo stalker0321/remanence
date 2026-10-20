@@ -6,8 +6,9 @@ import hashlib
 import hmac
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 from sqlalchemy import func, inspect, select
@@ -186,6 +187,7 @@ class CapsuleFinalizeService:
         envelope: CapsuleFinalizeEnvelope,
         now: datetime,
         locator_issuance: LocatorIssuance | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> CapsuleFinalizeResult:
         _require_uuid(authenticated_sender_user_id)
         _require_uuid(capsule_id)
@@ -211,6 +213,7 @@ class CapsuleFinalizeService:
                 envelope=envelope,
                 now=now,
                 locator_issuance=locator_issuance,
+                clock=clock,
             )
         except CapsuleFinalizeError:
             raise
@@ -229,6 +232,7 @@ class CapsuleFinalizeService:
         envelope: CapsuleFinalizeEnvelope,
         now: datetime,
         locator_issuance: LocatorIssuance | None,
+        clock: Callable[[], datetime] | None,
     ) -> CapsuleFinalizeResult:
         with self._session.no_autoflush:
             self._session.execute(
@@ -252,8 +256,16 @@ class CapsuleFinalizeService:
                 )
             if capsule.state is not CapsuleState.DRAFT:
                 raise _error("CAPSULE_STATE_INVALID")
-            if now >= capsule.draft_expires_at:
-                raise _error("DRAFT_EXPIRED")
+
+            def check_deadline() -> None:
+                # A request timestamp predates advisory/recipient lock waits.
+                # Preserve the supplied timestamp/explicit test clock, but never
+                # use it alone to authorize a NEW publication after a slow wait.
+                fresh = _require_utc(clock() if clock is not None else datetime.now(timezone.utc))
+                if max(now, fresh) >= capsule.draft_expires_at:
+                    raise _error("DRAFT_EXPIRED")
+
+            check_deadline()
             if sender_key_bundle_id != capsule.sender_key_bundle_id:
                 raise _error("KEY_BUNDLE_INVALID")
 
@@ -299,7 +311,8 @@ class CapsuleFinalizeService:
             publication_sequence = self._next_publication_sequence(
                 capsule.recipient_user_id
             )
-            return self._persist_ready(
+            check_deadline()
+            result = self._persist_ready(
                 capsule,
                 authorization=authorization,
                 envelope=envelope,
@@ -307,6 +320,10 @@ class CapsuleFinalizeService:
                 publication_sequence=publication_sequence,
                 locator_issuance=locator_issuance,
             )
+            # Flush/optional locator work can also wait. Raising here requires
+            # the caller's outer rollback, just like any late finalize failure.
+            check_deadline()
+            return result
 
     def _next_publication_sequence(self, recipient_user_id: uuid.UUID) -> int:
         """Reserve the recipient's next stream position until this transaction commits."""

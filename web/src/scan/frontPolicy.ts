@@ -164,7 +164,17 @@ export function evaluateCompositeAcceptance(
   duplicateFrontGroup = false,
 ): AcceptanceReport {
   if (!Array.isArray(candidates) || candidates.length === 0) throw new FrontPolicyError('input')
-  const scored = stableDescending(candidates.map(copyScored), (row) => row.compositeScore)
+  // FRONT-only contract: the composite IS the FRONT score. Derive it here
+  // rather than trusting a caller-supplied compositeScore (native constructs
+  // its ScoredComposite from frontScore), so a mismatched caller value cannot
+  // promote a below-auto FRONT.
+  const scored = stableDescending(
+    candidates.map((row) => {
+      const copied = copyScored(row)
+      return { ...copied, compositeScore: copied.frontScore }
+    }),
+    (row) => row.compositeScore,
+  )
 
   if (plausible(scored).length >= 2) {
     return { scored, autoAccepted: null, rejectionRule: 'MULTIPLE_PLAUSIBLE_CANDIDATES' }
@@ -210,17 +220,19 @@ export function classifyScanOutcome(
   if (frontRanking.noMatchFront) {
     return { outcome: 'NO_MATCH', accepted: null, chooserRows: [] }
   }
-  const scored = acceptance?.scored ?? []
+  // Validate and COPY every row used for the decision and for returned
+  // structured outputs; callers must not receive aliases they can mutate.
+  const scored = (acceptance?.scored ?? []).map(copyScored)
   const plausibleRows = stableDescending(plausible(scored), (row) => row.compositeScore)
   if (plausibleRows.length >= FRONT_POLICY.minChooserRows) {
     return {
       outcome: 'PLAUSIBLE_CHOOSER',
       accepted: null,
-      chooserRows: plausibleRows.slice(0, FRONT_POLICY.maxChooserRows),
+      chooserRows: plausibleRows.slice(0, FRONT_POLICY.maxChooserRows).map(copyScored),
     }
   }
   if (acceptance !== null && acceptance.autoAccepted !== null) {
-    return { outcome: 'AUTO_ACCEPTED', accepted: acceptance.autoAccepted, chooserRows: [] }
+    return { outcome: 'AUTO_ACCEPTED', accepted: copyScored(acceptance.autoAccepted), chooserRows: [] }
   }
   if (plausibleRows.length === 1) {
     return { outcome: 'SINGLE_CANDIDATE_RECAPTURE', accepted: null, chooserRows: [] }

@@ -194,6 +194,41 @@ describe('T340 scan outcome classification', () => {
     expect(only.chooserRows).toEqual([])
   })
 
+  it('derives the composite from FRONT, so a caller composite cannot promote below auto', () => {
+    const report = evaluateCompositeAcceptance([
+      { candidateId: 'r', frontScore: 0.5, compositeScore: 0.95, frontWeakPassed: true, frontStrongPassed: true },
+    ])
+    expect(report.autoAccepted).toBeNull()
+    expect(report.rejectionRule).toBe('FRONT_BELOW_AUTO_MIN')
+    expect(report.scored[0]!.compositeScore).toBe(0.5)
+  })
+
+  it('returns a copied accepted row, not the caller alias', () => {
+    const leader = scored('leader', 0.8)
+    const result = classifyScanOutcome(ranking([front('leader', 0.8)]), {
+      scored: [leader],
+      autoAccepted: leader,
+      rejectionRule: null,
+    })
+    expect(result.outcome).toBe('AUTO_ACCEPTED')
+    expect(result.accepted).not.toBe(leader)
+    ;(leader as { frontScore: number }).frontScore = 0.01
+    expect(result.accepted?.frontScore).toBe(0.8)
+  })
+
+  it('returns copied chooser rows, not caller aliases', () => {
+    const rows = [scored('a', 0.8), scored('b', 0.5)]
+    const result = classifyScanOutcome(
+      ranking(rows.map((row) => front(row.candidateId, row.frontScore))),
+      { scored: rows, autoAccepted: null, rejectionRule: 'MULTIPLE_PLAUSIBLE_CANDIDATES' },
+    )
+    expect(result.outcome).toBe('PLAUSIBLE_CHOOSER')
+    expect(result.chooserRows[0]).not.toBe(rows[0])
+    expect(result.chooserRows[1]).not.toBe(rows[1])
+    ;(rows[0] as { frontScore: number }).frontScore = 0.01
+    expect(result.chooserRows[0]!.frontScore).toBe(0.8)
+  })
+
   it('recaptures for exactly one plausible below auto and reports NO_MATCH otherwise', () => {
     const one = classifyScanOutcome(ranking([front('single', 0.5)]), {
       scored: [scored('single', 0.5), scored('dud', 0.2, false)],

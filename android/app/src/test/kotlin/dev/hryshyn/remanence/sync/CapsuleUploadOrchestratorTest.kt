@@ -885,11 +885,11 @@ class CapsuleUploadOrchestratorTest {
             assertEquals(1, calls); assertTrue(enqueued.isEmpty())
             assertEquals(parked, capsuleRow())
             paths.forEach { assertEquals(bytes[it], File(it).readBytes().toList()) }
-            assertEquals(0, database.outboxCapsuleDao().releaseSendLimitForOwner(CAPSULE, OTHER_OWNER))
+            assertEquals(0, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OTHER_OWNER))
             assertEquals(parked, capsuleRow())
-            assertEquals(1, database.outboxCapsuleDao().releaseSendLimitForOwner(CAPSULE, OWNER))
+            assertEquals(1, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OWNER))
             assertEquals(parked.copy(lastErrorCode = null), capsuleRow())
-            assertEquals(0, database.outboxCapsuleDao().releaseSendLimitForOwner(CAPSULE, OWNER))
+            assertEquals(0, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OWNER))
             assertEquals(1, resumer.resume(OWNER_TYPED).enqueuedCount)
             assertEquals(listOf(CAPSULE), enqueued)
             assertEquals(CapsuleUploadOutcome.Succeeded, restarted.run(OWNER_TYPED, CAPSULE_TYPED))
@@ -939,6 +939,29 @@ class CapsuleUploadOrchestratorTest {
                 CapsuleFinalizeResult.Success(CapsuleFinalize(CAPSULE_TYPED, CapsuleFinalizeState.READY, "2030-01-08T00:00:00Z"), 200)
             }
         }.run(OWNER_TYPED, CAPSULE_TYPED))
+    }
+
+    @Test fun noncanonicalFinalizeRepliesParkUnknownWithoutCleanupOrNewAutomaticAttempts() = runBlocking {
+        for (reason in listOf(CapsuleFinalizeFailure.HTTP, CapsuleFinalizeFailure.INVALID_RESPONSE)) restartable { reopen ->
+            seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+            val outcome = orchestrator {
+                finalizeCapsule = { _, _ -> CapsuleFinalizeResult.Failure(reason, 409, false) }
+                cleanupRetryMaterial = { _, _ -> error("unknown is not rollback") }
+            }.run(OWNER_TYPED, CAPSULE_TYPED)
+            assertEquals(CapsuleUploadOutcome.FinalizationUnconfirmed, outcome)
+            assertEquals(androidx.work.ListenableWorker.Result.failure(), CapsuleUploadWorker.mapOutcome(outcome))
+            val saved = capsuleRow()
+            assertEquals(OutboxCapsuleState.FINALIZING, saved.state)
+            assertEquals("FINALIZE_UNCONFIRMED", saved.lastErrorCode)
+            assertTrue(File(saved.senderRetryKeysetPath!!).exists())
+            reopen()
+            assertTrue(database.outboxCapsuleDao().getCapsuleIdsNeedingUploadForOwner(OWNER).isEmpty())
+            assertEquals(CapsuleUploadOutcome.FinalizationUnconfirmed,
+                orchestrator { finalizeCapsule = { _, _ -> error("must stay parked") } }.run(OWNER_TYPED, CAPSULE_TYPED))
+            assertEquals(saved, capsuleRow())
+            assertEquals(1, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OWNER))
+            assertEquals(saved.copy(lastErrorCode = null), capsuleRow())
+        }
     }
 
     private fun assertSameRequest(first: CapsuleFinalizeRequest, next: CapsuleFinalizeRequest) {

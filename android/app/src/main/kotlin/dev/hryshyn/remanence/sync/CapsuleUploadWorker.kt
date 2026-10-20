@@ -45,6 +45,7 @@ class CapsuleUploadWorker(
                 CapsuleUploadOutcome.Missing,
                 CapsuleUploadOutcome.RecipientKeyStale,
                 CapsuleUploadOutcome.SendLimitReached,
+                CapsuleUploadOutcome.FinalizationUnconfirmed,
                 -> androidx.work.ListenableWorker.Result.failure()
                 is CapsuleUploadOutcome.Retryable -> androidx.work.ListenableWorker.Result.retry()
                 is CapsuleUploadOutcome.TerminalFailure -> androidx.work.ListenableWorker.Result.failure()

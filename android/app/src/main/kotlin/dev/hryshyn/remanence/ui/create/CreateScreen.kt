@@ -272,7 +272,7 @@ fun CreateScreen(
                     }
                     if (uploadStatus !is CreateViewModel.CreateUploadStatus.TerminalFailure &&
                         (uploadStatus is CreateViewModel.CreateUploadStatus.RetryableFailure || publishError != null ||
-                            (publicationIssue?.durable == true && publicationIssue.kind == CreateViewModel.PublicationIssueKind.LIMIT))) {
+                            (publicationIssue?.durable == true && publicationIssue.kind != CreateViewModel.PublicationIssueKind.ACCESS_UNAVAILABLE))) {
                         Spacer(Modifier.height(16.dp))
                         ForwardAction(stringResource(R.string.create_audit_retry), "create_retry_upload",
                             viewModel::retryUpload, enabled = !uploadRetrying, busy = uploadRetrying)

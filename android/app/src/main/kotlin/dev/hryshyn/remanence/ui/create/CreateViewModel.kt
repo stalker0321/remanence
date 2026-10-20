@@ -1402,6 +1402,7 @@ class CreateViewModel(
             OutboxCapsuleState.FINALIZING -> when (status.lastErrorCode) {
                 "SEND_LIMIT_REACHED" -> CreateUploadStatus.PublicationIssue(PublicationIssueKind.LIMIT, true)
                 "SEND_ACCESS_UNAVAILABLE" -> CreateUploadStatus.PublicationIssue(PublicationIssueKind.ACCESS_UNAVAILABLE, true)
+                "FINALIZE_UNCONFIRMED" -> CreateUploadStatus.PublicationIssue(PublicationIssueKind.UNKNOWN, true)
                 else -> CreateUploadStatus.Pending(status.state)
             }
             OutboxCapsuleState.RETRYABLE_FAILURE ->
@@ -2967,7 +2968,7 @@ class CreateViewModel(
                 // In-flight chains keep their scheduler/backoff. Terminal,
                 // published and preparation-only rows cannot be retried here.
                 val parkedLimit = row.state == OutboxCapsuleState.FINALIZING &&
-                    row.lastErrorCode == "SEND_LIMIT_REACHED"
+                    row.lastErrorCode in setOf("SEND_LIMIT_REACHED", "FINALIZE_UNCONFIRMED")
                 if (!parkedLimit && row.state != OutboxCapsuleState.ENCRYPTED &&
                     row.state != OutboxCapsuleState.RETRYABLE_FAILURE) return@launch
                 val liveOwner = identityProvider()?.userId
@@ -2976,7 +2977,7 @@ class CreateViewModel(
                 val expectedStatus = _uploadStatus.value
                 statusBeforeEnqueue = expectedStatus
                 if (parkedLimit) {
-                    if (dao.releaseSendLimitForOwner(capsule, owner.toRestString()) != 1) return@launch
+                    if (dao.releaseParkedFinalizeForOwner(capsule, owner.toRestString()) != 1) return@launch
                     if (!outboxObservationStillCurrent(generation, owner, capsule) ||
                         identityProvider()?.userId != owner.toRestString()) return@launch
                 }

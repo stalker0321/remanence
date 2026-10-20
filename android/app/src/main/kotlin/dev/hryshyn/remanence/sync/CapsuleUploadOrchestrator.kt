@@ -72,6 +72,7 @@ sealed interface CapsuleUploadOutcome {
 
     /** Confirmed admission denial: retained FINALIZING row, no automatic retry. */
     data object SendLimitReached : CapsuleUploadOutcome
+    data object FinalizationUnconfirmed : CapsuleUploadOutcome
 
     data class Retryable(val errorCode: String) : CapsuleUploadOutcome
 
@@ -123,6 +124,9 @@ class CapsuleUploadOrchestrator(
 
         if (capsule.lastErrorCode == "SEND_LIMIT_REACHED") {
             return CapsuleUploadOutcome.SendLimitReached
+        }
+        if (capsule.lastErrorCode == "FINALIZE_UNCONFIRMED") {
+            return CapsuleUploadOutcome.FinalizationUnconfirmed
         }
         val staleOrigin = when {
             capsule.state == OutboxCapsuleState.RETRYABLE_FAILURE &&
@@ -982,6 +986,15 @@ class CapsuleUploadOrchestrator(
         }
         if (failure.reason == CapsuleFinalizeFailure.AUTH_INVALID || failure.retryable) {
             return markFinalizeRetryable(owner, capsuleId, finalizeRetryableCode(failure.reason))
+        }
+        if (failure.reason == CapsuleFinalizeFailure.HTTP ||
+            failure.reason == CapsuleFinalizeFailure.INVALID_RESPONSE) {
+            // A malformed/noncanonical reply proves neither denial nor rollback.
+            // Keep recovery without adding automatic attempts to this legacy
+            // non-retryable branch. Only an explicit SAME-request retry releases it.
+            val persisted = markFinalizeRetryable(owner, capsuleId, "FINALIZE_UNCONFIRMED")
+            return if (persisted is CapsuleUploadOutcome.Retryable)
+                CapsuleUploadOutcome.FinalizationUnconfirmed else persisted
         }
         return when (failure.reason) {
             CapsuleFinalizeFailure.VALIDATION_FAILED,

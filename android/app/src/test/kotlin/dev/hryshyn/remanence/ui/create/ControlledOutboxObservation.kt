@@ -3,19 +3,47 @@ package dev.hryshyn.remanence.ui.create
 import dev.hryshyn.remanence.core.data.db.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /** Only observation delivery is controlled. Staging and row reads use Room. */
 internal class ControlledOutboxObservation(private val room: OutboxCapsuleDao) : OutboxCapsuleDao() {
     private data class Emission(val status: OutboxCapsuleStatus?, val applied: CompletableDeferred<Unit>)
     private val streams = mutableMapOf<Pair<String, String>, Channel<Emission>>()
+    private val lateAfterCancellation = mutableMapOf<Pair<String, String>, Channel<Emission>>()
 
-    override fun observeStatusByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String) = flow {
-        val channel = Channel<Emission>(Channel.UNLIMITED)
-        check(streams.put(capsuleId to ownerUserId, channel) == null)
-        for (event in channel) {
-            emit(event.status)
-            event.applied.complete(Unit)
+    override fun observeStatusByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): Flow<OutboxCapsuleStatus?> =
+        object : Flow<OutboxCapsuleStatus?> {
+        override suspend fun collect(collector: FlowCollector<OutboxCapsuleStatus?>) {
+            val key = capsuleId to ownerUserId
+            val channel = Channel<Emission>(Channel.UNLIMITED)
+            check(streams.put(key, channel) == null)
+            try {
+                for (event in channel) {
+                    collector.emit(event.status)
+                    event.applied.complete(Unit)
+                }
+            } finally {
+                // Explicit hostile-source control: once armed, deliver exactly
+                // one old event even after cancellation. No product test hook.
+                lateAfterCancellation.remove(key)?.let { late -> withContext(NonCancellable) {
+                    val event = late.receive()
+                    collector.emit(event.status)
+                    event.applied.complete(Unit)
+                } }
+            }
+        }
+    }
+
+    fun armLate(capsule: String, owner: String): suspend (OutboxCapsuleStatus?) -> Unit {
+        val channel = Channel<Emission>(1)
+        check(lateAfterCancellation.put(capsule to owner, channel) == null)
+        return { status ->
+            val applied = CompletableDeferred<Unit>()
+            channel.send(Emission(status, applied))
+            applied.await()
         }
     }
 

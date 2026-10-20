@@ -17,6 +17,14 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import dev.hryshyn.remanence.create.GeneratorPreviewLoader
+import dev.hryshyn.remanence.create.LoadedPreviewSource
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -196,6 +204,7 @@ class CreateComposeFlowTest {
         persistence: SealedFingerprintPersistence = NoPersistence(),
         telemetry: TelemetryCoordinator? = null,
         previewWorker: CoroutineDispatcher = Dispatchers.IO,
+        previewOverride: GeneratorPreviewLoader? = null,
     ): CreateViewModel {
         val roots = AccountScopedFileRoots(stagingDir)
         val retryStore = SenderRetryMaterialStore(roots)
@@ -211,7 +220,7 @@ class CreateComposeFlowTest {
             frontProcessor = Accepting(goldenSynthetic()),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
-            generatorPreviewLoader = previewLoader(previewWorker),
+            generatorPreviewLoader = previewOverride ?: previewLoader(previewWorker),
             generatorBridgeProvider = bridge.provider,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
@@ -228,6 +237,39 @@ class CreateComposeFlowTest {
         assertTrue(requireNotNull(vm.viewModelScope.coroutineContext[Job]).children.any { it.isActive })
         // Worker return is queued, so the missing teardown ownership cannot
         // be hidden by a fast preview. The @After invariant must fail on RED.
+    }
+
+    @Test fun retirementJoinsCancellationDelayedWorkAndEveryOwnedVm() = runTest(testDispatcher) {
+        val entered = CompletableDeferred<Unit>()
+        val cancelling = CompletableDeferred<Unit>()
+        val finishCleanup = CompletableDeferred<Unit>()
+        val loader = object : GeneratorPreviewLoader {
+            override suspend fun load(pickerId: String): LoadedPreviewSource? {
+                entered.complete(Unit)
+                try { awaitCancellation() }
+                finally { withContext(NonCancellable) {
+                    cancelling.complete(Unit)
+                    finishCleanup.await()
+                } }
+            }
+        }
+        val first = newViewModel(previewOverride = loader)
+        driveToContent(first)
+        entered.await()
+        val second = newViewModel(previewWorker = StandardTestDispatcher(testDispatcher.scheduler))
+        driveToContent(second)
+        var retired = false
+        val closing = launch { ownedViewModels.clearAndJoin(); retired = true }
+        cancelling.await()
+        try {
+            assertFalse("cancel without join must not authorize Main reset", retired)
+            assertFalse(ownedViewModels.allCompleted)
+        } finally { finishCleanup.complete(Unit) }
+        closing.join()
+        assertTrue(retired)
+        assertTrue(ownedViewModels.allCompleted)
+        assertEquals(GeneratorPreviewState.Idle, first.generatorPreview.value)
+        assertEquals(GeneratorPreviewState.Idle, second.generatorPreview.value)
     }
 
     private fun driveToContent(vm: CreateViewModel, photos: Int = 3) {

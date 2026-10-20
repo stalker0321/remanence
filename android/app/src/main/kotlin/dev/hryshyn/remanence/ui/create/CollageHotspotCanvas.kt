@@ -12,6 +12,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.collage.CollageCanvas
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
@@ -44,7 +48,7 @@ internal fun CollageHotspotCanvas(
         CollageCanvas(
             scene = scene,
             images = images,
-            contentDescription = "collage candidate",
+            contentDescription = stringResource(R.string.media_collage_description),
             modifier = Modifier.fillMaxSize(),
             textMeasurer = textMeasurer,
             artwork = artwork,
@@ -57,6 +61,7 @@ internal fun CollageHotspotCanvas(
         val sceneHeight = scene.canvasHeight.toFloat()
         if (sceneWidth <= 0f || sceneHeight <= 0f) return@BoxWithConstraints
         placements.forEachIndexed { index, placement ->
+            val label = stringResource(R.string.media_crop_photo, index + 1, placements.size)
             Box(
                 Modifier
                     .offset(
@@ -69,8 +74,9 @@ internal fun CollageHotspotCanvas(
                     )
                     .clickable(
                         role = Role.Button,
-                        onClickLabel = "adjust crop",
+                        onClickLabel = label,
                     ) { onSlotTap(placement.contentId) }
+                    .semantics { contentDescription = label }
                     .testTag("crop_hotspot_$index"),
             )
         }

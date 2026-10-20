@@ -205,7 +205,7 @@ internal fun CollageChoiceHost(
                             }
                         }
                         if (onSlotTap == null) {
-                            CollageCanvas(result.scene, images, "collage candidate", canvas, measurer, artworkBitmap,
+                            CollageCanvas(result.scene, images, stringResource(R.string.media_collage_description), canvas, measurer, artworkBitmap,
                                 onMusicClick = onMusicClick, musicActionLabel = musicActionLabel)
                         } else {
                             CollageHotspotCanvas(result.scene, images, displayed.expression.placements,

@@ -148,7 +148,7 @@ fun ScanScreen(
                 motion = entryMotion,
             ) {
                 Column {
-                Text(stringResource(R.string.create_capture_body), style = MaterialTheme.typography.bodySmall,
+                Text(stringResource(R.string.receiver_scan_capture_body), style = MaterialTheme.typography.bodySmall,
                     color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted)
                 Spacer(Modifier.height(16.dp))
                 // Like Create, keep processing neutral rather than showing

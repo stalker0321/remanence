@@ -1,0 +1,16 @@
+<resources>
+    <string name="media_collage_description">Композиція листівки</string>
+    <string name="media_crop_photo">Кадрувати фото %1$d з %2$d</string>
+    <string name="media_crop_position">Рамка: %1$d%% зліва, %2$d%% згори; ширина %3$d%%, висота %4$d%%</string>
+    <string name="media_crop_left">Посунути рамку ліворуч</string>
+    <string name="media_crop_right">Посунути рамку праворуч</string>
+    <string name="media_crop_up">Посунути рамку вгору</string>
+    <string name="media_crop_down">Посунути рамку вниз</string>
+    <string name="media_crop_zoom_in">Наблизити</string>
+    <string name="media_crop_zoom_out">Віддалити</string>
+    <string name="media_crop_hint">Перетягуйте рамку або змінюйте розмір щипком. Також доступні дії рамки, клавіші стрілок і + / −.</string>
+    <string name="media_photo_previous">Попереднє фото</string>
+    <string name="media_photo_next">Наступне фото</string>
+    <string name="media_photo_position">Фото %1$d з %2$d</string>
+    <string name="media_export_interrupted">Збереження перервано. Залиште спогад відкритим і знову виберіть «Зберегти зображення».</string>
+</resources>

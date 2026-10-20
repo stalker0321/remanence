@@ -11,7 +11,7 @@ import org.w3c.dom.Element
 
 /**
  * Flow controls use actual, translated resource keys in every supported
- * locale. Create owns its arrow/close bar; Scan still uses the root bar.
+ * locale. Root owns Scan's arrow/close bar; ScanScreen owns its title.
  */
 class HoldFlowHeaderStringsParityTest {
 
@@ -35,9 +35,14 @@ class HoldFlowHeaderStringsParityTest {
         for (literal in HARDCODED_FLOW_HEADER_LABELS) {
             assertFalse("RootScreen.kt hardcodes \"$literal\"", source.contains("\"$literal\""))
         }
-        for (key in FLOW_HEADER_LABEL_KEYS) {
+        for (key in ROOT_CONTROL_KEYS) {
             assertTrue("$key is not referenced by flow chrome", source.contains("R.string.$key"))
         }
+        val scan = moduleFile("src/main/kotlin/dev/hryshyn/remanence/ui/scan/ScanScreen.kt").readText()
+        assertTrue("Scan owns its current localized title", scan.contains("stringResource(R.string.hold_scan_title)"))
+        assertTrue("Scan owns receiving instructions", scan.contains("stringResource(R.string.receiver_scan_capture_body)"))
+        assertFalse("Sender instructions must not reach receiver", scan.contains("R.string.create_capture_body"))
+        assertFalse("No literal Scan heading", scan.contains("Text(\"Scan\""))
     }
 
     private fun localeFile(locale: String): File =
@@ -76,7 +81,8 @@ class HoldFlowHeaderStringsParityTest {
     }
 
     private companion object {
-        val FLOW_HEADER_LABEL_KEYS = listOf("hold_back", "hold_close", "hold_scan", "hold_back_to_home")
+        val ROOT_CONTROL_KEYS = listOf("hold_back", "hold_close", "hold_back_to_home")
+        val FLOW_HEADER_LABEL_KEYS = ROOT_CONTROL_KEYS + "hold_scan_title"
         val HARDCODED_FLOW_HEADER_LABELS = listOf("Create", "Scan", "Back to Home")
     }
 }

@@ -263,11 +263,18 @@ internal fun CollagePresentationHost(
                     val export = exportFactory(validateExport)
                     val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
                     val musicLabel = state.track?.let { stringResource(R.string.track_open_action, it.title, it.artistDisplay) }
+                    // The player cue is viewer furniture, not authored media.
+                    // Keep every sealed photo/text/cover rect unchanged.
+                    val contentScene = remember(result.scene) {
+                        result.scene.copy(music = result.scene.music?.copy(playRegion = null))
+                    }
                     CapsuleSheetFrame(export, enabled = state.status is CollagePresentationState.Status.Ready,
                         ratio = result.scene.canvasWidth.toFloat() / result.scene.canvasHeight,
-                        onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_collage_close") { sheetModifier ->
+                        onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_collage_close",
+                        actions = { CapsuleListenAction(state.track, musicAction) },
+                        overlay = { CapsuleMusicCue(result.scene, images) }) { sheetModifier ->
                     CollageCanvas(
-                        scene = result.scene,
+                        scene = contentScene,
                         images = images,
                         contentDescription = contentDescription,
                         modifier = sheetModifier,

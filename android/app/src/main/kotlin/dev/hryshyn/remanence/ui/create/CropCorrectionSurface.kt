@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -34,11 +35,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.IntOffset
@@ -51,7 +55,6 @@ import dev.hryshyn.remanence.ui.collage.NormalizedCrop
 import dev.hryshyn.remanence.ui.hold.HoldButton
 import dev.hryshyn.remanence.ui.hold.HoldColors
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
-import java.util.Locale
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -110,6 +113,25 @@ fun CropStageContent(
     val currentUpdate by rememberUpdatedState(onUpdate)
     val density = LocalDensity.current
     val cropGridDescription = stringResource(R.string.create_audit_crop_grid)
+    val cropPosition = stringResource(R.string.media_crop_position,
+        (retained.x * 100).roundToInt(), (retained.y * 100).roundToInt(),
+        (retained.width * 100).roundToInt(), (retained.height * 100).roundToInt())
+    // Alternative inputs feed exactly the touch gesture geometry and clamp.
+    fun adjust(dx: Double = 0.0, dy: Double = 0.0, zoom: Double = 1.0): Boolean {
+        val window = CropEditorGeometry.window(base, currentTransform) ?: return false
+        val next = CropEditorGeometry.gesture(base, currentTransform, dx, dy, zoom,
+            window.x + window.width / 2, window.y + window.height / 2) ?: return false
+        currentUpdate(next.z.toFloat(), next.xPercent.toFloat(), next.yPercent.toFloat())
+        return true
+    }
+    val actions = listOf(
+        CustomAccessibilityAction(stringResource(R.string.media_crop_left)) { adjust(dx = -.05) },
+        CustomAccessibilityAction(stringResource(R.string.media_crop_right)) { adjust(dx = .05) },
+        CustomAccessibilityAction(stringResource(R.string.media_crop_up)) { adjust(dy = -.05) },
+        CustomAccessibilityAction(stringResource(R.string.media_crop_down)) { adjust(dy = .05) },
+        CustomAccessibilityAction(stringResource(R.string.media_crop_zoom_in)) { adjust(zoom = 1.1) },
+        CustomAccessibilityAction(stringResource(R.string.media_crop_zoom_out)) { adjust(zoom = 1 / 1.1) },
+    )
     BoxWithConstraints(modifier.fillMaxWidth().testTag("crop_stage")) {
         // Production provides bounded height; the fallback supports embedded previews.
         val editorHeight = if (constraints.hasBoundedHeight) maxHeight else 540.dp
@@ -128,7 +150,7 @@ fun CropStageContent(
             Text(stringResource(R.string.hold_crop_title),
                 style = MaterialTheme.typography.headlineLarge, modifier = Modifier.testTag("crop_stage_label"))
             Text(
-                stringResource(R.string.crop_gesture_hint), style = MaterialTheme.typography.bodyMedium,
+                stringResource(R.string.media_crop_hint), style = MaterialTheme.typography.bodyMedium,
                 color = HoldColors.Muted, modifier = Modifier.testTag("crop_stage_hint"),
             )
             BoxWithConstraints(
@@ -204,8 +226,19 @@ fun CropStageContent(
                             with(density) { (retained.height * imageHeightPx).toFloat().toDp() },
                         ).semantics {
                             contentDescription = cropGridDescription
-                            stateDescription = windowState(retained)
-                        }.testTag("crop_frame"),
+                            stateDescription = cropPosition
+                            customActions = actions
+                        }.onKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) false else when (event.key) {
+                                Key.DirectionLeft -> adjust(dx = -.05)
+                                Key.DirectionRight -> adjust(dx = .05)
+                                Key.DirectionUp -> adjust(dy = -.05)
+                                Key.DirectionDown -> adjust(dy = .05)
+                                Key.Equals, Key.Plus -> adjust(zoom = 1.1)
+                                Key.Minus -> adjust(zoom = 1 / 1.1)
+                                else -> false
+                            }
+                        }.focusable().testTag("crop_frame"),
                     ) {
                         val stroke = 2.dp.toPx()
                         for (third in 1..2) {
@@ -230,7 +263,3 @@ fun CropStageContent(
     }
 }
 
-/** Source coordinates, shared by accessibility diagnostics and render tests. */
-internal fun windowState(window: NormalizedCrop): String = String.format(
-    Locale.ROOT, "window %.6f,%.6f,%.6f,%.6f", window.x, window.y, window.width, window.height,
-)

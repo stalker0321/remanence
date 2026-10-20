@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -35,6 +36,7 @@ import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.capsule.music.StreamingService
 import dev.hryshyn.remanence.ui.capsule.music.TrackServicePicker
 import dev.hryshyn.remanence.ui.capsule.music.openTrackUrl
+import dev.hryshyn.remanence.ui.capsule.music.rememberTrackServiceAction
 import dev.hryshyn.remanence.ui.create.GeneratorBer1Preview
 import dev.hryshyn.remanence.ui.create.GeneratorBer1Renderer
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
@@ -116,9 +118,12 @@ internal fun Ber1PresentationHost(
     var originalPhoto by remember(state) { mutableStateOf<String?>(null) }
     val photoLabel = stringResource(R.string.capsule_view_original)
     val export = exportFactory { check(state.isOpen && exportReady); validateExport() }
+    val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
     CapsuleSheetFrame(export, enabled = state.isOpen && exportReady, ratio = 360f / 640f,
-        onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_ber1_close") { sheetModifier ->
-      Box(sheetModifier) {
+        onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_ber1_close",
+        actions = { if (exportReady) CapsuleListenAction(state.track, musicAction) }) { sheetModifier ->
+      Column(sheetModifier) {
+       Box(Modifier.fillMaxWidth().weight(1f)) {
         val result = GeneratorBer1Preview(
             expression = state.expression,
             sources = state.bitmaps,
@@ -146,15 +151,13 @@ internal fun Ber1PresentationHost(
                 modifier = Modifier.align(Alignment.Center).testTag("capsule_ber1_blocked"),
             )
         }
-        state.track?.takeIf { result is GeneratorBer1Renderer.SceneResult.Ready }?.let { track ->
-            val context = LocalContext.current
+       }
+        // Legacy track metadata is supplemental to the frozen BER1 canvas.
+        // Give it its own paper area; never cover an authored photo with it.
+        state.track?.takeIf { exportReady }?.let { track ->
             TrackSnapshotCard(
                 track = track,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
-                onOpenService = { service ->
-                    val url = service.searchUrl(track.title, track.artistDisplay)
-                    openTrackUrl?.invoke(url) ?: context.openTrackUrl(url)
-                },
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
             )
         }
       }
@@ -207,7 +210,7 @@ internal fun TrackSnapshotCard(
             HoldTextButton(
                 onClick = { pickerOpen = true; noHandler = false },
                 modifier = Modifier.testTag("capsule_track_open"),
-            ) { Text(stringResource(R.string.track_open_action)) }
+            ) { Text(stringResource(R.string.track_open_action, track.title, track.artistDisplay)) }
         }
         if (noHandler) {
             Text(

@@ -98,7 +98,7 @@ class CapsuleMediaRenderTest {
     private fun output() = File("build/t389-review").apply { mkdirs() }
     private fun render(name: String) {
         rule.waitForIdle()
-        val tree = rule.onRoot(useUnmergedTree = true).printToString()
+        val tree = rule.onNodeWithTag("capsule_sheet", useUnmergedTree = true).printToString()
         rule.runOnIdle {
             val view = rule.activity.window.decorView
             val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)

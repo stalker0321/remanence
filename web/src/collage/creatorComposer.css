@@ -2,6 +2,7 @@
    that could mask a paint or state change. Respects reduced motion. */
 
 .creator-composer {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -22,13 +23,34 @@
 
 .creator-pager {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
 }
 
 .creator-pager button {
+  flex-shrink: 0;
   min-width: 44px;
   min-height: 44px;
+}
+
+.creator-pager > span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* Keep full-size targets together below the label when the local column is small.
+   The ordinary desktop row and the preview canvas keep their existing geometry. */
+@container (max-width: 12em) {
+  .creator-pager {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(44px, 1fr));
+  }
+
+  .creator-pager > span {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
 }
 
 .creator-branch {

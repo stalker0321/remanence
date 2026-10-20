@@ -17,6 +17,21 @@ import dev.hryshyn.remanence.core.model.CapsuleId
 
 class CapsuleBlobUploadRepositoryTest {
 
+    @Test fun quotaProblemHasNoAuthorityAtBlobEndpoint() = runTest {
+        withServer { server ->
+            for ((status, code) in listOf(409 to "SEND_LIMIT_REACHED", 503 to "SEND_ACCESS_UNAVAILABLE")) {
+                server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", "application/problem+json")
+                    .body(problemJson(code, status, status == 503)).build())
+                val result = assertIs<CapsuleBlobUploadResult.Failure>(repository(server).uploadBlob(request(), "synthetic"))
+                assertEquals(CapsuleBlobUploadFailure.HTTP, result.reason)
+                assertEquals(status, result.httpStatus)
+                assertEquals(status == 503, result.retryable)
+                assertFalse(result.toString().contains(SECRET_DETAIL))
+            }
+            assertEquals(2, server.requestCount)
+        }
+    }
+
     private val capsuleId = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000ca01")
     private val blobId = BlobId.parseRest("0198f0a0-0000-7000-8000-00000000b001")
     private val idempotencyKey = UUID.fromString("0198f0a0-0000-7000-8000-00000000ad01")

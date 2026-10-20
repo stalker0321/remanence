@@ -19,6 +19,65 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 
 class CapsuleFinalizeRepositoryTest {
 
+    @Test fun cancellationDuringRealRepositoryTransportIsNotAProblemFallback() = runTest {
+        withServer { server ->
+            assertFinalizeTransportCancellation { client ->
+                CapsuleFinalizeRepository(client, ApiBaseUrl.parse(server.url("/").toString()))
+                    .finalize(request(), "synthetic")
+            }
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test fun malformed409ProblemsReturnGenericFailureWithoutThrowing() = malformedAccessProblems(409)
+    @Test fun malformed503ProblemsReturnGenericRetryableFailureWithoutThrowing() = malformedAccessProblems(503)
+
+    private fun malformedAccessProblems(status: Int) = runTest {
+        withServer { server ->
+            val code = if (status == 409) "SEND_LIMIT_REACHED" else "SEND_ACCESS_UNAVAILABLE"
+            val cases = malformedFinalizeProblems(problemJson(code, status, status == 503))
+            val repository = repository(server)
+            for ((label, body) in cases) {
+                server.enqueue(MockResponse.Builder().code(status)
+                    .setHeader("Content-Type", "application/problem+json").body(body).build())
+                // A missing field must return through the actual HTTP adapter, not escape it.
+                val result = assertIs<CapsuleFinalizeResult.Failure>(repository.finalize(request(), "synthetic"), label)
+                assertEquals(CapsuleFinalizeFailure.HTTP, result.reason, label)
+                assertEquals(status, result.httpStatus, label)
+                assertEquals(status == 503, result.retryable, label)
+                assertFalse(result.toString().contains(SECRET_DETAIL), label)
+                val sent = server.takeRequest()
+                assertEquals("POST", sent.method, label)
+                assertEquals("/v1/capsules/${capsuleId.toRestString()}/finalize", sent.url.encodedPath, label)
+            }
+            assertEquals(cases.size, server.requestCount)
+        }
+    }
+
+    @Test fun validAccessProblemStillRequiresV1MimeAndMatchingStatus() = runTest {
+        withServer { server ->
+            for ((status, code) in listOf(409 to "SEND_LIMIT_REACHED", 503 to "SEND_ACCESS_UNAVAILABLE")) {
+                val valid = problemJson(code, status, status == 503)
+                for (mime in listOf("application/json", "text/plain")) {
+                    server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", mime).body(valid).build())
+                    val result = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "synthetic"))
+                    assertEquals(CapsuleFinalizeFailure.INVALID_RESPONSE, result.reason)
+                    assertEquals(status == 503, result.retryable)
+                }
+                server.enqueue(MockResponse.Builder().code(if (status == 409) 503 else 409)
+                    .setHeader("Content-Type", "application/problem+json").body(valid).build())
+                val wrongStatus = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "synthetic"))
+                assertEquals(CapsuleFinalizeFailure.HTTP, wrongStatus.reason)
+                assertEquals(status == 409, wrongStatus.retryable)
+                server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", "application/problem+json")
+                    .body(valid).build())
+                val accepted = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "synthetic"))
+                assertEquals(code, accepted.reason.name)
+                assertEquals(status == 503, accepted.retryable)
+            }
+        }
+    }
+
     @Test fun sendLimitFinalizeIsTypedWithoutChangingRequest() = accessOutcome(409, "SEND_LIMIT_REACHED", false)
     @Test fun sendAccessUnavailableFinalizeIsTypedWithoutChangingRequest() = accessOutcome(503, "SEND_ACCESS_UNAVAILABLE", true)
 

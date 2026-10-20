@@ -94,6 +94,31 @@ class SendAccessRepositoryTest {
         assertEquals(SendAccessResult.Failed(SendAccessFailure.SIGN_IN), stack.sendAccessRepository.read(owner))
     } }
 
+    @Test fun missingAndNullSharedScalarsStayUnavailableAndAValidReadStillWorks() = runTest { fixture { server, stack ->
+        val valid = wire(1, 0)
+        val invalid = listOf(
+            valid.replace("\"mode\":\"enforce\",", ""),
+            valid.replace("\"mode\":\"enforce\"", "\"mode\":null"),
+            valid.replace("\"policy_version\":1,", ""),
+            valid.replace("\"policy_version\":1", "\"policy_version\":null"),
+            valid.replace("\"lifetime\":false,", ""),
+            valid.replace("\"lifetime\":false", "\"lifetime\":null"),
+            valid.replace("\"used\":1,", ""),
+            valid.replace("\"used\":1", "\"used\":null"),
+            valid.replace("\"self\":true,", ""),
+            valid.replace("\"self\":true", "\"self\":null"),
+        )
+        for (body in invalid) {
+            assertNotEquals(valid, body)
+            server.respond(body)
+            assertEquals(SendAccessResult.Failed(SendAccessFailure.UNAVAILABLE), stack.sendAccessRepository.read(owner))
+        }
+        server.respond(valid)
+        val loaded = assertIs<SendAccessResult.Loaded>(stack.sendAccessRepository.read(owner)).value
+        assertEquals(1, loaded.self.remaining); assertEquals(0, loaded.other.remaining)
+        assertEquals(invalid.size + 1, server.requestCount)
+    } }
+
     @Test fun wrongOwnerNeverRequestsAndSameOwnerReinstalledLeaseDiscardsLateReply() = runTest { fixture { server, stack ->
         assertEquals(SendAccessResult.Failed(SendAccessFailure.SIGN_IN),
             stack.sendAccessRepository.read(UserId.parseRest("10000000-0000-4000-8000-000000000002")))

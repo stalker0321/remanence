@@ -107,14 +107,15 @@ internal fun JsonElement.exactObject(vararg keys: String): JsonObject =
     (this as? JsonObject)?.also { require(it.keys == keys.toSet()) }
         ?: throw IllegalArgumentException("invalid object")
 
+// Missing fields must use the same invalid-DTO path as null/wrong scalar types.
 internal fun JsonObject.strictString(key: String): String =
-    (getValue(key) as? JsonPrimitive)?.takeIf { it.isString }?.content
+    (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content
         ?: throw IllegalArgumentException("invalid string")
 
 internal fun JsonObject.strictInt(key: String): Int =
-    (getValue(key) as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull
+    (get(key) as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull
         ?: throw IllegalArgumentException("invalid integer")
 
 internal fun JsonObject.strictBoolean(key: String): Boolean =
-    (getValue(key) as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+    (get(key) as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
         ?: throw IllegalArgumentException("invalid boolean")

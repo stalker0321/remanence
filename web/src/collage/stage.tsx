@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { MessageKey } from '../i18n/catalog'
 import { exportComposition } from './exportComposition'
 import { paintScene, type PaintImage } from './paint'
@@ -23,16 +23,27 @@ export function CollageStage({
   t,
   onClose,
   ports,
+  navigation,
 }: {
   held: HeldSheet
   t: (key: MessageKey) => string
   onClose: () => void
   ports?: Partial<StagePorts>
+  navigation?: {
+    index: number | null
+    open: (index: number) => void
+    select: (index: number) => void
+    close: () => void
+  }
 }) {
   const loadImagePort = ports?.loadImage ?? loadImage
   const loadFacesPort = ports?.loadFaces ?? loadFaces
   const encodePort = ports?.encode ?? encodePng
   const canvas = useRef<HTMLCanvasElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const closeButton = useRef<HTMLButtonElement>(null)
+  const entryFocus = useRef<HTMLElement | null>(null)
+  const returnFrame = useRef<number | null>(null)
   const epoch = useRef(0)
   const exportUrls = useRef(new Set<string>())
   const restoreFocus = useRef<{ trigger: HTMLButtonElement; owner: HeldSheet } | null>(null)
@@ -40,7 +51,8 @@ export function CollageStage({
   const [paintState, setPaintState] = useState<PaintState>('loading')
   const [exporting, setExporting] = useState(false)
   const [exportFailed, setExportFailed] = useState(false)
-  const viewerOpen = viewer !== null && viewer.owner === held
+  const viewerIndex = navigation ? navigation.index : viewer?.owner === held ? viewer.index : null
+  const viewerOpen = viewerIndex !== null
   const status = paintState === 'loading'
     ? t('sheetPreparing')
     : paintState === 'failed'
@@ -99,15 +111,68 @@ export function CollageStage({
   }, [held, viewer])
 
   useEffect(() => {
-    if (viewer !== null) return
+    if (viewerOpen) {
+      // A native Forward can reopen the nested layer without clicking a hit.
+      if (restoreFocus.current?.owner !== held && viewerIndex !== null) {
+        const trigger = panel.current?.querySelectorAll<HTMLButtonElement>('.hit')[viewerIndex]
+        if (trigger) restoreFocus.current = { trigger, owner: held }
+      }
+      return
+    }
     const pending = restoreFocus.current
     restoreFocus.current = null
     if (pending !== null && pending.owner === held && pending.trigger.isConnected) pending.trigger.focus()
-  }, [viewer, held])
+  }, [viewerOpen, viewerIndex, held])
+
+  useLayoutEffect(() => {
+    if (returnFrame.current !== null) cancelAnimationFrame(returnFrame.current)
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement && !panel.current?.contains(active)) entryFocus.current = active
+    closeButton.current?.focus({ preventScroll: true })
+    return () => {
+      returnFrame.current = requestAnimationFrame(() => {
+        // A replacement sheet owns focus now; do not focus behind its modal.
+        if (document.querySelector('.stage') !== null) return
+        const trigger = entryFocus.current
+        if (trigger?.isConnected && !trigger.closest('[inert]') && !trigger.matches(':disabled') && trigger.getClientRects().length > 0) {
+          trigger.focus({ preventScroll: true })
+        } else {
+          const fallback = document.querySelector<HTMLElement>('main.shell .card button:not(:disabled), main.shell .card a')
+            ?? document.querySelector<HTMLElement>('main.shell')
+          fallback?.focus({ preventScroll: true })
+        }
+      })
+    }
+  }, [held])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (viewerOpen || event.defaultPrevented) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const nodes = [...(panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])') ?? [])]
+        .filter((node) => !node.closest('[inert]') && node.getClientRects().length > 0)
+      const first = nodes[0]
+      const last = nodes.at(-1)
+      if (!first || !last) return
+      const active = document.activeElement
+      if (!nodes.some((node) => node === active) || (event.shiftKey ? active === first : active === last)) {
+        event.preventDefault()
+        ;(event.shiftKey ? last : first).focus()
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [viewerOpen, onClose])
 
   function openPhoto(index: number, trigger: HTMLButtonElement): void {
     restoreFocus.current = { trigger, owner: held }
-    setViewer({ index, owner: held })
+    if (navigation) navigation.open(index)
+    else setViewer({ index, owner: held })
   }
 
   async function exportSheet() {
@@ -142,7 +207,7 @@ export function CollageStage({
   }
 
   return (
-    <div className="stage">
+    <div ref={panel} className="stage" role="dialog" aria-modal="true" aria-label={t('sheetViewer')}>
       <div className="stage-main" inert={viewerOpen}>
         <div className="stage-viewport">
           <div className="sheet">
@@ -171,17 +236,17 @@ export function CollageStage({
             <button type="button" disabled={paintState !== 'ready' || exporting} onClick={exportSheet}>
               {t('exportComposition')}
             </button>
-            <button type="button" onClick={onClose}>{t('closeSheet')}</button>
+            <button ref={closeButton} type="button" onClick={onClose}>{t('closeSheet')}</button>
           </div>
         </div>
       </div>
-      {viewerOpen && viewer !== null ? (
+      {viewerIndex !== null ? (
         <PhotoViewer
           held={held}
-          index={viewer.index}
+          index={viewerIndex}
           t={t}
-          onIndex={(index) => setViewer({ index, owner: held })}
-          onClose={() => setViewer(null)}
+          onIndex={(index) => navigation ? navigation.select(index) : setViewer({ index, owner: held })}
+          onClose={() => navigation ? navigation.close() : setViewer(null)}
         />
       ) : null}
     </div>

@@ -13,6 +13,7 @@ import { type Language, type MessageKey } from '../i18n/catalog'
 import { phaseKey, translate } from '../i18n/translate'
 import { writeLanguage, type PreferencePort } from '../preferences/language'
 import { href, parseRoute, type RouteName } from '../router/route'
+import { PresentationHistory } from '../router/presentationHistory'
 import { LanguageMenu } from './LanguageMenu'
 import { Settings } from './Settings'
 import { ShellStatus } from '../pwa/ShellStatus'
@@ -86,7 +87,32 @@ export function App({
   const draft = useRef(new RegistrationDraft())
   const [route, setRoute] = useState<RouteName>(() => parseRoute(window.location.hash))
   const [notice, setNotice] = useState<MessageKey>('errorRegion')
+  const navigation = useMemo(() => new PresentationHistory(), [])
+  const layers = useSyncExternalStore(navigation.subscribe, navigation.getSnapshot)
+  const presenting = view.phase === 'presentation-admitted' && held !== null
   const t = (key: MessageKey) => translate(view.language, key)
+
+  useEffect(() => {
+    const sync = () => {
+      const owner = memory.getSnapshot()
+      navigation.present(store.getSnapshot().phase === 'presentation-admitted' ? owner : null, () => {
+        // An old history callback cannot lock a replacement session or sheet.
+        if (owner !== null && memory.getSnapshot() === owner && store.getSnapshot().phase === 'presentation-admitted') store.lock()
+      })
+    }
+    window.addEventListener('popstate', navigation.navigated)
+    window.addEventListener('hashchange', navigation.navigated)
+    navigation.initialize()
+    const stopSession = store.subscribe(sync)
+    const stopMemory = memory.subscribe(sync)
+    sync()
+    return () => {
+      stopSession()
+      stopMemory()
+      window.removeEventListener('popstate', navigation.navigated)
+      window.removeEventListener('hashchange', navigation.navigated)
+    }
+  }, [store, memory, navigation])
 
   useEffect(() => {
     document.documentElement.dataset.remanenceBoot = 'ready'
@@ -102,7 +128,8 @@ export function App({
   }
 
   return (
-    <main className="shell">
+    <>
+    <main className="shell" inert={presenting} tabIndex={-1}>
       <div className="bar">
         <p className="mark">remanence</p>
         <LanguageMenu language={view.language} onSelect={chooseLanguage} t={t} />
@@ -123,9 +150,6 @@ export function App({
       ) : null}
       {route === 'create' ? (
         <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} note={note} photos={photos} music={music} onNotice={setNotice} keys={keys} />
-      ) : null}
-      {view.phase === 'presentation-admitted' && held ? (
-        <CollageStage held={held} t={t} onClose={() => store.lock()} />
       ) : null}
       {route === 'settings' ? (
         <Settings
@@ -152,6 +176,15 @@ export function App({
       <p className="status" role="status">{t(phaseKey(view.phase))}</p>
       <p className="status" role="alert">{t(notice)}</p>
     </main>
+    {presenting && held ? (
+      <CollageStage held={held} t={t} onClose={() => navigation.closeSheet()} navigation={{
+        index: layers?.owner === held ? layers.index : null,
+        open: (index) => navigation.openPhoto(index),
+        select: (index) => navigation.selectPhoto(index),
+        close: () => navigation.closePhoto(),
+      }} />
+    ) : null}
+    </>
   )
 }
 

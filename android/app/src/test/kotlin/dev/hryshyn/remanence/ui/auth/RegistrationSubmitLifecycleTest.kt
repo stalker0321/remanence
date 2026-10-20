@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.auth.CurrentAccountPort
 import dev.hryshyn.remanence.auth.RegistrationAuthApiPort
@@ -197,5 +198,17 @@ class RegistrationSubmitLifecycleTest {
         composeRule.onNodeWithTag("reg_submit_button").performClick()
         composeRule.waitForIdle()
         assertEquals(1, api.calls)
+    }
+
+    @Test
+    fun completedTerminalAlsoRejectsImeAndDirectSubmit() {
+        val api = ScriptedRegistrationApi(ArrayDeque(listOf(ok201(), ok201(), ok201())))
+        val viewModel = validViewModel(api)
+        setContent(viewModel)
+        composeRule.onNodeWithTag("reg_submit_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reg_handle_field").performImeAction()
+        composeRule.runOnIdle { viewModel.submit() }
+        assertEquals("all entry points share the terminal guard", 1, api.calls)
     }
 }

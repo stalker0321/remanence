@@ -211,6 +211,7 @@ class CreateViewModel(
     enum class PublicationIssueKind { LIMIT, ACCESS_UNAVAILABLE, UNKNOWN }
     // This is an invocation fence, not new key persistence or a pending outbox.
     private var pendingFinalizeAttempt: Pair<UserId, String>? = null
+    private var finalizingQueueRefused = false
 
     sealed interface CapsuleRevokeStatus {
         data object Idle : CapsuleRevokeStatus
@@ -1393,6 +1394,9 @@ class CreateViewModel(
         // Keep the local failure until explicit retry or actual worker progress.
         if (localQueueFailure && (status == null || status.state == OutboxCapsuleState.PREPARING ||
                 status.state == OutboxCapsuleState.ENCRYPTED)) return
+        // Clearing our own parking marker is not scheduler/worker admission.
+        if (localQueueFailure && finalizingQueueRefused &&
+            status?.state == OutboxCapsuleState.FINALIZING && status.lastErrorCode == null) return
         val mapped = when (status?.state) {
             null -> CreateUploadStatus.NotStarted
             OutboxCapsuleState.PREPARING,
@@ -1413,6 +1417,7 @@ class CreateViewModel(
         }
         if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
         if (localQueueFailure) _publishError.value = null
+        if (localQueueFailure) finalizingQueueRefused = false
         _uploadStatus.value = mapped
         if (_step.value == Step.UPLOAD_PENDING || _step.value == Step.PUBLISHED) {
             if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
@@ -2962,6 +2967,7 @@ class CreateViewModel(
         _uploadRetrying.value = true
         uploadRetryJob = viewModelScope.launch {
             var statusBeforeEnqueue: CreateUploadStatus? = null
+            var retryingFinalization = false
             try {
                 val row = dao.getByCapsuleIdAndOwner(capsule, owner.toRestString()) ?: return@launch
                 if (!outboxObservationStillCurrent(generation, owner, capsule)) return@launch
@@ -2969,13 +2975,16 @@ class CreateViewModel(
                 // published and preparation-only rows cannot be retried here.
                 val parkedLimit = row.state == OutboxCapsuleState.FINALIZING &&
                     row.lastErrorCode in setOf("SEND_LIMIT_REACHED", "FINALIZE_UNCONFIRMED")
-                if (!parkedLimit && row.state != OutboxCapsuleState.ENCRYPTED &&
+                val refusedFinalization = finalizingQueueRefused && row.state == OutboxCapsuleState.FINALIZING &&
+                    row.lastErrorCode == null
+                if (!parkedLimit && !refusedFinalization && row.state != OutboxCapsuleState.ENCRYPTED &&
                     row.state != OutboxCapsuleState.RETRYABLE_FAILURE) return@launch
                 val liveOwner = identityProvider()?.userId
                 if (liveOwner != owner.toRestString() ||
                     !outboxObservationStillCurrent(generation, owner, capsule)) return@launch
                 val expectedStatus = _uploadStatus.value
                 statusBeforeEnqueue = expectedStatus
+                retryingFinalization = parkedLimit || refusedFinalization
                 if (parkedLimit) {
                     if (dao.releaseParkedFinalizeForOwner(capsule, owner.toRestString()) != 1) return@launch
                     if (!outboxObservationStillCurrent(generation, owner, capsule) ||
@@ -2983,6 +2992,7 @@ class CreateViewModel(
                 }
                 enqueueUpload(owner, CapsuleId.parseRest(capsule))
                 if (outboxObservationStillCurrent(generation, owner, capsule)) {
+                    finalizingQueueRefused = false
                     _publishError.value = null
                     // A fast worker may already have emitted a newer state.
                     // Never repaint Published/a fresh failure with our old row.
@@ -2997,7 +3007,9 @@ class CreateViewModel(
                     _step.value == Step.UPLOAD_PENDING && _uploadStatus.value !is CreateUploadStatus.Published) {
                     // Do not overwrite a worker observation delivered during
                     // this attempt; an unchanged prior failure is still retryable.
-                    if (_uploadStatus.value == statusBeforeEnqueue || !_uploadStatus.value.hasOutboxProgress()) {
+                    if (_uploadStatus.value == statusBeforeEnqueue || !_uploadStatus.value.hasOutboxProgress() ||
+                        (retryingFinalization && _uploadStatus.value == CreateUploadStatus.Pending(OutboxCapsuleState.FINALIZING))) {
+                        finalizingQueueRefused = retryingFinalization
                         _uploadStatus.value = CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
                         _publishError.value = "upload could not be queued; retry available"
                     }
@@ -3009,6 +3021,7 @@ class CreateViewModel(
     }
 
     private fun cancelDeliveryAndRetry() {
+        finalizingQueueRefused = false
         frontDeliveryJob?.cancel(); frontDeliveryJob = null
         uploadRetryJob?.cancel(); uploadRetryJob = null
         _uploadRetrying.value = false

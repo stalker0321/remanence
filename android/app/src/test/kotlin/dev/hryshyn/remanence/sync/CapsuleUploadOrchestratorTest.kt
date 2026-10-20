@@ -941,8 +941,13 @@ class CapsuleUploadOrchestratorTest {
         }.run(OWNER_TYPED, CAPSULE_TYPED))
     }
 
-    @Test fun noncanonicalFinalizeRepliesParkUnknownWithoutCleanupOrNewAutomaticAttempts() = runBlocking {
-        for (reason in listOf(CapsuleFinalizeFailure.HTTP, CapsuleFinalizeFailure.INVALID_RESPONSE)) restartable { reopen ->
+    @Test fun noncanonicalFinalizeReplyParksUnknownWithoutCleanupOrAutomaticAttempts() =
+        noncanonicalPark(CapsuleFinalizeFailure.HTTP)
+    @Test fun malformedSuccessParksUnknownWithoutCleanupOrAutomaticAttempts() =
+        noncanonicalPark(CapsuleFinalizeFailure.INVALID_RESPONSE)
+
+    private fun noncanonicalPark(reason: CapsuleFinalizeFailure) = runBlocking {
+        restartable { reopen ->
             seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
             val outcome = orchestrator {
                 finalizeCapsule = { _, _ -> CapsuleFinalizeResult.Failure(reason, 409, false) }

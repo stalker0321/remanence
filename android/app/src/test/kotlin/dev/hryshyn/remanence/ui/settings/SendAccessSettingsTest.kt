@@ -81,6 +81,8 @@ class SendAccessSettingsTest {
         val layouts = mutableListOf<TextLayoutResult>()
         node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         assertEquals(1, layouts.size)
+        println("T387_LAYOUT " + tag + " size=" + layouts.single().size +
+            " widthOverflow=" + layouts.single().didOverflowWidth + " heightOverflow=" + layouts.single().didOverflowHeight)
         assertFalse("$tag overflow", layouts.single().hasVisualOverflow)
         for (line in 0 until layouts.single().lineCount) assertFalse(layouts.single().isLineEllipsized(line))
         val screen = compose.onNodeWithTag("settings_screen").fetchSemanticsNode().boundsInRoot
@@ -160,6 +162,8 @@ class SendAccessSettingsTest {
         compose.onNodeWithTag("send_access_retry").performScrollTo().performClick()
         assertEquals(3, calls)
         compose.onNodeWithTag("settings_back").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("send_access_section").assertDoesNotExist()
         assertEquals(SendAccessUiState(), model.state.value)
         compose.runOnIdle { destination = AppDestination.Settings }
         compose.onNodeWithTag("send_access_self").performScrollTo().assertExists()

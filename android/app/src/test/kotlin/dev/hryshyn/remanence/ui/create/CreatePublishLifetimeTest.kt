@@ -478,6 +478,36 @@ class CreatePublishLifetimeTest {
         assertEquals(2, calls)
     }
 
+    @Test fun lateUnparkProjectionCannotEraseRefusedExplicitFinalizeRetry() = runBlocking {
+        val dao = database.outboxCapsuleDao()
+        val owner = userUuid.toString()
+        val observation = ControlledOutboxObservation(dao)
+        var calls = 0
+        var refuse = true
+        val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ ->
+            calls++
+            if (calls > 1 && refuse) error("controlled explicit-finalize queue refusal")
+        }, observation = observation)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        val capsule = vm.capsuleId
+        dao.beginUploadForOwner(capsule, owner); dao.beginFinalizeForOwner(capsule, owner)
+        dao.markFinalizeRetryableForOwner(capsule, owner, "SEND_LIMIT_REACHED")
+        observation.deliver(capsule, owner, observation.snapshot(capsule, owner))
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        val unparked = requireNotNull(outboxRow(capsule))
+        observation.deliver(capsule, owner, observation.snapshot(capsule, owner))
+        assertEquals(CreateViewModel.CreateUploadStatus.RetryableFailure("QUEUE_FAILED"), vm.uploadStatus.value)
+        assertEquals(2, calls)
+        refuse = false
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        assertEquals(3, calls); assertEquals(unparked, outboxRow(capsule))
+        assertEquals(CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.FINALIZING), vm.uploadStatus.value)
+        assertNull(vm.publishError.value)
+    }
+
     @Test fun unavailableProjectionIsHonestAndDoesNotManuallyRearmRunningRecovery() = runBlocking {
         val dao = database.outboxCapsuleDao()
         val owner = userUuid.toString()

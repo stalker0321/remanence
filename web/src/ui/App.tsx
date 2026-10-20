@@ -794,7 +794,6 @@ export function Create({
     const controller = new AbortController()
     abort.current = controller
     setBusy(true)
-    onNotice('errorRegion')
     try {
       const session = await front.current.open(camera, controller.signal)
       if (controller.signal.aborted) return
@@ -1375,6 +1374,7 @@ function Account({
     const controller = new AbortController()
     abort.current = controller
     setBusy(true)
+    onNotice('errorRegion')
     try {
       const next = await action(controller.signal)
       if (!controller.signal.aborted) onNotice(next ?? 'errorRegion')

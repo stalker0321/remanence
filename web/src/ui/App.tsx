@@ -3,6 +3,8 @@ import { explainFailure, explainGoogle, explainRestore } from '../auth/notice'
 import { browserGoogleIdentity } from '../auth/googleBrowser'
 import { continueWithGoogle, type GoogleIdentityPort } from '../auth/google'
 import { RegistrationDraft } from '../auth/register'
+import { AtomicAccount } from '../auth/AtomicAccount'
+import type { AtomicPort } from '../auth/atomicWire'
 import { enrollHeldIdentity } from '../auth/enroll'
 import { b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
 import { apiOrigin, fetchTransport, type ApiTransport, type ByteTransport } from '../auth/http'
@@ -72,6 +74,7 @@ export function App({
   note,
   photos,
   music,
+  atomicRegistration,
 }: {
   store: SessionStore
   preferences: PreferencePort
@@ -86,6 +89,8 @@ export function App({
   note: NoteDraft
   photos: PhotoDraft
   music: MusicDraft
+  /** Isolated TEST composition only; absent/default keeps registration paused. */
+  atomicRegistration?: AtomicPort
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const held = useSyncExternalStore(memory.subscribe, memory.getSnapshot)
@@ -181,7 +186,8 @@ export function App({
             ? <SendAccessSection key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} /> : null}
         />
       ) : null}
-      {route === 'account' ? (
+      {route === 'account' && atomicRegistration ? <AtomicAccount store={store} keys={keys} transport={transport} setup={atomicRegistration} google={google} passkeys={passkeys} t={t} /> : null}
+      {route === 'account' && !atomicRegistration ? (
         <Account
           store={store}
           keys={keys}

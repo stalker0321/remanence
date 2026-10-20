@@ -8,20 +8,26 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
@@ -82,6 +88,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -423,6 +430,182 @@ class CreateScreenCollageChooserTest {
             vm.collageChoices.candidates.isNotEmpty()
         }
         composeRule.waitForIdle()
+    }
+
+    private fun fixtureVm(): CreateViewModel {
+        val ids = listOf("u1", "u2", "u3")
+        return viewModel(ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }, true).also { driveToContent(it, ids) }
+    }
+
+    private fun authorSecondCandidate(vm: CreateViewModel) {
+        composeRule.onNodeWithTag("collage_next").performClick()
+        assertEquals(1, vm.collageChoices.displayIndex)
+        val original = requireNotNull(vm.collageChoices.displayed)
+        composeRule.onNodeWithTag("crop_hotspot_0").performClick()
+        composeRule.runOnIdle { vm.updateCrop(1.15f, 0.02f, 0.03f) }
+        assertTrue(kotlinx.coroutines.runBlocking { vm.applyCropAndClose() })
+        assertTrue("nonzero crop must change sealed placements",
+            original.expression.placements != vm.collageChoices.displayed!!.expression.placements)
+        composeRule.onNodeWithTag("collage_select").performClick()
+        assertTrue(vm.frozenCollageSelection != null)
+    }
+
+    @Test
+    fun sameSessionRestorationPreservesSavedCropSecondVariantAndReview() {
+        val vm = fixtureVm()
+        val restoration = StateRestorationTester(composeRule)
+        val root = java.util.concurrent.atomic.AtomicReference<android.view.View>()
+        restoration.setContent {
+            root.set(LocalView.current.rootView)
+            dev.hryshyn.remanence.ui.hold.HoldTheme {
+                CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false)
+            }
+        }
+        driveToComposeCandidates(vm)
+        authorSecondCandidate(vm)
+        composeRule.onNodeWithTag("create_compose_continue").performClick()
+        composeRule.onNodeWithTag("create_publish").assertIsEnabled()
+        val saved = vm.collageChoices.candidates
+        val frozen = vm.frozenCollageSelection
+        val corrections = vm.cropCorrections.value
+        capturePhotoState(root.get(), "review-before")
+
+        // Real dispose/recreate/saveable restore, retaining the SAME VM.
+        // Not an ActivityScenario recreation or process-death claim.
+        restoration.emulateSavedInstanceStateRestore()
+        composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing && vm.collageChoices.candidates.isNotEmpty() }
+        composeRule.waitForIdle()
+        assertEquals(1, vm.collageChoices.displayIndex)
+        assertEquals(1, vm.collageChoices.selectedIndex)
+        assertEquals(saved, vm.collageChoices.candidates)
+        assertEquals(corrections, vm.cropCorrections.value)
+        assertEquals(frozen, vm.frozenCollageSelection)
+        composeRule.onNodeWithTag("collage_canvas").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_publish").assertIsEnabled()
+        capturePhotoState(root.get(), "review-restored")
+        vm.endSession()
+        assertTrue("teardown must drop the retained cohort", vm.collageChoices.candidates.isEmpty())
+    }
+
+    @Test
+    fun sameSessionRestorationPreservesOpenDraftAndCancelResetSemantics() {
+        val vm = fixtureVm()
+        val restoration = StateRestorationTester(composeRule)
+        restoration.setContent { CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false) }
+        driveToComposeCandidates(vm)
+        // Remember the solver frame before the saved manual crop.
+        composeRule.onNodeWithTag("collage_next").performClick()
+        val original = requireNotNull(vm.collageChoices.displayed)
+        composeRule.onNodeWithTag("collage_previous").performClick()
+        authorSecondCandidate(vm)
+        val saved = vm.collageChoices.displayed
+        val corrections = vm.cropCorrections.value
+        composeRule.onNodeWithTag("crop_hotspot_0").performClick()
+        composeRule.runOnIdle { vm.updateCrop(1.3f, 0.04f, 0.05f) }
+        val draft = vm.cropCorrections.value
+        val slot = vm.cropSlot.value
+        assertTrue(draft != corrections)
+
+        restoration.emulateSavedInstanceStateRestore()
+        composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing && vm.collageChoices.candidates.isNotEmpty() }
+        composeRule.waitForIdle()
+        assertEquals(slot, vm.cropSlot.value)
+        assertEquals(draft, vm.cropCorrections.value)
+        composeRule.onNodeWithTag("crop_stage").assertIsDisplayed()
+        composeRule.onNodeWithTag("crop_back").performClick()
+        assertEquals(saved, vm.collageChoices.displayed)
+        assertEquals(corrections, vm.cropCorrections.value)
+        composeRule.onNodeWithTag("crop_hotspot_0").performClick()
+        composeRule.runOnIdle { vm.resetCrop() }
+        assertTrue(kotlinx.coroutines.runBlocking { vm.applyCropAndClose() })
+        assertEquals(original.expression.placements, vm.collageChoices.displayed!!.expression.placements)
+        vm.endSession()
+    }
+
+    @Test
+    fun hostTeardownRevokesReadinessWithoutErasingAuthoredChoice() {
+        val vm = fixtureVm()
+        var mounted by mutableStateOf(true)
+        composeRule.setContent {
+            if (mounted) CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false)
+        }
+        driveToComposeCandidates(vm)
+        authorSecondCandidate(vm)
+        val frozen = vm.frozenCollageSelection
+        val saved = vm.collageChoices.candidates
+        val oldInputs = vm.prepareInputs()
+        composeRule.runOnIdle { mounted = false }
+        composeRule.waitForIdle()
+        assertEquals(saved, vm.collageChoices.candidates)
+        assertEquals(frozen, vm.frozenCollageSelection)
+        assertFalse("an unmounted host must not retain drawable permission", vm.selectCollageCandidate(1))
+        assertFalse(vm.freezeCollageSelection())
+        vm.endSession()
+        assertTrue(vm.collageChoices.candidates.isEmpty())
+        // Even a queued readiness result cannot revive a closed session.
+        vm.onCandidatePrepared(frozen!!.candidateId, true, oldInputs)
+        assertFalse(vm.selectCollageCandidate(1))
+        assertNull(vm.frozenCollageSelection)
+    }
+
+    @Test
+    fun changedInputsRecipientOwnerAndLogoutCannotRestoreOldCropOrReview() {
+        val vm = fixtureVm()
+        val restoration = StateRestorationTester(composeRule)
+        restoration.setContent { CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false) }
+        val changes: List<Pair<String, () -> Unit>> = listOf(
+            "note" to { vm.noteEditor.onChange("New content"); Unit },
+            "photos" to { vm.onPhotosPicked(listOf("u3", "u2", "u1")) },
+            "recipient" to {
+                assertTrue(vm.backToContent())
+                assertTrue(vm.backToFront())
+                assertTrue(vm.backToRecipient())
+                val next = selfSnapshot().copy(userId = UserId(UUID.fromString("be111111-2222-4333-8444-555555555555")),
+                    handle = NormalizedHandle.parse("other"))
+                vm.onResolved(next)
+                vm.confirmRecipient()
+                assertEquals(next, vm.confirmedRecipient.value)
+            },
+            "owner" to { vm.beginSession(1L, "be111111-2222-4333-8444-555555555555") },
+            "logout" to { vm.endSession() },
+        )
+        changes.forEachIndexed { index, (name, change) ->
+            if (index > 0) composeRule.runOnIdle { driveToContent(vm, listOf("u1", "u2", "u3")) }
+            driveToComposeCandidates(vm)
+            authorSecondCandidate(vm)
+            composeRule.onNodeWithTag("create_compose_continue").performClick()
+            composeRule.onNodeWithTag("create_publish").assertIsEnabled()
+            composeRule.runOnIdle {
+                change()
+                assertNull("$name must invalidate selected variant", vm.collageChoices.selectedIndex)
+                assertNull("$name must invalidate frozen choice", vm.frozenCollageSelection)
+                assertNull(vm.cropSlot.value)
+                assertTrue("$name must invalidate manual crop", vm.cropCorrections.value.isEmpty())
+                if (name == "logout" || name == "owner") assertTrue(vm.collageChoices.candidates.isEmpty())
+            }
+            restoration.emulateSavedInstanceStateRestore()
+            composeRule.waitForIdle()
+            composeRule.onNodeWithTag("create_publish").assertDoesNotExist()
+            composeRule.onNodeWithTag("crop_stage").assertDoesNotExist()
+            composeRule.runOnIdle { vm.endSession() }
+        }
+    }
+
+    private fun capturePhotoState(view: android.view.View, name: String) {
+        val semantics = composeRule.onRoot().printToString()
+        composeRule.runOnIdle {
+            val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            try {
+                view.draw(android.graphics.Canvas(bitmap))
+                val directory = File("build/t365-review").apply { mkdirs() }
+                File(directory, "$name.png").outputStream().use {
+                    assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+                }
+                File(directory, "$name-semantics.txt").writeText(semantics)
+            } finally { bitmap.recycle() }
+        }
     }
 
     @Test

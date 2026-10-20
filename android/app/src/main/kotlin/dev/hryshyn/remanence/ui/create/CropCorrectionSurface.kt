@@ -262,4 +262,3 @@ fun CropStageContent(
         }
     }
 }
-

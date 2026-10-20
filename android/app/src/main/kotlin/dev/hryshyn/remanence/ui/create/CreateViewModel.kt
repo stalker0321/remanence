@@ -547,7 +547,14 @@ class CreateViewModel(
      * changing the measured band).
      */
     internal fun onCandidatePrepared(candidateId: String, ready: Boolean, inputs: PrepareInputs) {
-        if (inputs != prepareInputs() || collageChoices.candidates.none { it.candidateId == candidateId }) return
+        if (collageChoices.candidates.none { it.candidateId == candidateId }) return
+        if (inputs != prepareInputs()) {
+            // An inconsistent report cannot leave this candidate approved.
+            // Keep authored edits, but require a fresh matching Ready result.
+            drawableInputs.remove(candidateId)
+            if (frozenCollageSelection?.candidateId == candidateId) frozenDrawableInputs = null
+            return
+        }
         if (ready) {
             drawableInputs[candidateId] = inputs
             // Keep the authored choice through host recreation, but permit it

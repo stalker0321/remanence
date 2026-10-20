@@ -344,6 +344,38 @@ class CreateCollageDiagnosticsTest {
     }
 
     @Test
+    fun rapidSamePhotoRevisionIgnoresParkedOriginalCompletion() {
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { originalFor(it) }
+        val gate = CompletableDeferred<Unit>()
+        val reads = mutableListOf<String>()
+        val loader = previewLoader(originals, parkDecodeCall = 6, gate = gate, reads = reads)
+        lateinit var retained: RetainedOriginalHolder
+        val vm = viewModel(loader, CollageCropSourceFactory { retained = it; null })
+        vm.beginSession(1L, senderUserUuid.toString())
+        drivePhotos(vm, ids)
+        vm.photoSelection.toggle(ids.last())
+        vm.photoSelection.toggle(ids.last())
+        assertTrue(vm.generatorPreview.value is GeneratorPreviewState.Loading)
+        val staleSink = requireNotNull(loader.retainOriginal)
+        // A second same-ID edit overtakes the parked original decode.
+        vm.photoSelection.toggle(ids.last())
+        vm.photoSelection.toggle(ids.last())
+        val ready = vm.generatorPreview.value as GeneratorPreviewState.Ready
+        gate.complete(Unit)
+        val obsolete = originalFor("obsolete")
+        staleSink(obsolete, sha256Hex(obsolete))
+        assertEquals(9, reads.size)
+        assertEquals(ready.expression.input.photos.map { it.contentId }.toSet(),
+            retained.retainedSizesForTests().keys)
+        originals.values.forEach { bytes ->
+            val id = dev.hryshyn.remanence.core.model.CapsulePhotoIdentity.contentIdFor(sha256Hex(bytes))
+            assertTrue(retained.bytesFor(id)!!.contentEquals(bytes))
+        }
+        vm.endSession()
+    }
+
+    @Test
     fun staleCompletionCannotRetain() {
         val ids1 = listOf("u1", "u2", "u3")
         val ids2 = listOf("d1", "d2", "d3")

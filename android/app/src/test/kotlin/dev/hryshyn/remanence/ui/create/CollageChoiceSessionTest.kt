@@ -122,6 +122,33 @@ class CollageChoiceSessionTest {
     }
 
     @Test
+    fun retiredHostCannotInvalidateItsReplacementAndClearRetiresPreparation() {
+        val session = CollageChoiceSession()
+        var invalidations = 0
+        session.onReadinessInvalidated = { invalidations++ }
+        val first = Any()
+        val second = Any()
+        session.attachHost(first)
+        val retiredPreparation = session.beginPreparing()
+        session.replaceCandidates(built())
+        session.select(1)
+        session.attachHost(second)
+        assertFalse(session.isCurrentPreparation(retiredPreparation))
+        val beforeOldDispose = invalidations
+        session.detachHost(first)
+        assertEquals(beforeOldDispose, invalidations)
+        assertTrue(session.isCurrentHost(second))
+        assertEquals(1, session.selectedIndex)
+        val livePreparation = session.beginPreparing(retainCandidates = true)
+        session.clear()
+        assertFalse(session.isCurrentPreparation(livePreparation))
+        assertTrue(session.candidates.isEmpty())
+        assertNull(session.selectedIndex)
+        session.detachHost(second)
+        assertFalse(session.isCurrentHost(second))
+    }
+
+    @Test
     fun freshBuildNeverAutoSelects() {
         val session = CollageChoiceSession()
         session.replaceCandidates(built())

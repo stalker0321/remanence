@@ -303,11 +303,14 @@ class CollageChoiceHostTest {
         accepted = false
         val retained = session.candidates.toList()
 
-        // Phase 2: remount with the session retained; gated builder held.
+        // Phase 2: explicitly request a fresh build, then remount with its
+        // gated builder held. A same-input remount alone now revalidates the
+        // authored cohort; this test still exercises VALUE-EQUAL replacement.
         composeRule.runOnIdle {
             useGated = true
             gatedResult = retained
             showHost = false
+            session.clear()
         }
         composeRule.waitForIdle()
         composeRule.runOnIdle { showHost = true }

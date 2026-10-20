@@ -468,6 +468,7 @@ class CreateScreenCollageChooserTest {
         composeRule.onNodeWithTag("create_compose_continue").performClick()
         composeRule.onNodeWithTag("create_publish").assertIsEnabled()
         val saved = vm.collageChoices.candidates
+        val buildGeneration = vm.collageChoices.buildGeneration
         val frozen = vm.frozenCollageSelection
         val corrections = vm.cropCorrections.value
         capturePhotoState(root.get(), "review-before")
@@ -480,6 +481,8 @@ class CreateScreenCollageChooserTest {
         assertEquals(1, vm.collageChoices.displayIndex)
         assertEquals(1, vm.collageChoices.selectedIndex)
         assertEquals(saved, vm.collageChoices.candidates)
+        assertSame("revalidation must not replace the authored cohort", saved, vm.collageChoices.candidates)
+        assertEquals(buildGeneration, vm.collageChoices.buildGeneration)
         assertEquals(corrections, vm.cropCorrections.value)
         assertEquals(frozen, vm.frozenCollageSelection)
         composeRule.onNodeWithTag("collage_canvas").assertIsDisplayed()
@@ -548,6 +551,39 @@ class CreateScreenCollageChooserTest {
         vm.onCandidatePrepared(frozen!!.candidateId, true, oldInputs)
         assertFalse(vm.selectCollageCandidate(1))
         assertNull(vm.frozenCollageSelection)
+    }
+
+    @Test
+    fun retainedChoiceMustPassFreshDecodeAndRendererPrepareAfterRemount() {
+        val vm = fixtureVm()
+        var mounted by mutableStateOf(true)
+        composeRule.setContent {
+            if (mounted) CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false)
+        }
+        driveToComposeCandidates(vm)
+        authorSecondCandidate(vm)
+        composeRule.runOnIdle { mounted = false }
+        composeRule.waitForIdle()
+        assertTrue(vm.frozenCollageSelection != null)
+        assertFalse(vm.isFrozenCollageDrawable)
+        // Destroy only synthetic preview data while the host is absent.
+        // A cached "Ready" bit would wrongly preserve publishing on remount;
+        // a real decode/prepare must reject every sheet needing this photo.
+        composeRule.runOnIdle {
+            (vm.generatorPreview.value as GeneratorPreviewState.Ready).sources.first().jpegBytes.fill(0)
+            mounted = true
+        }
+        composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing && vm.collageChoices.notice != null }
+        composeRule.waitForIdle()
+        assertTrue(vm.collageChoices.candidates.isEmpty())
+        assertNull(vm.frozenCollageSelection)
+        assertTrue(vm.cropCorrections.value.isEmpty())
+        assertFalse(vm.isFrozenCollageDrawable)
+        assertFalse(vm.selectCollageCandidate(0))
+        composeRule.onNodeWithTag("collage_notice").assertIsDisplayed()
+        composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_select").assertIsNotEnabled()
+        vm.endSession()
     }
 
     @Test

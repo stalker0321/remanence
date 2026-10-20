@@ -45,13 +45,13 @@ internal fun CapsulePhotoDialog(
     val configuration = LocalConfiguration.current
     val width = configuration.screenWidthDp.dp * .9f
     val maxHeight = configuration.screenHeightDp.dp * .7f
-    val current = images.getValue(photoIds[pager.currentPage])
-    val (_, height) = capsuleSheetSize(width, maxHeight, current.width.toFloat() / current.height)
     Dialog(onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn)) {
         Column(Modifier.width(width).testTag("capsule_photo_dialog"),
             horizontalAlignment = Alignment.CenterHorizontally) {
-            HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth().height(height)
+            // One stable viewing stage: Fit contains each original while the
+            // page counter and close target stay still across aspect ratios.
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth().height(maxHeight)
                 .testTag("capsule_photo_pager"), key = { photoIds[it] }) { index ->
                 Image(images.getValue(photoIds[index]),
                     contentDescription = stringResource(R.string.create_photo_selection_label, index + 1, photoIds.size),

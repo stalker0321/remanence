@@ -267,7 +267,10 @@ class CreatePublishLifetimeTest {
         vm.frontAttempt.onPermissionResult(true, false)
         vm.frontAttempt.onPreviewBound()
         assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
+        // Each independent VM scenario sends a different postcard. Constant
+        // FRONT bytes legitimately trip the real exact-duplicate reservation
+        // on a second publication in the same test database.
+        vm.deliverFrontJpeg("front-${vm.capsuleId}".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         // ADR-018: publish with no note (non-empty notes are typed unsupported).

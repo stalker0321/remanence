@@ -7,6 +7,7 @@ import type { GoogleIdentityPort } from '../src/auth/google'
 import type { PasskeyAssertion, PasskeyPort } from '../src/auth/passkey'
 import type { RecoveryReply } from '../src/crypto/keyOwner'
 import { AuthError } from '../src/auth/errors'
+import { uuidToBytes } from '../src/protocol/uuid'
 
 export const ACCOUNT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 export const RESERVATION = 'bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee'
@@ -68,7 +69,8 @@ export class AtomicFixture {
     } else if (action === 'status') result.body = { reservation: this.reservation }
     else if (action === 'leave') result.body = { left: true }
     else if (body.epoch !== this.reservation.epoch) result = { status: 409, body: { reason: 'STALE_SETUP' } }
-    else if (action === 'credential/options' || action === 'setup/options') result.body = { flow: FLOW, options: {}, expires_at: deadline }
+    else if (action === 'credential/options' || action === 'setup/options') result.body = { flow: FLOW, options: action === 'credential/options'
+      ? { user: { id: b64(uuidToBytes(this.reservation.account_id)) } } : { allowCredentials: [{ id: CREDENTIAL, type: 'public-key' }] }, expires_at: deadline }
     else if (action === 'credential/verify') {
       this.reservation.credential_ids = [CREDENTIAL]
       result.body = { credential_id: CREDENTIAL, registered: true, recoverable: false }

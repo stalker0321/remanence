@@ -1,4 +1,6 @@
 import { generateLocalIdentity, type PublicKeyBundle } from '../crypto/identity'
+import { b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
+import { uuidToBytes } from '../protocol/uuid'
 import { unlockAccount, type RecoveryReply } from '../crypto/keyOwner'
 import { prepareRecoveryRecord } from '../crypto/recoveryRecord'
 import type { PublicSession, SessionStore, SignInInput } from '../session/session'
@@ -6,7 +8,7 @@ import type { GoogleIdentityPort } from './google'
 import { normalizeHandle } from './handle'
 import type { ApiTransport } from './http'
 import type { MemoryKeys } from './memoryKeys'
-import type { PasskeyAssertion, PasskeyPort } from './passkey'
+import type { PasskeyAssertion, PasskeyPort, PublicAssertion } from './passkey'
 import { AtomicError, binary, login, object, outcome, recoveryReply, reservation, setupReply, string, success, uuid,
   type AtomicPort, type FinalIntent, type Reservation, type SetupAction, type SetupReply } from './atomicWire'
 
@@ -169,17 +171,20 @@ export class AtomicRegistration {
     if (!owner.credential) {
       const begin = await this.#post(owner, 'credential/options', { epoch })
       const flow = uuid(begin.flow)
+      if (object(object(begin.options).user).id !== b64(uuidToBytes(owner.setup!.reservation.account_id))) throw new AtomicError('WRONG_ACCOUNT')
       const created = await this.ports.passkeys.create(begin.options, owner.controller.signal)
       try {
         this.#check(owner)
-        this.#publicAssertion(created)
-        const verified = await this.#post(owner, 'credential/verify', { epoch, flow, response: created.publicResponse })
+        const response = this.#publicAssertion(created)
+        const verified = await this.#post(owner, 'credential/verify', { epoch, flow, response })
         if (verified.registered !== true || verified.recoverable !== false || binary(verified.credential_id, 2048) !== created.id) throw new AtomicError('SETUP_REJECTED')
         owner.credential = created.id
       } finally { created.prf?.fill(0) }
     }
     const begin = await this.#post(owner, 'setup/options', { epoch, credential_id: owner.credential })
     const flow = uuid(begin.flow)
+    const allowed = object(begin.options).allowCredentials
+    if (!Array.isArray(allowed) || allowed.length !== 1 || object(allowed[0]).id !== owner.credential) throw new AtomicError('WRONG_CREDENTIAL')
     const assertion = await this.ports.passkeys.get(begin.options, owner.controller.signal)
     const secret = assertion.prf
     if (secret) owner.buffers.add(secret)
@@ -187,9 +192,9 @@ export class AtomicRegistration {
     try {
       this.#check(owner)
       if (!secret || secret.length !== 32) throw new AtomicError('PRF_UNAVAILABLE')
-      this.#publicAssertion(assertion)
+      const response = this.#publicAssertion(assertion)
       if (assertion.id !== owner.credential) throw new AtomicError('WRONG_CREDENTIAL')
-      const verified = await this.#post(owner, 'setup/verify', { epoch, flow, response: assertion.publicResponse })
+      const verified = await this.#post(owner, 'setup/verify', { epoch, flow, response })
       if (verified.authentication_verified !== true || verified.credential_id !== owner.credential || typeof verified.final_authorization !== 'string' || !/^rgf_[A-Za-z0-9_-]{43}$/.test(verified.final_authorization)) throw new AtomicError('SETUP_REJECTED')
       owner.grant = verified.final_authorization
       if (owner.candidate) {
@@ -278,6 +283,9 @@ export class AtomicRegistration {
     const reply = recoveryReply(success(read))
     if (reply.record.account_id !== signed.accountId || reply.record.bundle_id !== signed.bundleId || reply.record.credential_id !== owner.credential
       || reply.encryption_public_keyset !== candidate.bundle.encryption_public_keyset || reply.signing_public_keyset !== candidate.bundle.signing_public_keyset) throw new AtomicError('WRONG_ACCOUNT')
+    for (const field of Object.keys(candidate.record) as (keyof RecoveryReply['record'])[]) {
+      if (reply.record[field] !== candidate.record[field]) throw new AtomicError('SETUP_REJECTED')
+    }
     const caps = await unlockAccount(reply, candidate.prf)
     try {
       this.#check(owner)
@@ -299,9 +307,20 @@ export class AtomicRegistration {
     this.#check(owner)
     return success(result, statuses)
   }
-  #publicAssertion(assertion: PasskeyAssertion): void {
+  #publicAssertion(assertion: PasskeyAssertion): PublicAssertion {
     binary(assertion.id, 2048)
     if (assertion.publicResponse.id !== assertion.id || assertion.publicResponse.rawId !== assertion.id || assertion.publicResponse.type !== 'public-key' || Object.keys(object(assertion.publicResponse.clientExtensionResults)).length !== 0) throw new AtomicError('WRONG_CREDENTIAL')
+    // Copy the public DTO, never serialize provider objects or arbitrary fields.
+    const source = object(assertion.publicResponse.response)
+    const response: Record<string, unknown> = { clientDataJSON: binary(source.clientDataJSON, 32768) }
+    for (const field of ['attestationObject', 'authenticatorData', 'signature', 'userHandle']) {
+      if (source[field] !== undefined) response[field] = field === 'userHandle' && source[field] === null ? null : binary(source[field], 131072)
+    }
+    if (source.transports !== undefined) {
+      if (!Array.isArray(source.transports) || source.transports.length > 8) throw new AtomicError('SETUP_REJECTED')
+      response.transports = source.transports.map((value) => string(value, 32))
+    }
+    return { id: assertion.id, rawId: assertion.id, type: 'public-key', response, clientExtensionResults: {} }
   }
   #signIn(owner: Owner, signed: SignInInput): void {
     this.#check(owner)
@@ -322,7 +341,9 @@ export class AtomicRegistration {
   }
   #requireReserved(owner: Owner): void {
     this.#check(owner)
-    if (!owner.setup || owner.setup.reservation.state !== 'RESERVED') throw new AtomicError('ALREADY_ACTIVE')
+    if (!owner.setup) throw new AtomicError('SETUP_REJECTED')
+    if (owner.setup.reservation.state === 'ACTIVE') throw new AtomicError('ALREADY_ACTIVE')
+    if (owner.setup.reservation.state !== 'RESERVED') throw new AtomicError('RESERVATION_TERMINAL')
   }
   #state(owner: Owner): void {
     const state = owner.setup!.reservation.state

@@ -309,4 +309,74 @@ class RecipientPickerViewModelTest {
         assertTrue(state is RecipientLookupUiState.Resolved)
         assertEquals(listOf("mykola"), fake.handles)
     }
+
+    @Test
+    fun recoveryIsBusyAndRapidLookupDoesNotRestartIt() = runTest {
+        val gate = CompletableDeferred<RecipientPickerViewModel.SessionRecovery>()
+        var calls = 0
+        val vm = RecipientPickerViewModel(
+            { DirectoryLookupResult.NotFound }, { null },
+            CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionRefresh = { calls++; gate.await() },
+        )
+        vm.onHandleChange("mykola")
+        vm.lookup()
+        val busy = vm.state.value
+        val allowed = vm.canLookup
+        vm.lookup()
+        gate.complete(RecipientPickerViewModel.SessionRecovery.NETWORK_FAILED)
+        assertEquals(RecipientLookupUiState.LookingUp, busy)
+        assertFalse(allowed)
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun invalidHandleDoesNotAttemptSessionRecovery() = runTest {
+        var calls = 0
+        val vm = RecipientPickerViewModel(
+            { DirectoryLookupResult.NotFound }, { null },
+            CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionRefresh = { calls++; RecipientPickerViewModel.SessionRecovery.NO_SESSION },
+        )
+        vm.onHandleChange("ab")
+        vm.lookup()
+        assertEquals(0, calls)
+        assertEquals(RecipientLookupUiState.Idle, vm.state.value)
+    }
+
+    @Test
+    fun lateRecoveryFailureDoesNotReplaceEditedHandleState() = runTest {
+        val gate = CompletableDeferred<RecipientPickerViewModel.SessionRecovery>()
+        val vm = RecipientPickerViewModel(
+            { DirectoryLookupResult.NotFound }, { null },
+            CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionRefresh = { withContext(NonCancellable) { gate.await() } },
+        )
+        vm.onHandleChange("mykola")
+        vm.lookup()
+        vm.onHandleChange("another")
+        gate.complete(RecipientPickerViewModel.SessionRecovery.NETWORK_FAILED)
+        assertEquals("another", vm.handle.value)
+        assertEquals(RecipientLookupUiState.Idle, vm.state.value)
+    }
+
+    @Test
+    fun recoveryAcrossRetiredSessionCannotStartDirectoryLookup() = runTest {
+        val gate = CompletableDeferred<RecipientPickerViewModel.SessionRecovery>()
+        var token: String? = null
+        var epoch = 0L
+        val fake = FakeDirectory(DirectoryLookupResult.Found(snapshot))
+        val vm = RecipientPickerViewModel(
+            fake, { token }, CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionBoundaryEpoch = { epoch },
+            sessionRefresh = { gate.await() },
+        )
+        vm.onHandleChange("mykola")
+        vm.lookup()
+        epoch++
+        token = "pm_at_new_session"
+        gate.complete(RecipientPickerViewModel.SessionRecovery.RECOVERED)
+        assertTrue(fake.handles.isEmpty())
+        assertFalse(vm.state.value is RecipientLookupUiState.Resolved)
+    }
 }

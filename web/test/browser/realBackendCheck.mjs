@@ -63,6 +63,15 @@ await page.addInitScript((session) => { window.t384Session = session }, initial.
 delete initial.session
 const accessPath = '/v1/me/send-access', historyPath = '/v1/capsules/outgoing', recentPath = '/v1/recipients/recent'
 const isPath = (path) => (reply) => new URL(reply.url()).pathname === path
+function realBody(reply) {
+  // Chromium may discard Network.getResponseBody across a fragment navigation.
+  // These are the same upstream bytes already forwarded unchanged, not fixtures.
+  const url = new URL(reply.url())
+  const recorded = responses.findLast((r) => r.path === url.pathname + url.search
+    && r.method === reply.request().method() && r.status === reply.status())
+  assert.ok(recorded, 'browser response must have a matching real upstream reply')
+  return recorded.body
+}
 async function capture(name) {
   check(`${name}: no horizontal overflow`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
   // Evidence contains rendered synthetic UI, not a private DOM/locator dump.
@@ -84,7 +93,7 @@ async function access({ phase, self, other, display = 'counts', mode = 'enforce'
     await page.waitForFunction(() => document.querySelector('[data-testid=send-access]') === null)
     check('OFF hides whole access block', await page.locator('[data-testid=access-self], [data-testid=access-lifetime], [data-testid=access-record]').count() === 0)
   } else {
-    const data = await response.json()
+    const data = realBody(response)
     assert.deepEqual(data, { policy_version: 1, mode, lifetime,
       free: { self: { limit: 2, used: 2 - self, remaining: self }, other: { limit: 2, used: 2 - other, remaining: other } },
       can_publish: { self: mode === 'record' || lifetime || self > 0, other: mode === 'record' || lifetime || other > 0 } })
@@ -105,7 +114,7 @@ async function history() {
   const reply = await incoming
   check('history real response200/private', reply.status() === 200 && reply.headers()['cache-control'] === 'private, no-store')
   await page.locator('[data-history-key]').nth(2).waitFor()
-  return (await reply.json()).items
+  return realBody(reply).items
 }
 async function cancel(key, endpoint, expected) {
   const row = page.locator(`[data-history-key="${key}"]`)
@@ -116,7 +125,7 @@ async function cancel(key, endpoint, expected) {
   const mutation = page.waitForResponse(isPath(endpoint)), refreshed = page.waitForResponse(isPath(historyPath))
   await (await button('historyConfirmCancel', row)).click()
   check(`${expected}: real mutation200`, (await mutation).status() === 200)
-  const body = await (await refreshed).json()
+  const body = realBody(await refreshed)
   const item = body.items.find((item) => `${item.protocol_version}:${item.capsule_id}` === key)
   check(`${expected}: authoritative refetch status`, item.status === expected && item.cancel_action === null && item.locator.code === null)
   check(`${expected}: exactly one POST`, responses.filter((r) => r.method === 'POST').length === before + 1)
@@ -153,7 +162,7 @@ try {
   await page.locator('[data-testid=recent-recipients]').waitFor()
   const recentResponse = page.waitForResponse(isPath(recentPath))
   await (await button('recentTitle')).click()
-  const recent = await (await recentResponse).json()
+  const recent = realBody(await recentResponse)
   check('recents derive only known non-self v1, revoked retained', recent.items.length === 1 && recent.items[0].handle === 't384_recipient')
   await page.locator('[data-testid=recent-recipients] li').waitFor()
   check('actual App renders real recent suggestion', await page.locator('[data-testid=recent-recipients] li').innerText() === '@t384_recipient')

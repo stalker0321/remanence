@@ -11,4 +11,9 @@
     <string name="send_access_self">To yourself: %1$d of 2 free sends remaining</string>
     <string name="send_access_other">To others: %1$d of 2 free sends remaining</string>
     <string name="send_access_advisory">Access is checked when sending. These details do not reserve a send.</string>
+    <string name="send_publication_limit">The server declined this send because its sending allowance is exhausted.</string>
+    <string name="send_publication_unavailable">Sending access could not be checked. Publication is not confirmed.</string>
+    <string name="send_publication_unknown">Publication is not confirmed. Check sending history before starting another send.</string>
+    <string name="send_publication_saved">The same encrypted request is retained. A retry still needs server approval; it does not create a new send.</string>
+    <string name="send_publication_pending_recovery">This send cannot be safely retried from this screen. Check sending history; a missing entry does not confirm failure.</string>
 </resources>

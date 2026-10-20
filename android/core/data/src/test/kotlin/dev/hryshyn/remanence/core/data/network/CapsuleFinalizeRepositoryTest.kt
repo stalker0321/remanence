@@ -34,6 +34,29 @@ class CapsuleFinalizeRepositoryTest {
         }
     }
 
+    @Test fun malformedQuotaEnvelopesAndWrongStatusRemainGenericAndNeverLeakDetail() = runTest {
+        withServer { server ->
+            val valid = problemJson("SEND_LIMIT_REACHED", 409, false)
+            val invalid = listOf(valid.replace("\"status\":409", "\"status\":503"),
+                valid.replace("\"retryable\":false", "\"retryable\":true"),
+                valid.replace("\"retryable\":false", "\"retryable\":\"false\""),
+                valid.replace("\"status\":409", "\"status\":\"409\""),
+                valid.replace("\"code\":", "\"extra\":0,\"code\":"),
+                valid.replace("0198f0a0-0000-7000-8000-00000000ac01", "not-a-uuid"),
+                valid.replace("\"detail\":\"$SECRET_DETAIL\",", ""),
+                """{"type":"about:blank","title":"SEND_LIMIT_REACHED","status":409,"code":"SEND_LIMIT_REACHED"}""")
+            for (body in invalid) {
+                server.enqueue(MockResponse.Builder().code(409).setHeader("Content-Type", "application/problem+json").body(body).build())
+                val failure = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "synthetic"))
+                assertEquals(CapsuleFinalizeFailure.HTTP, failure.reason)
+                assertFalse(failure.toString().contains(SECRET_DETAIL))
+            }
+            server.enqueue(MockResponse.Builder().code(503).setHeader("Content-Type", "application/problem+json").body(valid).build())
+            assertEquals(CapsuleFinalizeFailure.HTTP,
+                assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "synthetic")).reason)
+        }
+    }
+
     private val capsuleId = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000ca01")
     private val senderKeyBundleId = KeyBundleId.parseRest("0198f0a0-0000-7000-8000-00000000ba01")
     private val recipientKeyBundleId = KeyBundleId.parseRest("0198f0a0-0000-7000-8000-00000000ba02")

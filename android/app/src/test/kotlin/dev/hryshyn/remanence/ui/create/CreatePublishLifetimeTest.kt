@@ -445,6 +445,65 @@ class CreatePublishLifetimeTest {
         }
     }
 
+    @Test fun confirmedQuotaCanBeExplicitlyRetriedWithoutNewCapsuleOrMaterial() = runBlocking {
+        val dao = database.outboxCapsuleDao()
+        val owner = userUuid.toString()
+        val observation = ControlledOutboxObservation(dao)
+        var calls = 0
+        val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ -> calls++ },
+            observation = observation)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        val capsule = vm.capsuleId
+        assertEquals(1, dao.beginUploadForOwner(capsule, owner))
+        assertEquals(1, dao.beginFinalizeForOwner(capsule, owner))
+        assertEquals(1, dao.markFinalizeRetryableForOwner(capsule, owner, "SEND_LIMIT_REACHED"))
+        observation.deliver(capsule, owner, observation.snapshot(capsule, owner))
+        assertEquals(CreateViewModel.CreateUploadStatus.PublicationIssue(CreateViewModel.PublicationIssueKind.LIMIT, true),
+            vm.uploadStatus.value)
+        val before = requireNotNull(outboxRow(capsule))
+        val paths = listOfNotNull(before.publishStatementPath, before.publishStatementSignaturePath,
+            before.envelopePath, before.senderRetryKeysetPath)
+        val bytes = paths.associateWith { File(it).readBytes().toList() }
+        assertTrue(dao.getCapsuleIdsNeedingUploadForOwner(owner).isEmpty())
+        assertEquals(1, calls)
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        assertEquals(2, calls); assertEquals(capsule, vm.capsuleId)
+        assertEquals(before.copy(lastErrorCode = null), outboxRow(capsule))
+        paths.forEach { assertEquals(bytes[it], File(it).readBytes().toList()) }
+        assertEquals(CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.FINALIZING), vm.uploadStatus.value)
+        vm.retryUpload() // now in flight; user cannot add another attempt
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        assertEquals(2, calls)
+    }
+
+    @Test fun unavailableProjectionIsHonestAndDoesNotManuallyRearmRunningRecovery() = runBlocking {
+        val dao = database.outboxCapsuleDao()
+        val owner = userUuid.toString()
+        val observation = ControlledOutboxObservation(dao)
+        var calls = 0
+        val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ -> calls++ },
+            observation = observation)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        val capsule = vm.capsuleId
+        dao.beginUploadForOwner(capsule, owner); dao.beginFinalizeForOwner(capsule, owner)
+        dao.markFinalizeRetryableForOwner(capsule, owner, "SEND_ACCESS_UNAVAILABLE")
+        observation.deliver(capsule, owner, observation.snapshot(capsule, owner))
+        assertEquals(CreateViewModel.CreateUploadStatus.PublicationIssue(CreateViewModel.PublicationIssueKind.ACCESS_UNAVAILABLE, true),
+            vm.uploadStatus.value)
+        assertNull(vm.publishError.value)
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        assertEquals(1, calls)
+        assertEquals(listOf(capsule), dao.getCapsuleIdsNeedingUploadForOwner(owner))
+        val before = requireNotNull(outboxRow(capsule))
+        vm.beginSession(2L, "9d111111-2222-4333-8444-555555555555")
+        vm.retryUpload()
+        assertEquals(1, calls); assertEquals(before, outboxRow(capsule))
+    }
+
     @Test fun explicitRetryCanClearQueueFailureWithoutResealingOrChangingIdentity() = runBlocking {
         val owner = userUuid.toString()
         val observation = ControlledOutboxObservation(database.outboxCapsuleDao())

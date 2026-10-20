@@ -122,6 +122,9 @@ class PendingPublishFlow(
     }
 
     enum class Reason {
+        SEND_LIMIT_REACHED,
+        SEND_ACCESS_UNAVAILABLE,
+        FINALIZE_UNKNOWN,
         NETWORK,
         SESSION_CHANGED,
         CONFLICT,
@@ -215,14 +218,19 @@ class PendingPublishFlow(
         draftIdempotencyKey: String,
         finalizeIdempotencyKey: String,
         txnLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease? = null,
+        onFinalizeStarted: () -> Unit = {},
     ): State {
         _state.value = State.Drafting
+        var finalizing = false
         return try {
-            publishFlow(frozen, capsuleId, draftIdempotencyKey, finalizeIdempotencyKey, txnLease)
+            publishFlow(frozen, capsuleId, draftIdempotencyKey, finalizeIdempotencyKey, txnLease) {
+                finalizing = true
+                onFinalizeStarted()
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            State.Failed(Reason.GENERIC).also { _state.value = it }
+            State.Failed(if (finalizing) Reason.FINALIZE_UNKNOWN else Reason.GENERIC).also { _state.value = it }
         }.also { _state.value = it }
     }
 
@@ -246,6 +254,7 @@ class PendingPublishFlow(
         draftKey: String,
         finalizeKey: String,
         txnLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease?,
+        onFinalizeStarted: () -> Unit,
     ): State {
         val txn = beginTxn(txnLease) ?: return State.Failed(Reason.SESSION_CHANGED)
         if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
@@ -318,6 +327,7 @@ class PendingPublishFlow(
         _state.value = State.Finalizing
         if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
         val finalToken = txnBearer(txn) ?: return State.Failed(Reason.SESSION_CHANGED)
+        onFinalizeStarted()
         val finalized = try {
             finalizePort.finalize(
                 deliveryId, material.statementB64, material.statementSignature69B64,
@@ -326,13 +336,18 @@ class PendingPublishFlow(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            return State.Failed(Reason.NETWORK)
+            return State.Failed(Reason.FINALIZE_UNKNOWN)
         }
         if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
         return when (finalized) {
             is PendingFinalizeResult.Finalized ->
                 State.Published(finalized.deliveryId, finalized.locatorCode, finalized.hint)
-            is PendingFinalizeResult.Failure -> State.Failed(mapFailure(finalized.reason))
+            is PendingFinalizeResult.Failure -> State.Failed(when (finalized.reason) {
+                PendingPublishFailure.SEND_LIMIT_REACHED -> Reason.SEND_LIMIT_REACHED
+                PendingPublishFailure.SEND_ACCESS_UNAVAILABLE -> Reason.SEND_ACCESS_UNAVAILABLE
+                PendingPublishFailure.IDEMPOTENCY_CONFLICT -> Reason.CONFLICT
+                else -> Reason.FINALIZE_UNKNOWN
+            })
         }
     }
 

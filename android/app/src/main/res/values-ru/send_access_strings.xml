@@ -11,4 +11,9 @@
     <string name="send_access_self">Себе: осталось %1$d из 2 бесплатных отправлений</string>
     <string name="send_access_other">Другим: осталось %1$d из 2 бесплатных отправлений</string>
     <string name="send_access_advisory">Доступ проверяется при отправке. Эти сведения не резервируют отправление.</string>
+    <string name="send_publication_limit">Сервер отклонил эту отправку: доступные отправления исчерпаны.</string>
+    <string name="send_publication_unavailable">Не удалось проверить доступ к отправке. Публикация не подтверждена.</string>
+    <string name="send_publication_unknown">Публикация не подтверждена. Проверь историю отправлений, прежде чем начинать новую отправку.</string>
+    <string name="send_publication_saved">Сохранён тот же зашифрованный запрос. Повтор всё ещё требует одобрения сервера и не создаёт новое отправление.</string>
+    <string name="send_publication_pending_recovery">С этого экрана нельзя безопасно повторить эту отправку. Проверь историю; отсутствие записи не подтверждает неудачу.</string>
 </resources>

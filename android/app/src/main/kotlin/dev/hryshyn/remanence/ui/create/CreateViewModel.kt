@@ -206,7 +206,11 @@ class CreateViewModel(
         data class RetryableFailure(val errorCode: String?) : CreateUploadStatus
         data class TerminalFailure(val errorCode: String?) : CreateUploadStatus
         data object Published : CreateUploadStatus
+        data class PublicationIssue(val kind: PublicationIssueKind, val durable: Boolean) : CreateUploadStatus
     }
+    enum class PublicationIssueKind { LIMIT, ACCESS_UNAVAILABLE, UNKNOWN }
+    // This is an invocation fence, not new key persistence or a pending outbox.
+    private var pendingFinalizeAttempt: Pair<UserId, String>? = null
 
     sealed interface CapsuleRevokeStatus {
         data object Idle : CapsuleRevokeStatus
@@ -1391,8 +1395,12 @@ class CreateViewModel(
             OutboxCapsuleState.PREPARING,
             OutboxCapsuleState.ENCRYPTED,
             OutboxCapsuleState.UPLOADING,
-            OutboxCapsuleState.FINALIZING,
             -> CreateUploadStatus.Pending(status.state)
+            OutboxCapsuleState.FINALIZING -> when (status.lastErrorCode) {
+                "SEND_LIMIT_REACHED" -> CreateUploadStatus.PublicationIssue(PublicationIssueKind.LIMIT, true)
+                "SEND_ACCESS_UNAVAILABLE" -> CreateUploadStatus.PublicationIssue(PublicationIssueKind.ACCESS_UNAVAILABLE, true)
+                else -> CreateUploadStatus.Pending(status.state)
+            }
             OutboxCapsuleState.RETRYABLE_FAILURE ->
                 CreateUploadStatus.RetryableFailure(status.lastErrorCode)
             OutboxCapsuleState.TERMINAL_FAILURE ->
@@ -1416,7 +1424,8 @@ class CreateViewModel(
         CreateUploadStatus.NotStarted -> false
         is CreateUploadStatus.Pending -> state != OutboxCapsuleState.PREPARING && state != OutboxCapsuleState.ENCRYPTED
         is CreateUploadStatus.RetryableFailure -> errorCode != "QUEUE_FAILED"
-        is CreateUploadStatus.TerminalFailure, CreateUploadStatus.Published -> true
+        is CreateUploadStatus.TerminalFailure, CreateUploadStatus.Published,
+        is CreateUploadStatus.PublicationIssue -> true
     }
 
     private fun outboxObservationStillCurrent(
@@ -1876,6 +1885,14 @@ class CreateViewModel(
     }
 
     fun startPublishing() {
+        if (pendingFinalizeAttempt == (sessionOwner to _capsuleId)) {
+            if (_step.value != Step.PUBLISHED) {
+                if (_uploadStatus.value !is CreateUploadStatus.PublicationIssue)
+                    showPendingPublicationIssue(PublicationIssueKind.UNKNOWN)
+                else _step.value = Step.UPLOAD_PENDING
+            }
+            return
+        }
         if (!requireStep(Step.COMPOSE, "publishing")) return
         if (frontFingerprintId == null) {
             failGuard("front must be captured before publishing")
@@ -2855,6 +2872,13 @@ class CreateViewModel(
                 // instead of re-pinning a fresh lease, so a same-owner
                 // replacement across the staging awaits fails closed.
                 expectedLease = inputs.pendingLease,
+                onFinalizeStarted = {
+                    // Called BEFORE the final POST, including its cancellation/lost reply.
+                    if (isPublishCurrent(generation) && sessionOwner == inputs.owner &&
+                        _capsuleId == inputs.capsuleId) {
+                        pendingFinalizeAttempt = inputs.owner to inputs.capsuleId
+                    }
+                },
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -2871,9 +2895,22 @@ class CreateViewModel(
                 _step.value = Step.PUBLISHED
             }
             is dev.hryshyn.remanence.pending.PendingBoundaryPublish.Result.Failed -> {
-                failPublishing(pendingBoundaryMessage(result.reason), generation)
+                if (!isPublishCurrent(generation)) return
+                if (pendingFinalizeAttempt == (inputs.owner to inputs.capsuleId)) {
+                    showPendingPublicationIssue(when (result.reason) {
+                        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.SEND_LIMIT_REACHED -> PublicationIssueKind.LIMIT
+                        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.SEND_ACCESS_UNAVAILABLE -> PublicationIssueKind.ACCESS_UNAVAILABLE
+                        else -> PublicationIssueKind.UNKNOWN
+                    })
+                } else failPublishing(pendingBoundaryMessage(result.reason), generation)
             }
         }
+    }
+
+    private fun showPendingPublicationIssue(kind: PublicationIssueKind) {
+        _publishError.value = null
+        _uploadStatus.value = CreateUploadStatus.PublicationIssue(kind, durable = false)
+        _step.value = Step.UPLOAD_PENDING
     }
 
     private fun pendingBoundaryMessage(
@@ -2894,6 +2931,10 @@ class CreateViewModel(
             "that address can't be used for code sending"
         dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.GENERIC ->
             "publishing failed"
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.SEND_LIMIT_REACHED,
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.SEND_ACCESS_UNAVAILABLE,
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.FINALIZE_UNKNOWN ->
+            "publication is not confirmed"
     }
 
     private fun failPublishing(
@@ -2922,13 +2963,20 @@ class CreateViewModel(
                 if (!outboxObservationStillCurrent(generation, owner, capsule)) return@launch
                 // In-flight chains keep their scheduler/backoff. Terminal,
                 // published and preparation-only rows cannot be retried here.
-                if (row.state != OutboxCapsuleState.ENCRYPTED &&
+                val parkedLimit = row.state == OutboxCapsuleState.FINALIZING &&
+                    row.lastErrorCode == "SEND_LIMIT_REACHED"
+                if (!parkedLimit && row.state != OutboxCapsuleState.ENCRYPTED &&
                     row.state != OutboxCapsuleState.RETRYABLE_FAILURE) return@launch
                 val liveOwner = identityProvider()?.userId
                 if (liveOwner != owner.toRestString() ||
                     !outboxObservationStillCurrent(generation, owner, capsule)) return@launch
                 val expectedStatus = _uploadStatus.value
                 statusBeforeEnqueue = expectedStatus
+                if (parkedLimit) {
+                    if (dao.releaseSendLimitForOwner(capsule, owner.toRestString()) != 1) return@launch
+                    if (!outboxObservationStillCurrent(generation, owner, capsule) ||
+                        identityProvider()?.userId != owner.toRestString()) return@launch
+                }
                 enqueueUpload(owner, CapsuleId.parseRest(capsule))
                 if (outboxObservationStillCurrent(generation, owner, capsule)) {
                     _publishError.value = null

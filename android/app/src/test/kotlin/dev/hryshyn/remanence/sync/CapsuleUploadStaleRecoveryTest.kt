@@ -581,6 +581,8 @@ class CapsuleUploadStaleRecoveryTest {
         private val delegate: OutboxCapsuleDao,
         private val winnerRoot: File,
     ) : OutboxCapsuleDao() {
+        override suspend fun releaseSendLimitForOwner(capsuleId: String, ownerUserId: String) =
+            delegate.releaseSendLimitForOwner(capsuleId, ownerUserId)
         lateinit var loserPaths: List<File>
         lateinit var winnerPaths: List<File>
 

@@ -844,6 +844,125 @@ class CapsuleUploadOrchestratorTest {
         )
     }
 
+    @Test fun confirmedLimitParksWorkerAndRestartDiscoveryWithoutDeletingRequest() = runBlocking {
+        restartable { reopen ->
+            seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+            var calls = 0
+            var captured: CapsuleFinalizeRequest? = null
+            val first = orchestrator {
+                finalizeCapsule = { request, _ ->
+                    calls++; captured = request
+                    CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.SEND_LIMIT_REACHED, 409, false)
+                }
+                cleanupRetryMaterial = { _, _ -> error("denial must not destroy recovery") }
+            }
+            assertEquals(CapsuleUploadOutcome.SendLimitReached, first.run(OWNER_TYPED, CAPSULE_TYPED))
+            assertEquals(androidx.work.ListenableWorker.Result.failure(),
+                CapsuleUploadWorker.mapOutcome(CapsuleUploadOutcome.SendLimitReached))
+            val parked = capsuleRow()
+            assertEquals(OutboxCapsuleState.FINALIZING, parked.state)
+            assertEquals("SEND_LIMIT_REACHED", parked.lastErrorCode)
+            val paths = listOf(parked.envelopePath!!, parked.publishStatementPath!!,
+                parked.publishStatementSignaturePath!!, parked.senderRetryKeysetPath!!)
+            val bytes = paths.associateWith { File(it).readBytes().toList() }
+            reopen()
+            val enqueued = mutableListOf<String>()
+            val resumer = CapsuleUploadResumer(database.outboxCapsuleDao(), { OWNER }) { owner, capsule ->
+                assertEquals(OWNER_TYPED, owner); enqueued += capsule.toRestString()
+            }
+            assertEquals(0, resumer.resume(OWNER_TYPED).discoveredCount)
+            val restarted = orchestrator {
+                createDraft = { _, _ -> error("FINALIZING must never restage") }
+                uploadBlob = { _, _ -> error("FINALIZING must never reupload") }
+                finalizeCapsule = { request, _ ->
+                    calls++
+                    assertSameRequest(captured!!, request)
+                    CapsuleFinalizeResult.Success(CapsuleFinalize(CAPSULE_TYPED, CapsuleFinalizeState.READY, "2030-01-08T00:00:00Z"), 200)
+                }
+                cleanupRetryMaterial = { _, _ -> SenderRetryMaterialLifecycle.Result.OK }
+            }
+            assertEquals(CapsuleUploadOutcome.SendLimitReached, restarted.run(OWNER_TYPED, CAPSULE_TYPED))
+            assertEquals(1, calls); assertTrue(enqueued.isEmpty())
+            assertEquals(parked, capsuleRow())
+            paths.forEach { assertEquals(bytes[it], File(it).readBytes().toList()) }
+            assertEquals(0, database.outboxCapsuleDao().releaseSendLimitForOwner(CAPSULE, OTHER_OWNER))
+            assertEquals(parked, capsuleRow())
+            assertEquals(1, database.outboxCapsuleDao().releaseSendLimitForOwner(CAPSULE, OWNER))
+            assertEquals(parked.copy(lastErrorCode = null), capsuleRow())
+            assertEquals(0, database.outboxCapsuleDao().releaseSendLimitForOwner(CAPSULE, OWNER))
+            assertEquals(1, resumer.resume(OWNER_TYPED).enqueuedCount)
+            assertEquals(listOf(CAPSULE), enqueued)
+            assertEquals(CapsuleUploadOutcome.Succeeded, restarted.run(OWNER_TYPED, CAPSULE_TYPED))
+            assertEquals(2, calls)
+        }
+    }
+
+    @Test fun unavailable503RestartsWithExactSignedBytesAndOwnerNotANewSend() = runBlocking {
+        ambiguousRestart(CapsuleFinalizeFailure.SEND_ACCESS_UNAVAILABLE, 503)
+    }
+    @Test fun transportUnknownRestartsWithExactSignedBytesNotTerminalCleanup() = runBlocking {
+        ambiguousRestart(CapsuleFinalizeFailure.NETWORK, null)
+    }
+
+    private suspend fun ambiguousRestart(reason: CapsuleFinalizeFailure, status: Int?) = restartable { reopen ->
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+        var captured: CapsuleFinalizeRequest? = null
+        val outcome = orchestrator {
+            finalizeCapsule = { request, _ ->
+                captured = request
+                CapsuleFinalizeResult.Failure(reason, status, true)
+            }
+            cleanupRetryMaterial = { _, _ -> error("unknown finalization must keep recovery") }
+        }.run(OWNER_TYPED, CAPSULE_TYPED)
+        assertEquals(CapsuleUploadOutcome.Retryable(reason.name), outcome)
+        assertEquals(androidx.work.ListenableWorker.Result.retry(), CapsuleUploadWorker.mapOutcome(outcome))
+        val saved = capsuleRow()
+        val paths = listOf(saved.publishStatementPath!!, saved.publishStatementSignaturePath!!,
+            saved.envelopePath!!, saved.senderRetryKeysetPath!!)
+        val before = paths.associateWith { File(it).readBytes().toList() }
+        reopen()
+        assertEquals(saved, capsuleRow())
+        val enqueued = mutableListOf<String>()
+        val resumer = CapsuleUploadResumer(database.outboxCapsuleDao(), { OWNER }) { _, capsule -> enqueued += capsule.toRestString() }
+        assertEquals(CapsuleUploadResumeStatus.ACCOUNT_MISMATCH, resumer.resume(UserId.parseRest(OTHER_OWNER)).status)
+        assertEquals(1, resumer.resume(OWNER_TYPED).enqueuedCount)
+        assertEquals(listOf(CAPSULE), enqueued)
+        assertEquals(CapsuleUploadOutcome.AccountMismatch,
+            orchestrator(currentOwner = OTHER_OWNER).run(OWNER_TYPED, CAPSULE_TYPED))
+        assertEquals(saved, capsuleRow())
+        assertEquals(CapsuleUploadOutcome.Succeeded, orchestrator {
+            createDraft = { _, _ -> error("restart must not replay draft") }
+            uploadBlob = { _, _ -> error("restart must not upload again") }
+            finalizeCapsule = { request, _ ->
+                assertSameRequest(captured!!, request)
+                paths.forEach { assertEquals(before[it], File(it).readBytes().toList()) }
+                CapsuleFinalizeResult.Success(CapsuleFinalize(CAPSULE_TYPED, CapsuleFinalizeState.READY, "2030-01-08T00:00:00Z"), 200)
+            }
+        }.run(OWNER_TYPED, CAPSULE_TYPED))
+    }
+
+    private fun assertSameRequest(first: CapsuleFinalizeRequest, next: CapsuleFinalizeRequest) {
+        assertEquals(first.capsuleId, next.capsuleId)
+        assertEquals(first.senderKeyBundleId, next.senderKeyBundleId)
+        assertEquals(first.recipientKeyBundleId, next.recipientKeyBundleId)
+        assertTrue(first.statement.contentEquals(next.statement))
+        assertTrue(first.signature.contentEquals(next.signature))
+        assertTrue(first.recipientEnvelopeCiphertext.contentEquals(next.recipientEnvelopeCiphertext))
+        assertTrue(first.recipientEnvelopeCiphertextSha256.contentEquals(next.recipientEnvelopeCiphertextSha256))
+    }
+
+    private suspend fun restartable(block: suspend (() -> Unit) -> Unit) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "t387-restart-" + UUID.randomUUID()
+        fun reopen() {
+            database.close()
+            database = Room.databaseBuilder(context, RemanenceLocalDatabase::class.java, name)
+                .allowMainThreadQueries().build()
+        }
+        reopen()
+        try { block(::reopen) } finally { database.close(); context.deleteDatabase(name) }
+    }
+
     private fun orchestrator(
         currentOwner: String = OWNER,
         currentOwnerProvider: (() -> String?)? = null,

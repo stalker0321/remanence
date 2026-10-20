@@ -58,6 +58,9 @@ internal class ControlledOutboxObservation(private val room: OutboxCapsuleDao) :
 
     override suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String) =
         room.getByCapsuleIdAndOwner(capsuleId, ownerUserId)
+    // Only explicit confirmed-quota retry may release this persisted marker.
+    override suspend fun releaseSendLimitForOwner(capsuleId: String, ownerUserId: String) =
+        room.releaseSendLimitForOwner(capsuleId, ownerUserId)
     override suspend fun getByCapsuleIdsAndOwner(capsuleIds: List<String>, ownerUserId: String) =
         room.getByCapsuleIdsAndOwner(capsuleIds, ownerUserId)
 

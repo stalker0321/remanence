@@ -54,6 +54,9 @@ object PendingBoundaryPublish {
     )
 
     enum class Reason {
+        SEND_LIMIT_REACHED,
+        SEND_ACCESS_UNAVAILABLE,
+        FINALIZE_UNKNOWN,
         NETWORK,
         SESSION_CHANGED,
         CONFLICT,
@@ -91,6 +94,7 @@ object PendingBoundaryPublish {
         blobPort: PendingPublishFlow.BlobPort,
         finalizePort: PendingPublishFlow.FinalizePort,
         expectedLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease? = null,
+        onFinalizeStarted: () -> Unit = {},
     ): Result {
         if (!PendingServicePinConfig.usable(pin)) return Result.Failed(Reason.SERVICE_UNAVAILABLE)
         if (identity.userId.isBlank() || identity.bundleId.isBlank()) {
@@ -190,12 +194,16 @@ object PendingBoundaryPublish {
                 java.util.UUID.randomUUID().toString(),
                 java.util.UUID.randomUUID().toString(),
                 txnLease = txn.lease,
+                onFinalizeStarted = onFinalizeStarted,
             )
         ) {
             is PendingPublishFlow.State.Published ->
                 Result.Published(published.deliveryId, published.locatorCode, published.hint)
             is PendingPublishFlow.State.Failed -> Result.Failed(
                 when (published.reason) {
+                    PendingPublishFlow.Reason.SEND_LIMIT_REACHED -> Reason.SEND_LIMIT_REACHED
+                    PendingPublishFlow.Reason.SEND_ACCESS_UNAVAILABLE -> Reason.SEND_ACCESS_UNAVAILABLE
+                    PendingPublishFlow.Reason.FINALIZE_UNKNOWN -> Reason.FINALIZE_UNKNOWN
                     PendingPublishFlow.Reason.NETWORK -> Reason.NETWORK
                     PendingPublishFlow.Reason.SESSION_CHANGED -> Reason.SESSION_CHANGED
                     PendingPublishFlow.Reason.CONFLICT -> Reason.CONFLICT

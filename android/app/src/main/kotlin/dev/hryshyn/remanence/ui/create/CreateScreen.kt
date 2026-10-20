@@ -264,12 +264,20 @@ fun CreateScreen(
                             modifier = Modifier.testTag("create_upload_pending"),
                         )
                     }
+                    val publicationIssue = uploadStatus as? CreateViewModel.CreateUploadStatus.PublicationIssue
+                    if (publicationIssue != null) {
+                        Text(stringResource(if (publicationIssue.durable) R.string.send_publication_saved
+                            else R.string.send_publication_pending_recovery),
+                            modifier = Modifier.testTag("create_publication_recovery"))
+                    }
                     if (uploadStatus !is CreateViewModel.CreateUploadStatus.TerminalFailure &&
-                        (uploadStatus is CreateViewModel.CreateUploadStatus.RetryableFailure || publishError != null)) {
+                        (uploadStatus is CreateViewModel.CreateUploadStatus.RetryableFailure || publishError != null ||
+                            (publicationIssue?.durable == true && publicationIssue.kind == CreateViewModel.PublicationIssueKind.LIMIT))) {
                         Spacer(Modifier.height(16.dp))
                         ForwardAction(stringResource(R.string.create_audit_retry), "create_retry_upload",
                             viewModel::retryUpload, enabled = !uploadRetrying, busy = uploadRetrying)
-                    } else if (uploadStatus is CreateViewModel.CreateUploadStatus.TerminalFailure) {
+                    } else if (uploadStatus is CreateViewModel.CreateUploadStatus.TerminalFailure ||
+                        publicationIssue?.durable == false) {
                         Spacer(Modifier.height(16.dp))
                         Button(onClick = onExit, modifier = Modifier.testTag("create_terminal_home")) {
                             Text(stringResource(R.string.create_audit_return_home))
@@ -912,6 +920,11 @@ internal fun createLookupFailureCopy(reason: RecipientLookupUiState.Failure): In
 @StringRes
 internal fun createUploadPendingCopy(status: CreateViewModel.CreateUploadStatus): Int =
     when (status) {
+        is CreateViewModel.CreateUploadStatus.PublicationIssue -> when (status.kind) {
+            CreateViewModel.PublicationIssueKind.LIMIT -> R.string.send_publication_limit
+            CreateViewModel.PublicationIssueKind.ACCESS_UNAVAILABLE -> R.string.send_publication_unavailable
+            CreateViewModel.PublicationIssueKind.UNKNOWN -> R.string.send_publication_unknown
+        }
         is CreateViewModel.CreateUploadStatus.RetryableFailure -> R.string.create_audit_upload_retry
         is CreateViewModel.CreateUploadStatus.TerminalFailure -> R.string.create_audit_upload_terminal
         else -> R.string.create_audit_upload_pending

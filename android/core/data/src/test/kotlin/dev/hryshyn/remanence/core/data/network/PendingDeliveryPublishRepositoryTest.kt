@@ -32,6 +32,31 @@ class PendingDeliveryPublishRepositoryTest {
         }
     }
 
+    @Test fun quotaIsFinalizerOnlyAndRequiresExactPendingOrFullShape() = runTest {
+        withServer { server ->
+            val valid = """{"type":"about:blank","title":"SEND_LIMIT_REACHED","status":409,"code":"SEND_LIMIT_REACHED"}"""
+            for (body in listOf(valid.replace("about:blank", "unknown"),
+                valid.replace("\"title\":\"SEND_LIMIT_REACHED\"", "\"title\":\"other\""),
+                valid.replace("\"status\":409", "\"status\":503"),
+                valid.replace("\"status\":409", "\"status\":\"409\""),
+                valid.replace("\"code\":", "\"extra\":0,\"code\":"),
+                valid.replace("\"code\":", "\"retryable\":false,\"code\":"))) {
+                server.enqueue(MockResponse.Builder().code(409).setHeader("Content-Type", "application/json").body(body).build())
+                assertEquals(PendingPublishFailure.HTTP, assertIs<PendingFinalizeResult.Failure>(
+                    repository(server).finalize("d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic")).reason)
+            }
+            server.enqueue(MockResponse.Builder().code(409).setHeader("Content-Type", "application/json").body(valid).build())
+            val draft = repository(server).draft("route", "11111111-2222-3333-4444-555555555555",
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "email", "synthetic@example.test", ByteArray(32),
+                1814317432L, artifacts, "same-draft", "synthetic")
+            assertEquals(PendingPublishFailure.HTTP, assertIs<PendingDraftResult.Failure>(draft).reason)
+            server.enqueue(MockResponse.Builder().code(503).setHeader("Content-Type", "application/problem+json")
+                .body(problemJson("SEND_ACCESS_UNAVAILABLE", 503, true)).build())
+            assertEquals(PendingPublishFailure.SEND_ACCESS_UNAVAILABLE,
+                assertIs<PendingFinalizeResult.Failure>(repository(server).finalize("d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic")).reason)
+        }
+    }
+
     private suspend fun <T> withServer(block: suspend (MockWebServer) -> T): T {
         val server = MockWebServer()
         server.start()

@@ -11,4 +11,9 @@
     <string name="send_access_self">Собі: залишилося %1$d із 2 безкоштовних надсилань</string>
     <string name="send_access_other">Іншим: залишилося %1$d із 2 безкоштовних надсилань</string>
     <string name="send_access_advisory">Доступ перевіряється під час надсилання. Ці відомості не резервують надсилання.</string>
+    <string name="send_publication_limit">Сервер відхилив це надсилання: доступні надсилання вичерпано.</string>
+    <string name="send_publication_unavailable">Не вдалося перевірити доступ до надсилання. Публікацію не підтверджено.</string>
+    <string name="send_publication_unknown">Публікацію не підтверджено. Перевір історію надсилань, перш ніж починати нове надсилання.</string>
+    <string name="send_publication_saved">Збережено той самий зашифрований запит. Повтор усе ще потребує схвалення сервера й не створює нового надсилання.</string>
+    <string name="send_publication_pending_recovery">Із цього екрана не можна безпечно повторити це надсилання. Перевір історію; відсутність запису не підтверджує невдачу.</string>
 </resources>

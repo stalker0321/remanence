@@ -111,6 +111,25 @@ class HistoryViewModelTest {
         }
     }
 
+    @Test fun transportSessionLossClearsMetadataBeforeRootAuthStateCatchesUp() = runTest {
+        val f = Fixture(this)
+        f.port.load = { _, _ -> HistoryResult.Loaded(OutgoingPage(listOf(historyItem()), "next")) }
+        f.vm.refresh(); f.vm.loadRecent(); runCurrent()
+        assertEquals(1, f.vm.state.value.items.size)
+        assertEquals(1, f.vm.recent.value.items.size)
+        f.port.load = { _, _ ->
+            // The authenticated transport retires its lease on rejection,
+            // before Root has published SignedOut / invoked its UI boundary.
+            f.lease = null
+            HistoryResult.Failed(HistoryFailure.SIGN_IN)
+        }
+        f.vm.loadMore(); runCurrent()
+        assertTrue(f.vm.state.value.items.isEmpty())
+        assertTrue(f.vm.recent.value.items.isEmpty())
+        assertEquals(HistoryFailure.SIGN_IN, f.vm.state.value.error)
+        assertFalse(f.vm.state.value.loading)
+    }
+
     @Test fun cancellationRequiresConfirmationIsSingleFlightAndRefetchesWithoutLocalRewrite() = runTest {
         val f = Fixture(this)
         f.vm.refresh(); runCurrent()

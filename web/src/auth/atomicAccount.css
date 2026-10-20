@@ -1,0 +1,15 @@
+/* Scoped new registration form only. Shared shell/settings/composer belong to T406. */
+.atomic-account { overflow-wrap: anywhere; }
+.atomic-account form { display: grid; gap: .65rem; margin-top: 1rem; min-width: 0; }
+.atomic-account input {
+  box-sizing: border-box;
+  width: 100%; min-width: 0;
+  font: inherit; color: inherit;
+  padding: .55rem .8rem; min-height: var(--touch);
+  border: 1px solid var(--ink); border-radius: .8rem; background: var(--paper);
+}
+.atomic-account button { max-width: 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.atomic-account input:focus-visible, .atomic-account h1:focus-visible {
+  outline: 2px solid var(--lilac-deep); outline-offset: 3px;
+}
+.atomic-account > p + p { margin-top: .65rem; }

@@ -10,6 +10,7 @@ import type { MemoryKeys } from './memoryKeys'
 import { explainFailure, explainRestore } from './notice'
 import type { PasskeyPort } from './passkey'
 import { restoreSignedInAccount } from './restore'
+import './atomicAccount.css'
 
 /** Explicit isolated TEST composition only. App has no env/storage/public flag
  * enabling this component. Ordinary account login/restore stays unchanged. */
@@ -72,7 +73,7 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     GOOGLE_CANCELLED: 'googleCancelled', EXISTING_ACCOUNT_REQUIRES_LINK: 'linkRequired', CLIENT_UPGRADE_REQUIRED: 'upgradeRequired',
     REGISTRATION_ADMISSION_CLOSED: 'atomicUnavailable', WRONG_CREDENTIAL: 'wrongPasskey', WRONG_ACCOUNT: 'wrongPasskey',
   } as Record<string, MessageKey>)[state.error] ?? 'atomicFailure'
-  return <section className="card" data-atomic-phase={state.phase}>
+  return <section className="card atomic-account" data-atomic-phase={state.phase}>
     <h1 ref={heading} tabIndex={-1}>{t('authTitle')}</h1>
     <p>{t('atomicIntro')}</p>
     {unlocked ? <p role="status">{t('atomicReady')}</p> : phaseMessage ? <p role="status">{t(phaseMessage)}</p> : null}

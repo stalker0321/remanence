@@ -781,6 +781,9 @@ export function Create({
       fingerprint,
     }
     if (!controller.begin(visit)) return
+    // Retire the old preparation notice immediately. This caveat remains true
+    // even if the visit is abandoned and the guarded completion stays silent.
+    onNotice('sendWorkingHelp')
     const coherentVisit = (): boolean =>
       sendVisitStillCurrent({ ...visit, mounted: mounted.current }, sendPortsRef.current as SendPortsFull)
     void (async () => {

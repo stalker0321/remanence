@@ -106,6 +106,7 @@ try {
           assert.equal(await page.locator('[data-testid=send_button]').isDisabled(), true)
           assert.equal(calls.filter((call) => call.path === '/v1/capsules').length, 1)
           await assertNoPreparationClaims(page, 'en')
+          assert.equal(await page.locator('main > .status[role=alert]').innerText(), await page.evaluate(() => window.sendFeedbackFixture.messages('en').sendWorkingHelp))
         })
         await capture(page, 'waiting')
         await check('leaving-does-not-claim-cancellation-or-completion', async () => {
@@ -119,6 +120,7 @@ try {
           const text = await page.locator('main.shell').innerText()
           assert.equal(text.includes('postcard sent.'), false)
           assert.equal(text.includes('nothing left this device'), false)
+          assert.equal(await page.locator('main > .status[role=alert]').innerText(), await page.evaluate(() => window.sendFeedbackFixture.messages('en').sendWorkingHelp))
         })
       } else {
         let pendingFocus = null

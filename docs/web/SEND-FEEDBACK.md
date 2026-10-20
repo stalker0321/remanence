@@ -25,6 +25,9 @@ disappears when a front has been captured; the recipient identity stays visible.
 Working copy explains that leaving does not guarantee cancellation. Terminal
 failures have an explicit Home link. Neither that link nor language changes
 reset/rearm a controller, publish again or acknowledge a remote rollback.
+At attempt admission the old global preparation notice is replaced by that
+cancellation caveat, not by an indefinite progress/completion claim. If the
+user leaves before an answer, it remains true while stale completion stays silent.
 Existing unmount invalidation/abort and draft retention rules are unchanged:
 front capture/fingerprint and frozen composition are discarded; the photo/note
 drafts remain only in existing session memory. No new durable draft or outbox.

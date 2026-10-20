@@ -1,8 +1,10 @@
+import { historyEn, historyRu, historyUk } from '../history/messages'
 export const languages = ['en', 'ru', 'uk'] as const
 
 export type Language = (typeof languages)[number]
 
 export const messageKeys = [
+  ...Object.keys(historyEn) as (keyof typeof historyEn)[],
   'shellTitle',
   'shellReady',
   'shellPreparing',
@@ -138,6 +140,7 @@ export type MessageKey = (typeof messageKeys)[number]
 
 export const catalog: Record<Language, Record<MessageKey, string>> = {
   en: {
+    ...historyEn,
     shellTitle: 'this app',
     shellReady: 'The app shell is available offline. Signing in, unlocking, scanning and sending still need a connection. Postcards and photos are not saved here.',
     shellPreparing: 'Preparing the app shell for another visit. You can keep using Remanence.',
@@ -269,6 +272,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     settingsSignedOut: 'not signed in on this device.',
   },
   ru: {
+    ...historyRu,
     shellTitle: 'это приложение',
     shellReady: 'Оболочка доступна без сети. Для входа, разблокировки, сканирования и отправки нужно соединение. Открытки и фотографии здесь не сохраняются.',
     shellPreparing: 'Готовим оболочку к следующему открытию. Можно продолжать пользоваться Remanence.',
@@ -400,6 +404,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     settingsSignedOut: 'на этом устройстве вход не выполнен.',
   },
   uk: {
+    ...historyUk,
     shellTitle: 'цей застосунок',
     shellReady: 'Оболонка доступна без мережі. Для входу, розблокування, сканування й надсилання потрібне з’єднання. Листівки та фотографії тут не зберігаються.',
     shellPreparing: 'Готуємо оболонку до наступного відкриття. Можна й далі користуватися Remanence.',

@@ -376,3 +376,18 @@ video.preview {
   justify-content: center;
   gap: 0.5rem;
 }
+
+.history-list, .recent ul { list-style: none; padding: 0; }
+.history-list > li { border-top: 1px solid currentColor; padding: 1rem 0; }
+.history summary { cursor: pointer; overflow-wrap: anywhere; }
+.history summary > span { display: block; margin: .3rem 0; }
+.history-state { font-weight: 600; }
+.history dl > div { display: flex; flex-wrap: wrap; gap: .4rem 1rem; margin: .5rem 0; }
+.history dd { margin: 0; }
+.history dt { font-weight: 600; }
+.history code { font-size: 1.4em; letter-spacing: .12em; user-select: all; }
+.history fieldset { min-width: 0; padding: .8rem; }
+.history button, .recent button { white-space: normal; overflow-wrap: anywhere; }
+.history h1:focus { outline-offset: .25rem; }
+.recent { margin: 1rem 0; }
+.recent li { margin: .5rem 0; }

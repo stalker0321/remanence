@@ -54,6 +54,8 @@ import { PHOTO_COUNT_MAX, type PhotoDraft } from '../create/photos'
 import { arrayBuffer } from '../protocol/bytes'
 import { RecipientDraft, lookupRecipient, type RecipientSnapshot } from '../create/recipient'
 import { SessionStore } from '../session/session'
+import { HistoryPage } from '../history/HistoryPage'
+import { RecentRecipients } from '../history/RecentRecipients'
 
 export function App({
   store,
@@ -138,6 +140,7 @@ export function App({
       </div>
       <ShellStatus t={t} details={false} />
       {route === 'home' ? <Home t={t} /> : null}
+      {route === 'history' ? <HistoryPage key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} language={view.language} /> : null}
       {route === 'scan' ? (
         <Scan
           t={t}
@@ -210,6 +213,7 @@ function Home({ t }: { t: (key: MessageKey) => string }) {
       <div className="actions">
         <a href={href('account')}>{t('account')}</a>
         <a href={href('settings')}>{t('settingsTitle')}</a>
+        <a href={href('history')}>{t('historyTitle')}</a>
       </div>
     </>
   )
@@ -965,7 +969,7 @@ export function Create({
     onNotice('errorRegion')
   }
 
-  async function lookup(mode: 'named' | 'self') {
+  async function lookup(mode: 'named' | 'self', selectedHandle = handle, expectedUserId?: string) {
     if (busy || !open || view.accountId === null) return
     abort.current?.abort()
     const controller = new AbortController()
@@ -977,10 +981,14 @@ export function Create({
     setBusy(true)
     setStamp((value) => value + 1)
     try {
-      const outcome = await lookupRecipient(store, transport, handle, controller.signal, mode)
+      const outcome = await lookupRecipient(store, transport, selectedHandle, controller.signal, mode)
       if (!current()) return
       if (outcome.kind === 'not-found') {
         onNotice('recipientNotFound')
+        return
+      }
+      if (expectedUserId && outcome.snapshot.userId !== expectedUserId) {
+        onNotice('recentChanged')
         return
       }
       if (!recipient.offer(ticket, view.accountId, outcome.snapshot)) return
@@ -1040,6 +1048,8 @@ export function Create({
           </div>
         </form>
       ) : null}
+      {!confirmed ? <RecentRecipients key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} disabled={busy}
+        onSelect={(row) => { editRecipient(row.handle); void lookup('named', row.handle, row.user_id) }} /> : null}
       {pending && !confirmed ? (
         <div className="actions">
           <button

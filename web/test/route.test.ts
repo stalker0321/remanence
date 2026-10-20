@@ -10,6 +10,7 @@ describe('routes', () => {
     expect(parseRoute('#/account')).toBe('account')
     expect(parseRoute('#/settings')).toBe('settings')
     expect(parseRoute('#/settings/')).toBe('settings')
+    expect(parseRoute('#/history')).toBe('history')
     expect(parseRoute('#/inbox')).toBe('home')
     expect(parseRoute('#/scan/../account')).toBe('home')
     expect(parseRoute('#/create?access=secret')).toBe('create')
@@ -17,7 +18,7 @@ describe('routes', () => {
   })
 
   it('round-trips known routes', () => {
-    for (const route of ['home', 'scan', 'create', 'account', 'settings'] as const) {
+    for (const route of ['home', 'scan', 'create', 'account', 'settings', 'history'] as const) {
       expect(parseRoute(href(route))).toBe(route)
     }
   })

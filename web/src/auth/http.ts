@@ -9,6 +9,7 @@ const MAX_BODY = 262144
 const DRAFT_PATH = '/v1/capsules'
 /** Exact canonical ciphertext upload route: `/v1/capsules/{uuid}/blobs/{uuid}`. */
 const UPLOAD_PATH = /^\/v1\/capsules\/([0-9a-f-]{36})\/blobs\/([0-9a-f-]{36})$/
+const PENDING_CANCEL_PATH = /^\/v2\/pending-deliveries\/([0-9a-f-]{36})\/cancel$/
 
 export interface ApiResult {
   status: number
@@ -160,6 +161,7 @@ export function fetchTransport(origin: string): ApiTransport & ByteTransport & U
       return { status: response.status, body: await readBoundedBytes(response, input.maxBytes) }
     },
     async request(input) {
+      if (input.path.startsWith('/v2/') && input.method !== 'POST') throw new AuthError('TRANSPORT_FAILED')
       const headers: Record<string, string> = {
         accept: 'application/json',
         [PROFILE_HEADER]: PROFILE_VALUE,
@@ -229,6 +231,8 @@ function endpoint(origin: string, path: string, query?: Record<string, string>):
 function safeApiPath(path: string): boolean {
   if (path.includes('?') || path.includes('#') || path.includes('%')) return false
   if (path === '/music/v1/search') return true
+  const pendingCancel = PENDING_CANCEL_PATH.exec(path)
+  if (pendingCancel && isCanonicalUuid(pendingCancel[1] as string)) return true
   if (!path.startsWith('/v1/')) return false
   const parts = path.split('/')
   if (parts.length < 3 || parts[0] !== '' || parts[1] !== 'v1') return false
@@ -248,7 +252,7 @@ function encodeQuery(query: Record<string, string> | undefined): string {
   for (const key of keys) {
     if (!/^[a-z]{1,16}$/.test(key)) throw new AuthError('TRANSPORT_FAILED')
     const value = query[key]
-    if (typeof value !== 'string' || [...value].length > 200) throw new AuthError('TRANSPORT_FAILED')
+    if (typeof value !== 'string' || [...value].length > (key === 'cursor' ? 1024 : 200)) throw new AuthError('TRANSPORT_FAILED')
     parts.push(`${key}=${encodeURIComponent(value)}`)
   }
   return `?${parts.join('&')}`

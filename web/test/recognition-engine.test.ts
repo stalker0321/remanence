@@ -11,6 +11,11 @@ import type { StillCapture } from '../src/scan/camera'
 import type { SiftFingerprint } from '../src/scan/siftFingerprint'
 import { serializeSiftFingerprint } from '../src/scan/siftFingerprint'
 import type { QueryFingerprint } from '../src/scan/queryFingerprint'
+import {
+  FrontStillError,
+  type CaptureQualityDiagnostics,
+  type ProduceFrontStillOptions,
+} from '../src/scan/frontStillProducer'
 import type { SideMatchResult } from '../src/scan/sideMatcher'
 import type { SideScoreReport } from '../src/scan/sideScoring'
 
@@ -373,5 +378,99 @@ describe('T346 connected receiving engine', () => {
     controller.abort()
     sideReady.reject(new Error('synthetic side failure'))
     await expect(codeOf(pending)).resolves.toBe('cancelled')
+  })
+})
+
+describe('T350 engine requests real post-warp quality without a hard gate', () => {
+  it('passes quality:true with the captured original signal and fence', async () => {
+    const controller = new AbortController()
+    let captured: ProduceFrontStillOptions | null = null
+    let calls = 0
+    const engine = createRecognitionEngine({
+      signal: controller.signal,
+      produceQuery: async (_capture, options) => {
+        calls += 1
+        captured = options
+        return queryOf()
+      },
+      matchSide: async () => sideResult(report(0.9, true, true)),
+    })
+    const index = makeIndex([{ capsuleId: 'c1', fingerprint: domain(1) }])
+    await expect(engine.match(CAPTURE, catalogOf(['c1']), { index: index as unknown as RecognitionIndex })).resolves.toEqual({
+      kind: 'one',
+      capsuleId: 'c1',
+    })
+    expect(calls).toBe(1)
+    expect(captured).not.toBeNull()
+    expect(captured!.quality).toBe(true)
+    expect(captured!.signal).toBe(controller.signal)
+    expect(typeof captured!.fence).toBe('function')
+    expect(captured!.fence()).toBe(true)
+  })
+
+  it('keeps nonempty advisory warnings out of one/many/none policy', async () => {
+    const warnings: CaptureQualityDiagnostics = {
+      signals: {
+        laplacianVariance: 50,
+        nearBlackFraction: 0.5,
+        clippedWhiteFraction: 0.5,
+        largestGlareFraction: 0.5,
+      },
+      reasons: ['TOO_BLURRY', 'TOO_DARK', 'GLARE_EXCESSIVE'],
+    }
+    const warned = (side: SideScoreReport) =>
+      createRecognitionEngine({
+        produceQuery: async () => ({ ...queryOf(), quality: warnings }),
+        matchSide: async () => sideResult(side),
+      })
+
+    const one = warned(report(0.9, true, true))
+    await expect(
+      one.match(CAPTURE, catalogOf(['c1']), {
+        index: makeIndex([{ capsuleId: 'c1', fingerprint: domain(1) }]) as unknown as RecognitionIndex,
+      }),
+    ).resolves.toEqual({ kind: 'one', capsuleId: 'c1' })
+
+    const many = warned(report(0.8, true, true))
+    await expect(
+      many.match(CAPTURE, catalogOf(['c1', 'c2']), {
+        index: makeIndex([
+          { capsuleId: 'c1', fingerprint: domain(1) },
+          { capsuleId: 'c2', fingerprint: domain(2) },
+        ]) as unknown as RecognitionIndex,
+      }),
+    ).resolves.toEqual({ kind: 'many' })
+
+    const none = warned(report(0.9, true, true))
+    await expect(
+      none.match(CAPTURE, catalogOf([]), { index: makeIndex([]) as unknown as RecognitionIndex }),
+    ).resolves.toEqual({ kind: 'none' })
+  })
+
+  it('maps a typed measurement fault to unavailable/internal, never none or one', async () => {
+    const entries = [{ capsuleId: 'c1', fingerprint: domain(1) }]
+    const unavailable = createRecognitionEngine({
+      produceQuery: async () => {
+        throw new FrontStillError('unavailable')
+      },
+      matchSide: async () => sideResult(report(0.9, true, true)),
+    })
+    await expect(
+      unavailable.match(CAPTURE, catalogOf(['c1']), {
+        index: makeIndex(entries) as unknown as RecognitionIndex,
+      }),
+    ).rejects.toMatchObject({ code: 'unavailable' })
+
+    const internal = createRecognitionEngine({
+      produceQuery: async () => {
+        throw new FrontStillError('internal')
+      },
+      matchSide: async () => sideResult(report(0.9, true, true)),
+    })
+    await expect(
+      internal.match(CAPTURE, catalogOf(['c1']), {
+        index: makeIndex(entries) as unknown as RecognitionIndex,
+      }),
+    ).rejects.toMatchObject({ code: 'internal' })
   })
 })

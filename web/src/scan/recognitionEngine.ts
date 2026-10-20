@@ -17,7 +17,8 @@
  * and rechecked around every async/native stage and before output.
  *
  * PURE technical adapter: no App/UI activation, no grant/crypto/session
- * change, no quality gate, no pagination, no persistence/logging of features.
+ * change, advisory post-warp quality measurement only (never a hard gate),
+ * no pagination, no persistence/logging of features.
  */
 
 import type { RecognitionEngine, MatchResult } from './grant'
@@ -259,7 +260,7 @@ export function createRecognitionEngine(deps: RecognitionEngineDeps = {}): Recog
         assertLive()
         let produced: QueryFingerprint
         try {
-          produced = await produceQuery(capture, { fence, signal })
+          produced = await produceQuery(capture, { fence, signal, quality: true })
         } catch (error) {
           // Captured cancellation wins over a rejected dependency.
           if (signal?.aborted === true) throw refuse('cancelled')

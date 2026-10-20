@@ -75,6 +75,34 @@ class HistoryViewModelTest {
         f.vm.loadMore(); runCurrent(); assertEquals(2, f.port.loads)
     }
 
+    @Test fun backDuringRefreshCannotBeUndoneByItsLatePage() = runTest {
+        val f = Fixture(this)
+        f.vm.refresh(); runCurrent()
+        f.vm.select(historyItem().key)
+        val gate = CompletableDeferred<HistoryResult<OutgoingPage>>()
+        f.port.load = { _, _ -> gate.await() }
+        f.vm.refresh(); runCurrent()
+        f.vm.backToList()
+        gate.complete(HistoryResult.Loaded(OutgoingPage(listOf(historyItem()), null)))
+        runCurrent()
+        assertNull(f.vm.state.value.selectedKey)
+        assertEquals(1, f.vm.state.value.items.size)
+    }
+
+    @Test fun selectionDuringPagingWinsOverRequestTimeSelection() = runTest {
+        val f = Fixture(this)
+        val second = historyItem("20000000-0000-4000-8000-000000000002")
+        f.port.load = { _, _ -> HistoryResult.Loaded(OutgoingPage(listOf(historyItem(), second), "next")) }
+        f.vm.refresh(); runCurrent()
+        val gate = CompletableDeferred<HistoryResult<OutgoingPage>>()
+        f.port.load = { _, _ -> gate.await() }
+        f.vm.loadMore(); runCurrent()
+        f.vm.select(second.key)
+        gate.complete(HistoryResult.Loaded(OutgoingPage(emptyList(), null)))
+        runCurrent()
+        assertEquals(second.key, f.vm.state.value.selectedKey)
+    }
+
     @Test fun logoutClearsPrivateMetadataAndLateNonCooperativeResultsStayRetired() = runTest {
         val f = Fixture(this)
         val historyGate = CompletableDeferred<HistoryResult<OutgoingPage>>()

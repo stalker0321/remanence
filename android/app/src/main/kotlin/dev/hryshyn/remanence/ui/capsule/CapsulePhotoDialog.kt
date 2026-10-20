@@ -20,7 +20,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalInputModeManager
-import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -66,8 +65,8 @@ internal fun CapsulePhotoDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn)) {
         val inputMode = LocalInputModeManager.current.inputMode
         LaunchedEffect(inputMode) {
-            // Material buttons accept keyboard focus only in keyboard mode.
-            // Entering that mode is an event, not a delayed focus retry.
+            // A modal always has an explicit focus anchor. Restore it when
+            // input mode changes as well; no delayed focus retries.
             closeFocus.requestFocus()
         }
         val previousLabel = stringResource(R.string.media_photo_previous)

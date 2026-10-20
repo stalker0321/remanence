@@ -130,13 +130,14 @@ class CapsuleMediaRenderTest {
         rule.onNodeWithTag("collage_canvas").assertDoesNotExist()
     }
 
-    private fun showBer1(withTrack: Boolean = true, fontScale: Float = 1f, launch: (String) -> Boolean = { false }) {
+    private fun showBer1(withTrack: Boolean = true, fontScale: Float = 1f,
+        trackSnapshot: CapsuleTrackSnapshotV1 = track, launch: (String) -> Boolean = { false }) {
         val state = Ber1PresentationState(testV2Expression(), { byteArrayOf(it.toByte()) },
             decoder = Ber1PhotoDecoder { bytes ->
                 Bitmap.createBitmap(120, 120, Bitmap.Config.ARGB_8888).apply {
                     eraseColor(listOf(0xffd05b49.toInt(), 0xff4e8c75.toInt(), 0xff526fbd.toInt())[bytes[0].toInt()])
                 }.asImageBitmap()
-            }, track = track.takeIf { withTrack })
+            }, track = trackSnapshot.takeIf { withTrack })
         runBlocking { state.load() }
         rule.setContent { CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) { HoldTheme {
             scope = rememberCoroutineScope()
@@ -191,6 +192,22 @@ class CapsuleMediaRenderTest {
         rule.onNodeWithTag("capsule_track_open").performClick()
         rule.onNodeWithTag("capsule_track_open_spotify").performClick()
         assertTrue(before.sameAs(png("ber1-landscape-player-success")))
+    }
+
+    @Test @Config(qualifiers = "ru-w640dp-h360dp-land-xhdpi")
+    fun longestLegalTrackLabelDoesNotConsumeTheSheet() {
+        val long = CapsuleTrackSnapshotV1.parse("be30e36b-1111-4111-8111-000000000001",
+            "Synthetic ".repeat(10), "QA Artist ".repeat(20), null, 120000L)
+        showBer1(fontScale = 1.8f, trackSnapshot = long)
+        rule.onNodeWithTag("capsule_sheet").assertIsDisplayed()
+        rule.onNodeWithTag("capsule_track_open").assertIsDisplayed().assertTextEquals(
+            rule.activity.getString(R.string.track_open_action, long.title, long.artistDisplay))
+        val image = png("ber1-long-track-landscape")
+        val pixels = IntArray(image.width * image.height)
+        image.getPixels(pixels, 0, image.width, 0, 0, image.width, image.height)
+        mediaPhotoColors.forEach { c -> assertTrue("track text must leave room for photos", pixels.count { it == c } > 20) }
+        val action = rule.onNodeWithTag("capsule_track_open").fetchSemanticsNode().boundsInRoot
+        assertTrue(action.bottom <= rule.activity.window.decorView.height)
     }
 
     private fun png(name: String): Bitmap {

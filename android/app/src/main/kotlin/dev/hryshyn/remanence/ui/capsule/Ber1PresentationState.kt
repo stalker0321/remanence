@@ -23,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -35,7 +34,6 @@ import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.capsule.music.StreamingService
 import dev.hryshyn.remanence.ui.capsule.music.TrackServicePicker
-import dev.hryshyn.remanence.ui.capsule.music.openTrackUrl
 import dev.hryshyn.remanence.ui.capsule.music.rememberTrackServiceAction
 import dev.hryshyn.remanence.ui.create.GeneratorBer1Preview
 import dev.hryshyn.remanence.ui.create.GeneratorBer1Renderer

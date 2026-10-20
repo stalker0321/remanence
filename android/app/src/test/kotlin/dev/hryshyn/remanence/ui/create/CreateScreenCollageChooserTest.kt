@@ -556,12 +556,13 @@ class CreateScreenCollageChooserTest {
         val restoration = StateRestorationTester(composeRule)
         restoration.setContent { CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false) }
         val changes: List<Pair<String, () -> Unit>> = listOf(
-            "note" to { vm.noteEditor.onChange("New content"); Unit },
+            "note" to { vm.noteEditor.onChange("New content") },
             "photos" to { vm.onPhotosPicked(listOf("u3", "u2", "u1")) },
             "recipient" to {
                 assertTrue(vm.backToContent())
                 assertTrue(vm.backToFront())
                 assertTrue(vm.backToRecipient())
+                vm.restartLookup()
                 val next = selfSnapshot().copy(userId = UserId(UUID.fromString("be111111-2222-4333-8444-555555555555")),
                     handle = NormalizedHandle.parse("other"))
                 vm.onResolved(next)

@@ -19,9 +19,10 @@ import { CollageStage } from '../collage/stage'
 import type { PresentationMemory } from '../collage/memory'
 import { browserCamera, type CameraPort, type CameraSession, type StillCapture } from '../scan/camera'
 import { ScanError } from '../scan/errors'
-import { unavailableRecognition, type RecognitionEngine } from '../scan/grant'
+import { type RecognitionEngine } from '../scan/grant'
 import { explainScan } from '../scan/notice'
 import { receivePostcard } from '../scan/receive'
+import { createRecognitionEngine } from '../scan/recognitionEngine'
 import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
 import { buildRecognitionIndex, type RecognitionIndex } from '../scan/recognitionIndex'
 import { canvasTextMeasurer } from '../collage/measure'
@@ -55,7 +56,7 @@ export function App({
   keys,
   memory,
   transport = fetchTransport(apiOrigin()),
-  engine = unavailableRecognition(),
+  engine,
   google = browserGoogleIdentity(document),
   passkeys = browserPasskey(),
   camera = browserCamera(document),
@@ -193,7 +194,7 @@ export function Scan({
   keys: MemoryKeys
   memory: PresentationMemory
   transport: ApiTransport & ByteTransport
-  engine: RecognitionEngine
+  engine?: RecognitionEngine
 }) {
   const host = useRef<HTMLDivElement>(null)
   const session = useRef<CameraSession | null>(null)
@@ -267,6 +268,7 @@ export function Scan({
     const controller = new AbortController()
     openAbort.current?.abort()
     openAbort.current = controller
+    const engineForAttempt = engine ?? createRecognitionEngine({ signal: controller.signal })
     try {
       const incoming = await fetchIncoming(store, transport, controller.signal)
       if (controller.signal.aborted) return
@@ -291,7 +293,7 @@ export function Scan({
           store,
           keys,
           memory,
-          engine,
+          engineForAttempt,
           picture,
           incoming,
           { read: (item, blobId, signal) => downloadCiphertext(store, transport, item, blobId, signal) },

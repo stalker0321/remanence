@@ -3,8 +3,33 @@ import { CollageError } from '../collage/errors'
 import { SyncError } from '../sync/errors'
 import { ScanError } from './errors'
 import { RecognitionIndexError } from './recognitionIndex'
+import { RecognitionEngineError } from './recognitionEngine'
 
 export function explainScan(error: unknown): MessageKey {
+  if (error instanceof RecognitionEngineError) {
+    switch (error.code) {
+      case 'cancelled':
+      case 'stale':
+        return 'scanCancelled'
+      case 'unavailable':
+      case 'internal':
+        return 'recognitionUnavailable'
+      case 'invalid':
+      case 'contract':
+        return 'integrityFailed'
+      case 'decode':
+      case 'crop':
+      case 'warp':
+      case 'features':
+      case 'dimensions':
+      case 'pixels':
+        return 'scanRetake'
+      case 'incomplete':
+        return 'incompleteIndex'
+      default:
+        return 'recognitionUnavailable'
+    }
+  }
   if (error instanceof RecognitionIndexError) {
     if (error.code === 'unavailable') return 'recognitionUnavailable'
     if (error.code === 'stale') return 'scanCancelled'

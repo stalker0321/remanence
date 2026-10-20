@@ -4,6 +4,7 @@ import { showGrantedPostcard, type PresentationMemory } from '../collage/memory'
 import { openGrantedPostcard, type SealedPhoto } from '../collage/open'
 import type { TextMeasurer } from '../collage/prepare'
 import { arrayBuffer, bytesToHex } from '../protocol/bytes'
+import { b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
 import { SessionError, type SessionStore } from '../session/session'
 import type { IncomingBlob, IncomingCapsule, IncomingCatalog } from '../sync/incoming'
 import type { StillCapture } from './camera'
@@ -84,8 +85,10 @@ async function readChecked(
 ): Promise<Uint8Array> {
   const body = await blobs.read(item, blob.blobId, signal)
   if (body.length !== blob.ciphertextSize) throw new CollageError('INTEGRITY')
-  const digest = bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', arrayBuffer(body))))
-  if (digest !== blob.ciphertextSha256) throw new CollageError('INTEGRITY')
+  const digestBytes = new Uint8Array(await crypto.subtle.digest('SHA-256', arrayBuffer(body)))
+  if (bytesToHex(digestBytes) !== blob.ciphertextSha256 && b64(digestBytes) !== blob.ciphertextSha256) {
+    throw new CollageError('INTEGRITY')
+  }
   return body
 }
 

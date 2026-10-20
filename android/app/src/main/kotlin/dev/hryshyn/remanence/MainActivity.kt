@@ -240,6 +240,7 @@ private fun RootSurface(
     LaunchedEffect(authState) {
         capabilityViewModel.onAuthStateChanged(authState)
         setupViewModel.onAuthChanged()
+        if (authState == AuthUiState.SignedOut) registrationViewModel.onSignedOut()
     }
     val accountCapability by capabilityViewModel.capability.collectAsStateWithLifecycle()
 

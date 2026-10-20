@@ -5,6 +5,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -210,5 +212,49 @@ class RegistrationSubmitLifecycleTest {
         composeRule.onNodeWithTag("reg_handle_field").performImeAction()
         composeRule.runOnIdle { viewModel.submit() }
         assertEquals("all entry points share the terminal guard", 1, api.calls)
+    }
+
+    @Test
+    fun completedSignupThenSignedOutStartsAnEmptyUsableFormInSameVm() {
+        val api = ScriptedRegistrationApi(ArrayDeque(listOf(ok201(), ok201())))
+        val vm = validViewModel(api)
+        setContent(vm)
+        composeRule.onNodeWithTag("reg_submit_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            // The exact SignedOut hook wired at RootSurface; no provider/API logout.
+            vm.onSignedOut()
+            assertEquals(RegistrationFormState(), vm.form.value)
+            assertEquals(RegistrationSubmitState.Idle, vm.submitState.value)
+            vm.onFieldChange(RegistrationField.EMAIL, "next@example.com")
+            vm.onFieldChange(RegistrationField.PASSWORD, "another synthetic password")
+            vm.onFieldChange(RegistrationField.HANDLE, "next_person")
+        }
+        composeRule.onNodeWithTag("reg_completed_message").assertDoesNotExist()
+        composeRule.onNodeWithTag("reg_submit_button").assertIsEnabled().performClick()
+        composeRule.waitForIdle()
+        assertEquals(2, api.calls)
+        composeRule.onNodeWithTag("reg_submit_button").assertIsNotEnabled()
+    }
+
+    @Test
+    fun unfinishedAndFailedFormsSurviveSignedOutReentryAndCanRetry() {
+        val api = ScriptedRegistrationApi(ArrayDeque(listOf(
+            AuthResult.Failure(AuthFailure.NETWORK), ok201(),
+        )))
+        val vm = validViewModel(api)
+        val input = vm.form.value
+        vm.onSignedOut()
+        assertEquals(input, vm.form.value)
+        setContent(vm)
+        composeRule.onNodeWithTag("reg_submit_button").performClick()
+        composeRule.runOnIdle {
+            vm.onSignedOut()
+            assertEquals(input, vm.form.value)
+            assertTrue(vm.submitState.value is RegistrationSubmitState.Failed)
+        }
+        composeRule.onNodeWithTag("reg_submit_button").assertIsEnabled().performClick()
+        composeRule.waitForIdle()
+        assertEquals(2, api.calls)
     }
 }

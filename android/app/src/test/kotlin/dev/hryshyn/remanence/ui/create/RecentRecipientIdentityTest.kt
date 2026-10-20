@@ -148,6 +148,7 @@ class RecentRecipientIdentityTest {
         assertSame(fresh, vm.pendingRecipient.value)
         assertNull(vm.confirmedRecipient.value)
         assertEquals(CreateViewModel.Step.RECIPIENT_CONFIRM, vm.step.value)
+        capture("recent-same-en")
         rule.onNodeWithTag("confirm_button").performClick()
         assertSame(fresh, vm.confirmedRecipient.value)
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
@@ -164,9 +165,202 @@ class RecentRecipientIdentityTest {
         assertNull(vm.confirmedRecipient.value)
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertTrue(vm.pickerVm.state.value is RecipientLookupUiState.Failed)
+        assertEquals(RecipientLookupUiState.Failure.RECENT_IDENTITY,
+            (vm.pickerVm.state.value as RecipientLookupUiState.Failed).reason)
         rule.onNodeWithTag("confirm_button").assertDoesNotExist()
         vm.confirmRecipient(); vm.startPublishing()
         assertNull(vm.confirmedRecipient.value)
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
     }
+
+    private fun assertRejected(vm: CreateViewModel) {
+        assertNull(vm.pendingRecipient.value)
+        assertNull(vm.confirmedRecipient.value)
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertEquals(RecipientLookupUiState.Failure.RECENT_IDENTITY,
+            (vm.pickerVm.state.value as RecipientLookupUiState.Failed).reason)
+    }
+
+    private fun admitCurrent(vm: CreateViewModel) {
+        vm.onPickerResolved(vm.pickerVm.state.value as RecipientLookupUiState.Resolved)
+    }
+
+    private class HeldReply(private val snapshot: ResolvedHandleSnapshot) {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        private val returned = CompletableDeferred<Unit>()
+        suspend fun answer(): DirectoryLookupResult = try {
+            withContext(NonCancellable) {
+                entered.complete(Unit)
+                release.await()
+                DirectoryLookupResult.Found(snapshot)
+            }
+        } finally { returned.complete(Unit) }
+        fun finish() = runBlocking {
+            release.complete(Unit)
+            withTimeout(10_000) { returned.await() }
+        }
+    }
+
+    @Test fun explicitManualRestartCanResolveTheSameHandleToAnotherIdentity() {
+        val fresh = resolved(foreign)
+        val vm = viewModel { DirectoryLookupResult.Found(fresh) }
+        vm.lookupRecentRecipient(recent, owner, 1L)
+        assertRejected(vm)
+        vm.restartLookup() // explicit user intent; no automatic fallback
+        vm.lookupRecipient()
+        admitCurrent(vm)
+        assertSame(fresh, vm.pendingRecipient.value)
+        assertNull(vm.confirmedRecipient.value)
+        vm.confirmRecipient()
+        assertSame(fresh, vm.confirmedRecipient.value)
+        assertEquals(listOf("friend_qa", "friend_qa"), calls)
+    }
+
+    @Test fun manualEditWhileRecentRequestIsHeldIgnoresNonCooperativeReply() {
+        val held = HeldReply(resolved(expected))
+        val manual = resolved(foreign, "manual_qa")
+        val vm = viewModel { if (it == "friend_qa") held.answer() else DirectoryLookupResult.Found(manual) }
+        mount(vm)
+        rule.onNodeWithTag("recent_$expected").performScrollTo().performClick()
+        try {
+            assertTrue(held.entered.isCompleted)
+            rule.onNodeWithTag("create_handle_input").performTextReplacement("manual_qa")
+            rule.onNodeWithTag("create_lookup_button").performClick()
+            rule.waitForIdle()
+            assertSame(manual, vm.pendingRecipient.value)
+        } finally { held.finish() }
+        rule.waitForIdle()
+        assertSame(manual, vm.pendingRecipient.value)
+        assertNull(vm.confirmedRecipient.value)
+        assertEquals(listOf("friend_qa", "manual_qa"), calls)
+        rule.onNodeWithTag("confirm_button").performClick()
+        assertSame(manual, vm.confirmedRecipient.value)
+    }
+
+    @Test fun replacingRecentKeepsNewExpectationWhenOldRequestReturns() {
+        val held = HeldReply(resolved(expected))
+        var first = true
+        val vm = viewModel {
+            if (first) { first = false; held.answer() }
+            else DirectoryLookupResult.Found(resolved(expected)) // wrong for the new recent
+        }
+        vm.lookupRecentRecipient(recent, owner, 1L)
+        try {
+            assertTrue(held.entered.isCompleted)
+            vm.lookupRecentRecipient(recent.copy(userId = foreign), owner, 1L)
+            assertRejected(vm)
+        } finally { held.finish() }
+        assertRejected(vm)
+        assertEquals(2, calls.size)
+    }
+
+    @Test fun retiredComposeResolutionCannotDropNewRecentExpectation() {
+        val held = HeldReply(resolved(expected))
+        var first = true
+        val vm = viewModel {
+            if (first) { first = false; DirectoryLookupResult.Found(resolved(expected)) }
+            else held.answer() // new recent expects foreign, so this must be refused
+        }
+        vm.lookupRecentRecipient(recent, owner, 1L)
+        val oldResolution = vm.pickerVm.state.value as RecipientLookupUiState.Resolved
+        vm.lookupRecentRecipient(recent.copy(userId = foreign), owner, 1L)
+        try {
+            assertTrue(held.entered.isCompleted)
+            vm.onPickerResolved(oldResolution)
+            assertNull(vm.pendingRecipient.value)
+            assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        } finally { held.finish() }
+        assertRejected(vm)
+        vm.onPickerResolved(oldResolution)
+        assertRejected(vm)
+    }
+
+    @Test fun ownerOrEpochReplacementRejectsOldSelectionAndOldResponse() {
+        for (nextOwner in listOf(owner, "10000000-0000-4000-8000-000000000002")) {
+            liveOwner = owner
+            val held = HeldReply(resolved(expected))
+            var first = true
+            val fresh = resolved(foreign)
+            val vm = viewModel {
+                if (first) { first = false; held.answer() } else DirectoryLookupResult.Found(fresh)
+            }
+            vm.lookupRecentRecipient(recent, owner, 1L)
+            try {
+                assertTrue(held.entered.isCompleted)
+                liveOwner = nextOwner
+                boundary.invalidate()
+                vm.beginSession(2L, nextOwner)
+                vm.lookupRecentRecipient(recent.copy(userId = foreign), nextOwner, 2L)
+                val current = vm.pickerVm.state.value
+                val count = calls.size
+                vm.lookupRecentRecipient(recent, owner, 1L) // obsolete Activity callback
+                assertSame(current, vm.pickerVm.state.value)
+                assertEquals(count, calls.size)
+            } finally { held.finish() }
+            admitCurrent(vm)
+            assertSame(fresh, vm.pendingRecipient.value)
+            assertNull(vm.confirmedRecipient.value)
+            vm.confirmRecipient()
+            assertSame(fresh, vm.confirmedRecipient.value)
+            vm.endSession()
+        }
+    }
+
+    @Test fun logoutBeforeReplyCannotLeaveRecipientMaterial() {
+        val held = HeldReply(resolved(expected))
+        val vm = viewModel { held.answer() }
+        vm.lookupRecentRecipient(recent, owner, 1L)
+        try {
+            assertTrue(held.entered.isCompleted)
+            liveOwner = null
+            boundary.invalidate()
+            vm.endSession()
+            vm.lookupRecentRecipient(recent, owner, 1L)
+        } finally { held.finish() }
+        assertNull(vm.pendingRecipient.value)
+        assertNull(vm.confirmedRecipient.value)
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertEquals(RecipientLookupUiState.Idle, vm.pickerVm.state.value)
+        assertEquals(1, calls.size)
+    }
+
+    @Test fun sessionBoundaryBetweenResolutionAndConfirmationCannotBind() {
+        val vm = viewModel { DirectoryLookupResult.Found(resolved(expected)) }
+        vm.lookupRecentRecipient(recent, owner, 1L)
+        admitCurrent(vm)
+        assertNotNull(vm.pendingRecipient.value)
+        liveOwner = null
+        boundary.invalidate() // synchronous fence before Activity teardown/frame
+        vm.confirmRecipient()
+        assertNull(vm.pendingRecipient.value)
+        assertNull(vm.confirmedRecipient.value)
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+    }
+
+    @Test fun malformedRecentUuidDoesNotFallBackToGenericLookup() {
+        val vm = viewModel { error("Malformed identity must not reach directory") }
+        vm.lookupRecentRecipient(recent.copy(userId = "not-a-uuid"), owner, 1L)
+        assertRejected(vm)
+        assertTrue(calls.isEmpty())
+    }
+
+    private fun localizedMismatch(label: String) {
+        val vm = viewModel { DirectoryLookupResult.Found(resolved(foreign)) }
+        mount(vm)
+        rule.onNodeWithTag("recent_$expected").performScrollTo().performClick()
+        rule.waitForIdle()
+        assertRejected(vm)
+        val copy = ApplicationProvider.getApplicationContext<Context>()
+            .getString(dev.hryshyn.remanence.R.string.create_audit_recent_identity)
+        rule.onNodeWithText(copy).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("create_lookup_button").assertIsEnabled()
+        capture(label)
+    }
+
+    @Test @Config(qualifiers = "ru-rRU-w390dp-h844dp-mdpi")
+    fun russianMismatchKeepsManualRecoveryVisible() = localizedMismatch("recent-mismatch-ru")
+
+    @Test @Config(qualifiers = "uk-rUA-w390dp-h844dp-mdpi")
+    fun ukrainianMismatchKeepsManualRecoveryVisible() = localizedMismatch("recent-mismatch-uk")
 }

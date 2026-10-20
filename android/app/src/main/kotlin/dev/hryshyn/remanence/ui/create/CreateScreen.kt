@@ -432,7 +432,7 @@ private fun RecipientLookupContent(viewModel: CreateViewModel, recentRecipientsC
             if (selfRejected) Text(stringResource(R.string.recipient_design_self_unavailable),
                 color = HoldColors.Error, modifier = Modifier.testTag("create_self_recipient_error"))
             when (val current = state) {
-                is RecipientLookupUiState.Resolved -> LaunchedEffect(current.snapshot) { viewModel.onResolved(current.snapshot) }
+                is RecipientLookupUiState.Resolved -> LaunchedEffect(current) { viewModel.onPickerResolved(current) }
                 RecipientLookupUiState.NotFound -> Text(stringResource(R.string.hold_no_handle))
                 is RecipientLookupUiState.Failed -> Text(stringResource(createLookupFailureCopy(current.reason)), color = MaterialTheme.colorScheme.error)
                 else -> Unit
@@ -900,6 +900,7 @@ internal fun createLookupFailureCopy(reason: RecipientLookupUiState.Failure): In
     RecipientLookupUiState.Failure.NETWORK -> R.string.create_audit_lookup_network
     RecipientLookupUiState.Failure.SIGN_IN -> R.string.create_audit_lookup_signin
     RecipientLookupUiState.Failure.SERVER -> R.string.create_audit_lookup_server
+    RecipientLookupUiState.Failure.RECENT_IDENTITY -> R.string.create_audit_recent_identity
     else -> R.string.create_audit_lookup_failed
 }
 

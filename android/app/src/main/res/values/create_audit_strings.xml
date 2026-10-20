@@ -26,6 +26,7 @@
     <string name="create_audit_lookup_signin">Sign in again to find this person.</string>
     <string name="create_audit_lookup_failed">Couldn’t find this person right now. Try again.</string>
     <string name="create_audit_lookup_server">Couldn’t read the server response. Try again.</string>
+    <string name="create_audit_recent_identity">This recent recipient couldn’t be verified. Check the handle and search manually.</string>
     <string name="create_audit_photos_count">Choose 3–5 photographs to continue.</string>
     <string name="create_audit_photos_unreadable">A photograph couldn’t be read. Choose it again or pick another.</string>
     <string name="create_audit_photos_duplicate">Choose different photographs.</string>

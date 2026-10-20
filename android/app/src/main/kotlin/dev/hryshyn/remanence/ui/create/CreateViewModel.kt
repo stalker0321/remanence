@@ -241,6 +241,7 @@ class CreateViewModel(
 
     private val sessionStore = CreateSessionStore()
     private val recipientFlow = CreateRecipientFlow(pickerVm, sessionStore)
+    private var pendingPickerResolution: RecipientLookupUiState.Resolved? = null
 
     val confirmedRecipient: StateFlow<ResolvedHandleSnapshot?> get() = sessionStore.confirmedRecipient
 
@@ -1332,6 +1333,7 @@ class CreateViewModel(
         _step.value = Step.RECIPIENT_LOOKUP
         // FIX-M1-ONDEVICE-01: pending and confirmed recipient material both die.
         recipientFlow.clearTransientMaterial()
+        pendingPickerResolution = null
         pickerVm.reset()
         photoSelection.clear()
         _pickedPhotoIds.value = emptyList()
@@ -1429,14 +1431,17 @@ class CreateViewModel(
     // ---------------------------------------------------------------------
 
     /** Shared Activity/Compose recent selection entrypoint; still a fresh lookup. */
-    @Suppress("UNUSED_PARAMETER")
     fun lookupRecentRecipient(
         suggestion: dev.hryshyn.remanence.core.data.network.RecentRecipient,
         ownerUserId: String?,
         epoch: Long,
     ) {
+        // A callback captured by an obsolete Activity/session cannot replace
+        // the current lookup's expectation, even for the same handle.
+        if (_step.value != Step.RECIPIENT_LOOKUP || ownerUserId == null ||
+            sessionOwner?.toRestString() != ownerUserId || begunEpoch != epoch) return
         onHandleChange(suggestion.handle)
-        lookupRecipient()
+        pickerVm.lookupRecent(suggestion.userId)
     }
 
     fun onHandleChange(value: String) {
@@ -1519,8 +1524,16 @@ class CreateViewModel(
         _selfRecipientLookupRejected.value = false
     }
 
+    /** Only the currently admitted picker result can advance its Compose effect. */
+    fun onPickerResolved(resolution: RecipientLookupUiState.Resolved) {
+        if (pickerVm.state.value !== resolution) return
+        onResolved(resolution.snapshot)
+        if (pendingRecipient.value === resolution.snapshot) pendingPickerResolution = resolution
+    }
+
     fun onResolved(snapshot: ResolvedHandleSnapshot) {
         if (!requireStep(Step.RECIPIENT_LOOKUP, "recipient resolution")) return
+        pendingPickerResolution = null
         selfRecipientTargetUserId?.let { expectedOwner ->
             val live = pickerVm.state.value as? RecipientLookupUiState.Resolved
             if (snapshot.userId.toRestString() != expectedOwner ||
@@ -1540,6 +1553,14 @@ class CreateViewModel(
         // recipient operation. Keep the immutable confirmed snapshot.
         if (_step.value == Step.FRONT && confirmedRecipient.value != null) return
         if (!requireStep(Step.RECIPIENT_CONFIRM, "recipient confirmation")) return
+        pendingPickerResolution?.let { resolution ->
+            if (pickerVm.state.value !== resolution) {
+                // A synchronous logout/input boundary may precede the next
+                // Activity frame. Do not bind the now-retired pending result.
+                restartLookup()
+                return
+            }
+        }
         try {
             recipientFlow.onConfirm()
         } catch (failure: IllegalStateException) {
@@ -1556,6 +1577,7 @@ class CreateViewModel(
             return
         }
         recipientFlow.restartLookup()
+        pendingPickerResolution = null
         selfRecipientTargetUserId = null
         _selfRecipientLookupRejected.value = false
         // The lookup screen observes Resolved and advances to confirmation.
@@ -2998,6 +3020,7 @@ class CreateViewModel(
             bridge.cancel(context, sessionId)
         }
         recipientFlow.clearTransientMaterial()
+        pendingPickerResolution = null
         pickerVm.reset()
         photoSelection.clear()
         _pickedPhotoIds.value = emptyList()

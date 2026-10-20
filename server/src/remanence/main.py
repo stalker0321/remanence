@@ -19,6 +19,7 @@ from remanence.api.dependencies import (
 from remanence.api.directory import router as directory_router
 from remanence.api.health import router as health_router
 from remanence.api.capsules import router as capsules_router
+from remanence.api.history import HistoryPrivacyMiddleware, router as history_router
 from remanence.api.music import router as music_router
 from remanence.api.problems import RequestIdMiddleware, problem_response
 from remanence.api.users import router as users_router
@@ -186,6 +187,7 @@ def create_app(
     telemetry = TelemetryIngress(TelemetryStore(lambda: getattr(app.state, "session_factory", None)))
     app.state.telemetry_ingress = telemetry
     app.add_middleware(RequestIdMiddleware, telemetry_app=telemetry)
+    app.add_middleware(HistoryPrivacyMiddleware)
     app.state.settings = resolved
     app.state.upload_reservations = (
         upload_reservations if upload_reservations is not None else build_upload_reservation_manager()
@@ -244,6 +246,7 @@ def create_app(
     app.include_router(users_router)
     app.include_router(directory_router)
     app.include_router(capsules_router)
+    app.include_router(history_router)
     app.include_router(music_router)
     app.include_router(recovery_router)
     app.include_router(safety_router)

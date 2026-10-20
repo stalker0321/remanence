@@ -49,6 +49,7 @@ export async function openGrantedPostcard(
   photos: readonly SealedPhoto[],
   measurer: TextMeasurer,
   artwork: HeldArtwork | null = null,
+  signal?: AbortSignal,
 ): Promise<OpenedPostcard> {
   const view = session.getSnapshot()
   const caps = keys.capabilities(view)
@@ -66,7 +67,8 @@ export async function openGrantedPostcard(
     const next = session.getSnapshot()
     const current = keys.capabilities(next)
     if (
-      next.generation !== generation
+      signal?.aborted
+      || next.generation !== generation
       || next.phase !== 'postcard-matched'
       || current !== caps
       || !grant.allows(next, capsule.capsuleId)
@@ -114,6 +116,7 @@ export async function openGrantedPostcard(
     plains.push(contentPlain)
     fresh()
     const manifest = await parseContentManifest(contentPlain)
+    fresh()
     if (!equalBytes(manifest.capsuleId, uuidToBytes(capsule.capsuleId))) throw new CollageError('INTEGRITY')
     const contentBlob = capsule.blobs.find((blob) => blob.blobId === content.blobId && blob.kind === 'CONTENT_MANIFEST')
     if (!contentBlob) throw new CollageError('INTEGRITY')
@@ -143,9 +146,11 @@ export async function openGrantedPostcard(
         throw new CollageError('INTEGRITY')
       }
       await assertDecodedSize(plain, size.width, size.height)
+      fresh()
       photoPlain.set(authored.contentId, plain)
     }
     const cover = await coverFor(manifest, artwork)
+    fresh()
     const prepared = await prepare(
       manifest.expression,
       manifest.note,

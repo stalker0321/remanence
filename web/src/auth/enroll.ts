@@ -171,6 +171,9 @@ async function readback(
     const current = session.getSnapshot()
     if (current.accountId !== accountId || current.bundleId !== bundleId) throw new AuthError('STALE')
     session.unlock()
+    if (signal?.aborted || session.getSnapshot().generation !== generation + 1
+      || session.getSnapshot().accountId !== accountId || session.getSnapshot().bundleId !== bundleId
+      || session.getSnapshot().phase !== 'keys-unlocked') throw new AuthError('STALE')
     keys.hold(session.getSnapshot(), caps)
   } catch (error) {
     caps.lock()

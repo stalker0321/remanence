@@ -47,7 +47,7 @@ export class PresentationMemory {
 
   getSnapshot = (): HeldSheet | null => this.#sheet
 
-  hold(view: PublicSession, opened: OpenedPostcard): void {
+  hold(view: PublicSession, opened: OpenedPostcard): HeldSheet {
     if (view.phase !== 'postcard-matched') throw new CollageError('GRANT')
     this.#release()
     try {
@@ -66,8 +66,10 @@ export class PresentationMemory {
         artwork = this.urls.create(copy, 'image/webp')
         this.#urls.push(artwork)
       }
-      this.#sheet = { scene: opened.scene, photos, artwork }
+      const held = { scene: opened.scene, photos, artwork }
+      this.#sheet = held
       this.#emit()
+      return held
     } catch (error) {
       this.#release()
       throw error
@@ -100,11 +102,14 @@ export class PresentationMemory {
 }
 
 export function showGrantedPostcard(session: SessionStore, memory: PresentationMemory, opened: OpenedPostcard): void {
-  memory.hold(session.getSnapshot(), opened)
+  const view = session.getSnapshot()
+  let owned: HeldSheet | null = null
   try {
+    owned = memory.hold(view, opened)
+    if (session.getSnapshot().generation !== view.generation || memory.getSnapshot() !== owned) throw new CollageError('STALE')
     session.admitPresentation()
   } catch (error) {
-    memory.clear()
+    if (owned !== null && memory.getSnapshot() === owned) memory.clear()
     throw error
   } finally {
     for (const bytes of opened.photos.values()) bytes.fill(0)

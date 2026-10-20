@@ -28,17 +28,27 @@ export async function continueWithGoogle(
   draft?: RegistrationDraft,
 ): Promise<GoogleOutcome> {
   if (session.getSnapshot().phase !== 'signed-out') throw new AuthError('ILLEGAL_PHASE')
+  const generation = session.getSnapshot().generation
+  draft?.wipe()
+  const epoch = draft?.epoch
+  const current = () => {
+    if (signal?.aborted) throw new AuthError('CANCELLED')
+    if (session.getSnapshot().generation !== generation || session.getSnapshot().phase !== 'signed-out'
+      || draft?.epoch !== epoch) throw new AuthError('STALE')
+  }
+  current()
   const options = await transport.request({
     path: '/v1/auth/google/options',
     method: 'POST',
     body: {},
     signal,
   })
-  if (signal?.aborted) throw new AuthError('CANCELLED')
+  current()
   if (options.status === 404) throw new AuthError('GOOGLE_CLIENT_UNAVAILABLE')
   const challenge = readChallenge(options.status === 200 ? options.body : null)
   if (!challenge) throw new AuthError('GOOGLE_REJECTED')
   const idToken = await identity.requestIdToken(challenge.clientId, challenge.nonce, signal)
+  current()
   if (typeof idToken !== 'string' || idToken.length < 1 || idToken.length > 16384) {
     throw new AuthError('GOOGLE_REJECTED')
   }
@@ -48,13 +58,15 @@ export async function continueWithGoogle(
     body: { flow: challenge.flow, nonce: challenge.nonce, id_token: idToken },
     signal,
   })
-  if (signal?.aborted) throw new AuthError('CANCELLED')
+  current()
   const outcome = applyVerify(session, verified.status, verified.body)
   if (outcome.kind === 'needs-handle') {
     if (draft) {
       const ticket = readTicket(verified.body)
       if (!ticket) throw new AuthError('GOOGLE_REJECTED')
-      draft.replace(ticket.flow, ticket.token)
+      // T388 continuity gate: no account/identity is created, and an unusable
+      // registration ticket is not held as though setup could safely resume.
+      draft.wipe()
     }
   } else {
     draft?.wipe()

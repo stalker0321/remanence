@@ -1,7 +1,8 @@
 import type { MemoryKeys } from '../auth/memoryKeys'
+import type { ApiTransport } from '../auth/http'
 import { CollageError } from '../collage/errors'
 import { showGrantedPostcard, type PresentationMemory } from '../collage/memory'
-import { openGrantedPostcard, type SealedPhoto } from '../collage/open'
+import { openGrantedPostcard, type OpenedPostcard, type SealedPhoto } from '../collage/open'
 import type { TextMeasurer } from '../collage/prepare'
 import { arrayBuffer, bytesToHex } from '../protocol/bytes'
 import { b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
@@ -11,13 +12,14 @@ import type { StillCapture } from './camera'
 import { ScanError } from './errors'
 import { admitScan, considerCapture, type RecognitionEngine } from './grant'
 import type { RecognitionIndex } from './recognitionIndex'
+import { admitFirstOpen } from './admission'
 
 export interface CiphertextPort {
   read(item: IncomingCapsule, blobId: string, signal: AbortSignal): Promise<Uint8Array>
 }
 
 /**
- * Incoming list, local still, one grant, then decrypt and admit.
+ * Incoming list, local still, prepare, server first-open, owned presentation.
  * An empty list, a missing body, or a changed session never draws a sheet.
  * Callers that supply JS ciphertext must not call it Android output.
  */
@@ -32,6 +34,8 @@ export async function receivePostcard(
   measurer: TextMeasurer,
   signal: AbortSignal,
   index?: RecognitionIndex,
+  transport?: ApiTransport,
+  onAdmission?: () => void,
 ): Promise<void> {
   if (signal.aborted) throw new ScanError('CANCELLED')
   const view = session.getSnapshot()
@@ -48,6 +52,7 @@ export async function receivePostcard(
   if (!content || photos.length === 0 || item.envelopeCiphertext.length === 0) throw new ScanError('BODY_MISSING')
   const downloaded: Uint8Array[] = []
   let matchedGeneration: number | null = null
+  let opened: OpenedPostcard | null = null
   try {
     const contentBytes = await readChecked(blobs, item, content, signal)
     downloaded.push(contentBytes)
@@ -61,25 +66,42 @@ export async function receivePostcard(
       sealedPhotos.push({ blobId: photo.blobId, ordinal: photo.ordinal ?? 0, ciphertext: bytes })
     }
     if (signal.aborted) throw new ScanError('CANCELLED')
-    if (keys.capabilities(session.getSnapshot()) === null) throw new ScanError('GRANT_MISMATCH')
+    const caps = keys.capabilities(session.getSnapshot())
+    if (caps === null || caps.accountId !== view.accountId || caps.bundleId !== item.recipientKeyBundleId
+      || view.bundleId !== item.recipientKeyBundleId) throw new ScanError('GRANT_MISMATCH')
     admitScan(session, grant)
     // matchPostcard advances exactly this generation once. A synchronous
     // subscriber may already have replaced it by the time admitScan returns.
     matchedGeneration = generation + 1
-    const opened = await openGrantedPostcard(session, keys, grant, item, {
+    const currentToken = () => {
+      if (signal.aborted) throw new ScanError('CANCELLED')
+      const next = session.getSnapshot()
+      if (next.generation !== matchedGeneration || next.phase !== 'postcard-matched'
+        || next.accountId !== view.accountId || next.bundleId !== view.bundleId
+        || keys.capabilities(next) !== caps) throw new ScanError('STALE')
+      const secrets = session.secretsFor(next.generation)
+      if (!secrets) throw new ScanError('STALE')
+      return secrets.accessToken
+    }
+    currentToken()
+    opened = await openGrantedPostcard(session, keys, grant, item, {
       blobId: content.blobId,
       ciphertext: contentBytes,
-    }, sealedPhotos, measurer)
-    if (signal.aborted) {
-      for (const bytes of opened.photos.values()) bytes.fill(0)
-      opened.artwork?.fill(0)
-      throw new ScanError('CANCELLED')
-    }
+    }, sealedPhotos, measurer, null, signal)
+    currentToken()
+    onAdmission?.()
+    currentToken()
+    await admitFirstOpen(transport, item.capsuleId, currentToken, signal)
+    currentToken()
     showGrantedPostcard(session, memory, opened)
   } catch (error) {
     if (matchedGeneration !== null) session.retryMatchedPostcard(matchedGeneration)
     throw error
   } finally {
+    if (opened) {
+      for (const bytes of opened.photos.values()) bytes.fill(0)
+      opened.artwork?.fill(0)
+    }
     for (const bytes of downloaded) bytes.fill(0)
   }
 }
@@ -91,12 +113,17 @@ async function readChecked(
   signal: AbortSignal,
 ): Promise<Uint8Array> {
   const body = await blobs.read(item, blob.blobId, signal)
-  if (body.length !== blob.ciphertextSize) throw new CollageError('INTEGRITY')
-  const digestBytes = new Uint8Array(await crypto.subtle.digest('SHA-256', arrayBuffer(body)))
-  if (bytesToHex(digestBytes) !== blob.ciphertextSha256 && b64(digestBytes) !== blob.ciphertextSha256) {
-    throw new CollageError('INTEGRITY')
+  try {
+    if (signal.aborted) throw new ScanError('CANCELLED')
+    if (body.length !== blob.ciphertextSize) throw new CollageError('INTEGRITY')
+    const digestBytes = new Uint8Array(await crypto.subtle.digest('SHA-256', arrayBuffer(body)))
+    if (signal.aborted) throw new ScanError('CANCELLED')
+    if (bytesToHex(digestBytes) !== blob.ciphertextSha256 && b64(digestBytes) !== blob.ciphertextSha256) throw new CollageError('INTEGRITY')
+    return body
+  } catch (error) {
+    body.fill(0)
+    throw error
   }
-  return body
 }
 
 function stillUnlocked(session: SessionStore, generation: number): void {

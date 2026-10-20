@@ -1,7 +1,6 @@
 import { generateLocalIdentity, type LocalIdentity } from '../crypto/identity'
 import type { SessionStore } from '../session/session'
 import { AuthError } from './errors'
-import { acceptSignedIn } from './google'
 import { normalizeHandle } from './handle'
 import type { ApiTransport } from './http'
 
@@ -14,6 +13,12 @@ export class RegistrationDraft {
   #flow: string | null = null
   #token: string | null = null
   #identity: LocalIdentity | null = null
+  #epoch = 0
+  #pending: Promise<LocalIdentity> | null = null
+
+  constructor(private readonly generate: () => Promise<LocalIdentity> = generateLocalIdentity) {}
+
+  get epoch(): number { return this.#epoch }
 
   replace(flow: string, token: string): void {
     this.wipe()
@@ -37,8 +42,18 @@ export class RegistrationDraft {
   async identity(): Promise<LocalIdentity> {
     if (this.#identity && !this.#identity.wiped) return this.#identity
     if (!this.hasTicket()) throw new AuthError('IDENTITY_ABSENT')
-    this.#identity = await generateLocalIdentity()
-    return this.#identity
+    if (this.#pending) return this.#pending
+    const epoch = this.#epoch
+    const pending = this.generate().then((identity) => {
+      if (this.#epoch !== epoch || !this.hasTicket()) {
+        identity.wipe()
+        throw new AuthError('STALE')
+      }
+      this.#identity = identity
+      return identity
+    }).finally(() => { if (this.#pending === pending) this.#pending = null })
+    this.#pending = pending
+    return pending
   }
 
   consumeTicket(): void {
@@ -47,6 +62,8 @@ export class RegistrationDraft {
   }
 
   wipe(): void {
+    this.#epoch += 1
+    this.#pending = null
     this.#flow = null
     this.#token = null
     this.#identity?.wipe()
@@ -55,49 +72,22 @@ export class RegistrationDraft {
 }
 
 /**
- * Posts the held ticket and the one identity. A taken handle keeps both.
- * Success signs in and drops the ticket. The identity stays for enrollment.
+ * Fail closed until a separately approved resumable registration protocol can
+ * protect/read back the identity before an irreversible public-bundle commit.
+ * Existing recovery requires an already authenticated account: warnings or a
+ * navigation guard cannot bridge reload/ambiguous registration. No POST or
+ * identity generation here. Existing-account login/restore is unaffected.
  */
 export async function registerNewAccount(
   session: SessionStore,
-  transport: ApiTransport,
+  _transport: ApiTransport,
   draft: RegistrationDraft,
   rawHandle: string,
   signal?: AbortSignal,
 ): Promise<void> {
   if (session.getSnapshot().phase !== 'signed-out') throw new AuthError('ILLEGAL_PHASE')
-  const ticket = draft.ticket()
-  if (!ticket) throw new AuthError('REGISTRATION_REJECTED')
-  const handle = normalizeHandle(rawHandle)
+  normalizeHandle(rawHandle)
   if (signal?.aborted) throw new AuthError('CANCELLED')
-  const identity = await draft.identity()
-  if (signal?.aborted) throw new AuthError('CANCELLED')
-  const verified = await transport.request({
-    path: '/v1/auth/google/register',
-    method: 'POST',
-    body: {
-      flow: ticket.flow,
-      registration_token: ticket.token,
-      handle,
-      key_bundle: identity.publicBundle(),
-    },
-    signal,
-  })
-  if (signal?.aborted) throw new AuthError('CANCELLED')
-  const root = record(verified.body)
-  const reason = typeof root?.reason === 'string' ? root.reason : ''
-  if (verified.status === 409 && reason === 'REGISTRATION_CONFLICT') throw new AuthError('HANDLE_TAKEN')
-  if (!acceptSignedIn(session, verified.status, verified.body)) throw new AuthError('REGISTRATION_REJECTED')
-  const view = session.getSnapshot()
-  if (view.bundleId !== identity.bundleId || view.handle !== handle) {
-    session.signOut()
-    draft.wipe()
-    throw new AuthError('REGISTRATION_REJECTED')
-  }
-  draft.consumeTicket()
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  return value as Record<string, unknown>
+  draft.wipe()
+  throw new AuthError('REGISTRATION_PAUSED')
 }

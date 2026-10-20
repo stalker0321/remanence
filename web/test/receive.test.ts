@@ -2,13 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { MemoryKeys } from '../src/auth/memoryKeys'
 import { PresentationMemory } from '../src/collage/memory'
 import { CollageError } from '../src/collage/errors'
-import { receivePostcard, type CiphertextPort } from '../src/scan/receive'
+import { receivePostcard as receive, type CiphertextPort } from '../src/scan/receive'
 import { explainScan } from '../src/scan/notice'
 import { unavailableRecognition, type RecognitionEngine } from '../src/scan/grant'
 import { SessionStore } from '../src/session/session'
 import type { IncomingCapsule, IncomingCatalog } from '../src/sync/incoming'
 import { fitText } from './sheets'
 import { jsPressCapture, jsPressIds, jsPressMaterial } from './sealedFixture'
+
+// Existing local-receive controls now explicitly supply a synthetic successful
+// admission. The dedicated first-open suite exercises denial/unknown/fences.
+function receivePostcard(...args: Parameters<typeof receive>): ReturnType<typeof receive> {
+  args[10] = { request: async () => ({ status: 200, body: {
+    capsule_id: jsPressIds.capsule, state: 'OPENED', first_opened_at: '2026-10-20T12:00:00Z', is_replay: false,
+  } }) }
+  return receive(...args)
+}
 
 function unlocked(): SessionStore {
   const session = new SessionStore()

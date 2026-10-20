@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { explainFailure, explainGoogle, explainRestore } from '../auth/notice'
 import { browserGoogleIdentity } from '../auth/googleBrowser'
 import { continueWithGoogle, type GoogleIdentityPort } from '../auth/google'
-import { RegistrationDraft, registerNewAccount } from '../auth/register'
+import { RegistrationDraft } from '../auth/register'
 import { enrollHeldIdentity } from '../auth/enroll'
 import { b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
 import { apiOrigin, fetchTransport, type ApiTransport, type ByteTransport } from '../auth/http'
@@ -96,6 +96,18 @@ export function App({
   const layers = useSyncExternalStore(navigation.subscribe, navigation.getSnapshot)
   const presenting = view.phase === 'presentation-admitted' && held !== null
   const t = (key: MessageKey) => translate(view.language, key)
+
+  useEffect(() => {
+    const current = draft.current
+    let previous = store.getSnapshot()
+    const stop = store.subscribe(() => {
+      const next = store.getSnapshot()
+      if (next.generation !== previous.generation &&
+        (next.phase === 'signed-out' || (next.bundleId !== null && current.bundleId() !== next.bundleId))) current.wipe()
+      previous = next
+    })
+    return () => { stop(); current.wipe() }
+  }, [store])
 
   useEffect(() => {
     const sync = () => {
@@ -249,6 +261,8 @@ export function Scan({
   const operation = useRef(0)
   const [live, setLive] = useState(false)
   const [held, setHeld] = useState(false)
+  const [working, setWorking] = useState(false)
+  const [openStatus, setOpenStatus] = useState<MessageKey>('scanPreparing')
 
   function release() {
     operation.current += 1
@@ -337,6 +351,8 @@ export function Scan({
       return
     }
     busy.current = true
+    setWorking(true)
+    setOpenStatus('scanPreparing')
     const attempt = ++operation.current
     const controller = new AbortController()
     openAbort.current?.abort()
@@ -376,17 +392,25 @@ export function Scan({
           canvasTextMeasurer(document),
           controller.signal,
           index,
+          transport,
+          () => { if (!controller.signal.aborted && operation.current === attempt) setOpenStatus('openChecking') },
         )
       } finally {
         index?.dispose()
         // This attempt owns the collected metadata buffers.
         wipeIncomingCatalog(incoming.items)
       }
-      if (!controller.signal.aborted) onNotice('errorRegion')
+      if (!controller.signal.aborted && operation.current === attempt) {
+        release()
+        setLive(false)
+        setHeld(false)
+        setWorking(false)
+        onNotice('errorRegion')
+      }
     } catch (error) {
-      if (!controller.signal.aborted) onNotice(explainScan(error))
+      if (!controller.signal.aborted && operation.current === attempt) onNotice(explainScan(error))
     } finally {
-      if (operation.current === attempt) busy.current = false
+      if (operation.current === attempt) { busy.current = false; setWorking(false) }
     }
   }
 
@@ -394,6 +418,7 @@ export function Scan({
     release()
     setLive(false)
     setHeld(false)
+    setWorking(false)
     onNotice('errorRegion')
   }
 
@@ -403,11 +428,12 @@ export function Scan({
       <p>{t('scanWaiting')}</p>
       <div ref={host} />
       {held ? <p>{t('cameraHeld')}</p> : null}
+      {working ? <p role="status">{t(openStatus)}</p> : null}
       <div className="actions">
         {live ? (
           <>
-            <button type="button" className="primary" onClick={() => { void take() }}>{t('takePicture')}</button>
-            {held ? <button type="button" onClick={() => { void match() }}>{t('matchPicture')}</button> : null}
+            <button type="button" className="primary" aria-disabled={working} onClick={() => { void take() }}>{t('takePicture')}</button>
+            {held ? <button type="button" aria-disabled={working} onClick={() => { void match() }}>{t('matchPicture')}</button> : null}
             <button type="button" onClick={close}>{t('closeCamera')}</button>
           </>
         ) : (
@@ -1290,7 +1316,6 @@ function Account({
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [busy, setBusy] = useState(false)
   const [choosing, setChoosing] = useState(() => draft.hasTicket())
-  const [handle, setHandle] = useState('')
   const [recoveryCode, setRecoveryCode] = useState('')
   const busyRef = useRef(false)
   const abort = useRef<AbortController | null>(null)
@@ -1298,6 +1323,28 @@ function Account({
   const unlocked = signedIn && view.phase !== 'authenticated'
 
   useEffect(() => () => abort.current?.abort(), [])
+
+  useEffect(() => {
+    let previous = store.getSnapshot()
+    return store.subscribe(() => {
+      const next = store.getSnapshot()
+      if (next.accountId !== previous.accountId || next.bundleId !== previous.bundleId ||
+        (next.generation !== previous.generation && next.phase === 'signed-out')) {
+        cancel()
+        setRecoveryCode('')
+        setChoosing(false)
+        onNotice('errorRegion')
+      }
+      previous = next
+    })
+  }, [store])
+
+  function cancel() {
+    abort.current?.abort()
+    abort.current = null
+    busyRef.current = false
+    setBusy(false)
+  }
 
   async function run(action: (signal: AbortSignal) => Promise<MessageKey | null>) {
     if (busyRef.current) return
@@ -1323,17 +1370,18 @@ function Account({
     <section className="card">
       <h1>{t('authTitle')}</h1>
       <p>{t('authBody')}</p>
+      {!signedIn ? <p>{t('accountExistingOnly')}</p> : null}
       <p>{view.handle ? view.handle : t(phaseKey(view.phase))}</p>
       <div className="actions">
         {signedIn ? null : (
           <button
             type="button"
             className="primary"
-            disabled={busy}
+            aria-disabled={busy}
             onClick={() => {
               void run(async (signal) => {
                 const outcome = await continueWithGoogle(store, transport, google, signal, draft)
-                setChoosing(draft.hasTicket())
+                if (!signal.aborted) setChoosing(outcome.kind === 'needs-handle')
                 return explainGoogle(outcome)
               })
             }}
@@ -1350,9 +1398,8 @@ function Account({
               void run(async (signal) => {
                 const outcome = await enrollHeldIdentity(store, transport, passkeys, keys, draft, signal)
                 if (outcome.kind === 'enrolled') {
-                  const shown = b64(outcome.code)
-                  outcome.code.fill(0)
-                  setRecoveryCode(shown)
+                  try { if (!signal.aborted) setRecoveryCode(b64(outcome.code)) }
+                  finally { outcome.code.fill(0) }
                 }
                 return null
               })
@@ -1379,11 +1426,8 @@ function Account({
         {signedIn ? (
           <button
             type="button"
-            disabled={busy}
             onClick={() => {
-              abort.current?.abort()
-              busyRef.current = false
-              setBusy(false)
+              cancel()
               draft.wipe()
               store.signOut()
               setChoosing(false)
@@ -1396,35 +1440,12 @@ function Account({
         ) : null}
         <a href={href('home')}>{t('back')}</a>
       </div>
+      {busy ? <div className="actions"><p role="status">{t('accountWorking')}</p><button type="button" onClick={cancel}>{t('accountCancel')}</button></div> : null}
       {recoveryCode ? <p className="recovery-code">{t('recoveryCodeHint')} {recoveryCode}</p> : null}
       {choosing && !signedIn ? (
-        <form
-          className="handle-form"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void run(async (signal) => {
-              await registerNewAccount(store, transport, draft, handle, signal)
-              setChoosing(false)
-              return null
-            })
-          }}
-        >
-          <p>{t('chooseHandle')}</p>
-          <p>{t('registrationUnsaved')}</p>
-          <label>
-            {t('handleLabel')}
-            <input
-              value={handle}
-              autoComplete="off"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              maxLength={32}
-              onChange={(event) => setHandle(event.target.value)}
-            />
-          </label>
+        <div className="handle-form">
+          <p>{t('registrationPaused')}</p>
           <div className="actions">
-            <button type="submit" className="primary" disabled={busy}>{t('createAccount')}</button>
             <button
               type="button"
               disabled={busy}
@@ -1432,14 +1453,13 @@ function Account({
                 abort.current?.abort()
                 draft.wipe()
                 setChoosing(false)
-                setHandle('')
                 onNotice('errorRegion')
               }}
             >
               {t('cancelRegistration')}
             </button>
           </div>
-        </form>
+        </div>
       ) : null}
     </section>
   )

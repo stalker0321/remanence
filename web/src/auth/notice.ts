@@ -7,7 +7,7 @@ export function explainGoogle(outcome: GoogleOutcome): MessageKey | null {
   if (outcome.kind === 'signed-in') return null
   if (outcome.kind === 'existing-account-requires-link') return 'linkRequired'
   if (outcome.kind === 'client-upgrade-required') return 'upgradeRequired'
-  return 'needsHandle'
+  return 'registrationPaused'
 }
 
 export function explainRestore(outcome: RestoreOutcome): MessageKey | null {
@@ -42,6 +42,8 @@ export function explainFailure(error: unknown): MessageKey {
       return 'handleTaken'
     case 'REGISTRATION_REJECTED':
       return 'registrationFailed'
+    case 'REGISTRATION_PAUSED':
+      return 'registrationPaused'
     case 'PASSKEY_CANCELLED':
       return 'passkeyCancelled'
     case 'PRF_UNAVAILABLE':
@@ -49,7 +51,7 @@ export function explainFailure(error: unknown): MessageKey {
     case 'PASSKEY_UNAVAILABLE':
       return 'passkeyUnavailable'
     case 'RECOVERY_NOT_STARTED':
-      return 'recoveryNotStarted'
+      return 'identityContinuityMissing'
     case 'WRONG_CREDENTIAL':
     case 'WRONG_ACCOUNT':
       return 'wrongPasskey'

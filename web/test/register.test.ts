@@ -13,7 +13,6 @@ const FLOW = '11111111-1111-4111-8111-111111111111'
 const NONCE = 'A'.repeat(43)
 const TOKEN = 'B'.repeat(43)
 const CLIENT = 'web-test.apps.googleusercontent.com'
-const ACCOUNT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 
 function scripted(handle: (input: ApiRequest, calls: ApiRequest[]) => ApiResult): { transport: ApiTransport; calls: ApiRequest[] } {
   const calls: ApiRequest[] = []
@@ -32,64 +31,41 @@ function identity(): GoogleIdentityPort {
   return { requestIdToken: async () => 'header.payload.signature' }
 }
 
-function login(bundleId: string, handle = 'ada') {
-  return {
-    status: 'SIGNED_IN',
-    login: {
-      user: { user_id: ACCOUNT, email: 'person@example.com', handle },
-      active_key_bundle: { key_bundle_id: bundleId, suite: 'HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519', protocol_version: 1, status: 'ACTIVE' },
-      session_id: FLOW,
-      access_token: 'access-token-value',
-      refresh_token: 'refresh-token-value',
-      access_expires_at: '2026-10-17T00:00:00Z',
-      refresh_expires_at: '2026-11-17T00:00:00Z',
-    },
-  }
-}
-
 describe('new account registration', () => {
-  it('keeps one identity across a taken handle and does not register an existing account', async () => {
+  it('gates new registration without generating keys or sending a public bundle', async () => {
     const session = new SessionStore()
     const draft = new RegistrationDraft()
     const { transport, calls } = scripted((input) => {
       if (input.path.endsWith('/options')) return { status: 200, body: { flow: FLOW, nonce: NONCE, client_id: CLIENT } }
-      if (input.path.endsWith('/verify')) {
-        return { status: 200, body: { status: 'NEEDS_HANDLE', flow: FLOW, registration_token: TOKEN } }
-      }
-      const body = input.body as { handle: string; key_bundle: { key_bundle_id: string } }
-      if (body.handle === 'taken') return { status: 409, body: { reason: 'REGISTRATION_CONFLICT' } }
-      return { status: 200, body: login(body.key_bundle.key_bundle_id, body.handle) }
+      return { status: 200, body: { status: 'NEEDS_HANDLE', flow: FLOW, registration_token: TOKEN } }
     })
-    const outcome = await continueWithGoogle(session, transport, identity(), undefined, draft)
-    expect(outcome).toEqual({ kind: 'needs-handle' })
-    expect(JSON.stringify(outcome)).not.toContain(TOKEN)
-    expect(draft.hasTicket()).toBe(true)
-    expect(session.getSnapshot().phase).toBe('signed-out')
-
-    await expect(registerNewAccount(session, transport, draft, 'Taken', undefined)).rejects.toMatchObject({ code: 'HANDLE_TAKEN' })
-    const first = calls.filter((call) => call.path.endsWith('/register'))
-    expect(first).toHaveLength(1)
-    const firstBody = first[0]?.body as { key_bundle: { encryption_public_keyset: string; key_bundle_id: string } }
-    const bundleId = draft.bundleId()
-    expect(bundleId).toBe(firstBody.key_bundle.key_bundle_id)
-    expect(nameUuidFromBytes(unb64(firstBody.key_bundle.encryption_public_keyset))).toBe(bundleId)
-    parseHpkePublicKeyset(unb64(firstBody.key_bundle.encryption_public_keyset))
-    parseEd25519PublicKeyset(unb64((first[0]?.body as { key_bundle: { signing_public_keyset: string } }).key_bundle.signing_public_keyset))
-
-    await registerNewAccount(session, transport, draft, '@Ada', undefined)
-    const posts = calls.filter((call) => call.path.endsWith('/register'))
-    expect(posts).toHaveLength(2)
-    const second = posts[1]?.body as { handle: string; registration_token: string; key_bundle: { encryption_public_keyset: string } }
-    expect(second.handle).toBe('ada')
-    expect(second.registration_token).toBe(TOKEN)
-    expect(second.key_bundle.encryption_public_keyset).toBe(firstBody.key_bundle.encryption_public_keyset)
-    expect(session.getSnapshot().phase).toBe('authenticated')
-    expect(session.getSnapshot().handle).toBe('ada')
-    expect(session.getSnapshot().bundleId).toBe(bundleId)
+    expect(await continueWithGoogle(session, transport, identity(), undefined, draft)).toEqual({ kind: 'needs-handle' })
     expect(draft.hasTicket()).toBe(false)
-    expect(draft.bundleId()).toBe(bundleId)
-    await expect(registerNewAccount(session, transport, draft, 'ada')).rejects.toMatchObject({ code: 'ILLEGAL_PHASE' })
-    expect(calls.filter((call) => call.path.endsWith('/register'))).toHaveLength(2)
+    for (const handle of ['Taken', '@Ada']) {
+      await expect(registerNewAccount(session, transport, draft, handle)).rejects.toMatchObject({ code: 'REGISTRATION_PAUSED' })
+    }
+    expect(draft.bundleId()).toBeNull()
+    expect(session.getSnapshot().phase).toBe('signed-out')
+    expect(calls.some((call) => call.path.endsWith('/register'))).toBe(false)
+  })
+
+  it('keeps one held identity during concurrent calls and wipes a late generated identity after replacement', async () => {
+    const draft = new RegistrationDraft()
+    draft.replace(FLOW, TOKEN)
+    const [left, right] = await Promise.all([draft.identity(), draft.identity()])
+    expect(left).toBe(right)
+    expect(nameUuidFromBytes(unb64(left.publicBundle().encryption_public_keyset))).toBe(left.bundleId)
+    parseHpkePublicKeyset(unb64(left.publicBundle().encryption_public_keyset))
+    parseEd25519PublicKeyset(unb64(left.publicBundle().signing_public_keyset))
+    draft.wipe()
+    expect(left.wiped).toBe(true)
+    expect(draft.bundleId()).toBeNull()
+    const pending = new RegistrationDraft()
+    pending.replace(FLOW, TOKEN)
+    const late = pending.identity()
+    pending.wipe()
+    await expect(late).rejects.toMatchObject({ code: 'STALE' })
+    expect(pending.bundleId()).toBeNull()
   })
 
   it('drops the ticket when the email already belongs to an account', async () => {

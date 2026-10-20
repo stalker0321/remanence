@@ -37,6 +37,12 @@ export function explainScan(error: unknown): MessageKey {
   }
   if (error instanceof ScanError) {
     switch (error.code) {
+      case 'ADMISSION_AUTH_REQUIRED':
+        return 'openSignIn'
+      case 'ADMISSION_DENIED':
+        return 'openDenied'
+      case 'ADMISSION_UNAVAILABLE':
+        return 'openUnconfirmed'
       case 'EMPTY':
         return 'emptyIndex'
       case 'NO_MATCH':

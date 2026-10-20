@@ -50,6 +50,7 @@ export function atomicTransport(origin: string, send: typeof fetch = fetch): Ato
       path = `/v1/auth/${input.action}`
     } else {
       if (!isCanonicalUuid(input.reservation) || !/^rgs_[A-Za-z0-9_-]{43}$/.test(input.token)) throw new AtomicError('TRANSPORT_FAILED')
+      binary(input.token.slice(4), 43)
       if (input.action !== 'status' && !actions.has(input.action)) throw new AtomicError('TRANSPORT_FAILED')
       path = `/v2/registration/reservations/${input.reservation}${input.action === 'status' ? '' : `/${input.action}`}`
       headers.authorization = `Bearer ${input.token}`
@@ -113,7 +114,7 @@ export function binary(value: unknown, max = 131072): string {
 }
 function date(value: unknown): string {
   const text = string(value, 64)
-  if (!Number.isFinite(Date.parse(text))) throw new AtomicError('SETUP_REJECTED')
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(text) || !Number.isFinite(Date.parse(text))) throw new AtomicError('SETUP_REJECTED')
   return text
 }
 export function outcome(value: unknown): Outcome {
@@ -131,6 +132,7 @@ export function reservation(value: unknown): Reservation {
 export function setupReply(value: unknown): SetupReply {
   const r = object(value)
   if (r.status !== 'SETUP_REQUIRED' || typeof r.setup_token !== 'string' || !/^rgs_[A-Za-z0-9_-]{43}$/.test(r.setup_token)) throw new AtomicError('SETUP_REJECTED')
+  binary(r.setup_token.slice(4), 43)
   return { status: 'SETUP_REQUIRED', reservation: reservation(r.reservation), setup_token: r.setup_token, setup_session_id: uuid(r.setup_session_id), setup_expires_at: date(r.setup_expires_at) }
 }
 export function login(value: unknown): SignInInput {

@@ -199,6 +199,7 @@ export class AtomicRegistration {
       if (assertion.id !== owner.credential) throw new AtomicError('WRONG_CREDENTIAL')
       const verified = await this.#post(owner, 'setup/verify', { epoch, flow, response })
       if (verified.authentication_verified !== true || verified.credential_id !== owner.credential || typeof verified.final_authorization !== 'string' || !/^rgf_[A-Za-z0-9_-]{43}$/.test(verified.final_authorization)) throw new AtomicError('SETUP_REJECTED')
+      binary(verified.final_authorization.slice(4), 43)
       const grant = verified.final_authorization
       if (owner.candidate) {
         // Reassert the SAME credential. Prove its PRF still opens the frozen

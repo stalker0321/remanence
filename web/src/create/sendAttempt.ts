@@ -71,6 +71,10 @@ export interface SendPorts {
 
 export type SendOutcome =
   | { kind: 'sent'; readyAt: string; locator: { code: string; hint: string } | null }
+  /** Validated authoritative finalize denial; same terminal one-attempt gate. */
+  | { kind: 'access-denied' }
+  /** Received temporary access failure. Not exhaustion or proof of rollback. */
+  | { kind: 'access-unavailable' }
   /** Local preflight/seal failure, or a received error response to draft
    * creation. The latter does not prove absence or rollback of server effects. */
   | { kind: 'refused'; stage: 'preflight' | 'seal' | 'draft'; code: string }
@@ -267,6 +271,8 @@ export async function runSendAttempt(
   } catch (error) {
     if (!visitCurrent(visit, ports)) return { kind: 'stale' }
     if (error instanceof PublishCapsuleError) {
+      if (!signal.aborted && error.stage === 'finalize' && error.status === 409 && error.accessFailure === 'limit') return { kind: 'access-denied' }
+      if (!signal.aborted && error.stage === 'finalize' && error.status === 503 && error.accessFailure === 'unavailable') return { kind: 'access-unavailable' }
       // Pre-request preflight refusals prove nothing left the device.
       if (error.stage === 'preflight') {
         return { kind: 'refused', stage: 'preflight', code: error.code ?? error.category }

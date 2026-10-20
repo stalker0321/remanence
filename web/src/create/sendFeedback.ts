@@ -9,6 +9,8 @@ export function sendFeedback(outcome: SendOutcome | null): {
 } | null {
   if (outcome === null || outcome.kind === 'stale') return null
   if (outcome.kind === 'sent') return { notice: 'sendSent', help: null }
+  if (outcome.kind === 'access-denied') return { notice: 'sendLimitReached', help: 'sendLimitHelp' }
+  if (outcome.kind === 'access-unavailable') return { notice: 'sendAccessUnavailable', help: 'sendAccessUnavailableHelp' }
   if (outcome.kind === 'unknown') return { notice: 'sendNotConfirmed', help: 'sendUncertainHelp' }
   return outcome.stage === 'draft'
     ? { notice: 'sendDraftFailed', help: 'sendUncertainHelp' }

@@ -1,9 +1,11 @@
 import { historyEn, historyRu, historyUk } from '../history/messages'
+import { accessEn, accessRu, accessUk } from '../access/messages'
 export const languages = ['en', 'ru', 'uk'] as const
 
 export type Language = (typeof languages)[number]
 
 export const messageKeys = [
+  ...Object.keys(accessEn) as (keyof typeof accessEn)[],
   ...Object.keys(historyEn) as (keyof typeof historyEn)[],
   'shellTitle',
   'shellReady',
@@ -140,6 +142,7 @@ export type MessageKey = (typeof messageKeys)[number]
 
 export const catalog: Record<Language, Record<MessageKey, string>> = {
   en: {
+    ...accessEn,
     ...historyEn,
     shellTitle: 'this app',
     shellReady: 'The app shell is available offline. Signing in, unlocking, scanning and sending still need a connection. Postcards and photos are not saved here.',
@@ -272,6 +275,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     settingsSignedOut: 'not signed in on this device.',
   },
   ru: {
+    ...accessRu,
     ...historyRu,
     shellTitle: 'это приложение',
     shellReady: 'Оболочка доступна без сети. Для входа, разблокировки, сканирования и отправки нужно соединение. Открытки и фотографии здесь не сохраняются.',
@@ -404,6 +408,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     settingsSignedOut: 'на этом устройстве вход не выполнен.',
   },
   uk: {
+    ...accessUk,
     ...historyUk,
     shellTitle: 'цей застосунок',
     shellReady: 'Оболонка доступна без мережі. Для входу, розблокування, сканування й надсилання потрібне з’єднання. Листівки та фотографії тут не зберігаються.',

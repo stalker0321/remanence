@@ -91,6 +91,10 @@
   overflow-wrap: anywhere;
 }
 
+.send-access .settings-facts { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.send-access button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.send-access button[aria-disabled="true"] { opacity: .6; cursor: wait; }
+
 @media (prefers-reduced-motion: reduce) {
   .language-trigger::after {
     transition: none;

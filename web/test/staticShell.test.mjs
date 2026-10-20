@@ -116,6 +116,7 @@ describe('static shell safety', () => {
     for (const [url, init] of [
       ['/v1/auth', {}], ['/recovery/x', {}], ['/music/v1/search', {}],
       ['/v1/capsules/outgoing', {}], ['/v1/recipients/recent', {}],
+      ['/v1/me/send-access', {}],
       ['/v2/pending-deliveries/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/cancel', { method: 'POST' }],
       ['/assets/lazy.js?token=x', {}], ['/unknown', {}], ['https://cross.invalid/assets/lazy.js', {}],
       ['/assets/lazy.js', { method: 'POST' }], ['/assets/lazy.js', { headers: { authorization: 'Bearer x' } }],

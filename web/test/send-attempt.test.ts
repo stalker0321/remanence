@@ -418,6 +418,19 @@ describe('runSendAttempt', () => {
     expect(outcome).toEqual({ kind: 'unknown', stage: 'finalize', code: 'transport' })
   })
 
+  it('code alone or abort after a validated response cannot become authoritative denial', async () => {
+    for (const aborted of [false, true]) {
+      const { visit, ports } = await buildVisit()
+      const controller = new AbortController()
+      ports.seal = fakeSeal as unknown as SendPortsFull['seal']
+      ports.publish = (async () => {
+        if (aborted) controller.abort()
+        throw new PublishCapsuleError('finalize', 'http', 409, 'SEND_LIMIT_REACHED', aborted ? 'limit' : undefined)
+      }) as unknown as SendPortsFull['publish']
+      expect(await runSendAttempt(visit, ports, controller.signal)).toEqual({ kind: 'unknown', stage: 'finalize', code: 'SEND_LIMIT_REACHED' })
+    }
+  })
+
   it('invalidation during publication: aborted signal + fences produce stale, and no retry publish', async () => {
     const { visit, ports, current } = await buildVisit()
     const seal = vi.fn(fakeSeal)
@@ -436,6 +449,21 @@ describe('runSendAttempt', () => {
 })
 
 describe('SendAttemptController', () => {
+  it.each(['limit', 'unavailable'] as const)('keeps%s response terminal without rearm/signature', async (failure) => {
+    const { visit, ports } = await buildVisit()
+    const seal = vi.fn(fakeSeal)
+    const publish = vi.fn(async () => { throw new PublishCapsuleError('finalize', 'http', failure === 'limit' ? 409 : 503, undefined, failure) })
+    ports.seal = seal as unknown as SendPortsFull['seal']
+    ports.publish = publish as unknown as SendPortsFull['publish']
+    const controller = new SendAttemptController(() => ports, () => true, () => {})
+    const { mounted: _mounted, ...clickVisit } = visit
+    expect(controller.begin(clickVisit)).toBe(true)
+    expect(await controller.run()).toEqual({ kind: failure === 'limit' ? 'access-denied' : 'access-unavailable' })
+    expect(controller.phase).toBe('terminal')
+    expect(controller.begin(clickVisit)).toBe(false)
+    expect(seal).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledTimes(1)
+  })
   it('admits exactly one attempt per visit; double-click and post-terminal begin are refused', async () => {
     const { visit, ports } = await buildVisit()
     ports.seal = fakeSeal as unknown as SendPortsFull['seal']

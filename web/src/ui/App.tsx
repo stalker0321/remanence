@@ -56,6 +56,7 @@ import { RecipientDraft, lookupRecipient, type RecipientSnapshot } from '../crea
 import { SessionStore } from '../session/session'
 import { HistoryPage } from '../history/HistoryPage'
 import { RecentRecipients } from '../history/RecentRecipients'
+import { SendAccessSection } from '../access/SendAccessSection'
 
 export function App({
   store,
@@ -164,6 +165,8 @@ export function App({
           handle={view.handle}
           signedIn={view.phase !== 'signed-out'}
           sessionState={t(phaseKey(view.phase))}
+          sendAccess={view.accountId !== null && view.phase !== 'signed-out'
+            ? <SendAccessSection key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} /> : null}
         />
       ) : null}
       {route === 'account' ? (

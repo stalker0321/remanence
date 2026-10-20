@@ -6,6 +6,7 @@ import { bytesToHex, utf8 } from '../protocol/bytes'
 import { limits } from '../protocol/limits'
 import { isCanonicalUuid, nameUuidFromBytes } from '../protocol/uuid'
 import type { SessionStore } from '../session/session'
+import { sendAccessProblem, type SendAccessFailure } from '../access/problems'
 
 /**
  * T304 — existing-user one-attempt three-step ciphertext publisher.
@@ -44,6 +45,7 @@ export class PublishCapsuleError extends Error {
     readonly category: string,
     readonly status?: number,
     readonly code?: string,
+    readonly accessFailure?: SendAccessFailure,
   ) {
     super(code ?? category)
     this.name = 'PublishCapsuleError'
@@ -346,7 +348,10 @@ export async function publishCapsule(input: PublishCapsuleInput): Promise<Publis
   } catch (error) {
     throw transportError('finalize', error)
   }
-  if (finalize.status !== 200 && finalize.status !== 201) throw refuse('finalize', categoryFor(problemCode(finalize.body)), finalize.status, problemCode(finalize.body) ?? undefined)
+  if (finalize.status !== 200 && finalize.status !== 201) {
+    throw new PublishCapsuleError('finalize', categoryFor(problemCode(finalize.body)), finalize.status,
+      problemCode(finalize.body) ?? undefined, sendAccessProblem(finalize.status, finalize.body) ?? undefined)
+  }
   const published = readFinalizeReceipt(finalize.body, owned)
   guard('finalize')
   return published

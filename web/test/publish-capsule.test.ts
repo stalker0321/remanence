@@ -82,6 +82,24 @@ afterEach(() => {
 })
 
 describe('production publishCapsule', () => {
+  it.each(['v1', 'pending'])('recognizes validated%s access errors only at finalize', async (shape) => {
+    const fixture = await buildSealedCapsuleFixture()
+    for (const status of [409, 503]) {
+      const code = status === 409 ? 'SEND_LIMIT_REACHED' : 'SEND_ACCESS_UNAVAILABLE'
+      const body = shape === 'pending' ? { type: 'about:blank', title: code, status, code }
+        : { type: 'https://remanence.invalid/problems/access', title: code, status, code,
+          detail: 'PRIVATE', request_id: SENDER_ID, retryable: status === 503 }
+      const { transport, calls } = makeTransport(fixture.capsule, { finalize: { status, body } })
+      await expect(publish(fixture, transport)).rejects.toMatchObject({ stage: 'finalize', status, accessFailure: status === 409 ? 'limit' : 'unavailable' })
+      expect(calls.draft).toHaveLength(1)
+      expect(calls.finalize).toHaveLength(1)
+      const malformed = makeTransport(fixture.capsule, { finalize: { status, body: { code } } })
+      await expect(publish(fixture, malformed.transport)).rejects.toMatchObject({ stage: 'finalize', accessFailure: undefined })
+      const early = makeTransport(fixture.capsule, { draft: { status, body } })
+      await expect(publish(fixture, early.transport)).rejects.toMatchObject({ stage: 'draft', accessFailure: undefined })
+      expect(early.calls.finalize).toHaveLength(0)
+    }
+  })
   it('exports only the production publisher + error (no reader/observer)', async () => {
     const mod = await import('../src/sync/publishCapsule')
     expect(Object.keys(mod).sort()).toEqual(['PublishCapsuleError', 'publishCapsule'])

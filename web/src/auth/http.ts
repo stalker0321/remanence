@@ -192,6 +192,12 @@ export function fetchTransport(origin: string): ApiTransport & ByteTransport & U
         if (error instanceof AuthError) throw error
         throw new AuthError('TRANSPORT_FAILED')
       }
+      // Proposed optional feature: an old server may return a non-JSON 404.
+      // Status alone hides it; do not interpret an HTML fallback as allowance.
+      if (input.path === '/v1/me/send-access' && input.method === 'GET' && response.status === 404) {
+        await response.body?.cancel().catch(() => undefined)
+        return { status: 404, body: null }
+      }
       const text = await readBounded(response)
       if (text.length === 0) return { status: response.status, body: null }
       try {

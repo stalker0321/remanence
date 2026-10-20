@@ -17,6 +17,10 @@ credentials or paths. Both the local result and App notice use the same mapping.
 In particular, an HTTP503 draft error remains `refused/draft` under the existing
 contract, but the UI does **not** infer absence of server effects from that name.
 Changing that classification would require a separate publisher-contract review.
+The earlier preparation-only descriptions ("nothing sent", photos not sent)
+are hidden once an attempt starts, so they cannot contradict working, unknown
+or completed results. The recipient's "front not captured yet" description also
+disappears when a front has been captured; the recipient identity stays visible.
 
 Working copy explains that leaving does not guarantee cancellation. Terminal
 failures have an explicit Home link. Neither that link nor language changes

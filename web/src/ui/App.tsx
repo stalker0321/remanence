@@ -995,7 +995,7 @@ export function Create({
   return (
     <section className="card">
       <h1>{t('homeMakeTitle')}</h1>
-      {confirmed ? <RecipientLine t={t} snapshot={confirmed} held /> : null}
+      {confirmed ? <RecipientLine t={t} snapshot={confirmed} held={sendPhase === 'idle' && !pictured} /> : null}
       {pending && !confirmed ? <RecipientLine t={t} snapshot={pending} held={false} /> : null}
       {!confirmed ? (
         <form
@@ -1054,7 +1054,7 @@ export function Create({
           <div ref={host} />
           {pictured && fpState === 'idle' ? <p>{t('frontHeld')}</p> : null}
           {pictured && fpState === 'working' ? <p>{t('frontWorking')}</p> : null}
-          {pictured && fpState === 'ready' ? <p>{t('frontReady')}</p> : null}
+          {pictured && fpState === 'ready' && sendPhase === 'idle' ? <p>{t('frontReady')}</p> : null}
           {pictured && fpState === 'failed' ? <p role="alert">{t('frontScanFailed')}</p> : null}
           <label className="handle-form">
             {t('noteLabel')}
@@ -1102,7 +1102,7 @@ export function Create({
               ))}
             </ul>
             <p>{photos.photos().length} / {PHOTO_COUNT_MAX}</p>
-            <p>{t('photoCount')}</p>
+            {sendPhase === 'idle' ? <p>{t('photoCount')}</p> : null}
           </div>
           {accepted !== null && noteFits ? (
             creatorImageState === 'loading' ? (
@@ -1170,7 +1170,7 @@ export function Create({
                 </li>
               ))}
             </ul>
-              <p>{t('musicNotSent')}</p>
+              {sendPhase === 'idle' ? <p>{t('musicNotSent')}</p> : null}
             </div>
             <div className="send-block">
               <button

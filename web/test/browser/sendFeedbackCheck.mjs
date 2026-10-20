@@ -68,6 +68,13 @@ async function check(name, work) {
   try { await work(); checks.push({ mode, name, ok: true }) }
   catch (error) { checks.push({ mode, name, ok: false, error: String(error) }) }
 }
+async function assertNoPreparationClaims(page, language) {
+  const visible = await page.locator('main.shell').innerText()
+  for (const key of ['recipientHeld', 'frontReady', 'photoCount', 'musicNotSent']) {
+    const text = await page.evaluate(([lang, name]) => window.sendFeedbackFixture.messages(lang)[name], [language, key])
+    assert.equal(visible.includes(text), false, `old preparation-only claim remained: ${key}`)
+  }
+}
 try {
   for (mode of modes) {
     calls = []
@@ -93,6 +100,7 @@ try {
         await check('pending-send-stays-disabled', async () => {
           assert.equal(await page.locator('[data-testid=send_button]').isDisabled(), true)
           assert.equal(calls.filter((call) => call.path === '/v1/capsules').length, 1)
+          await assertNoPreparationClaims(page, 'en')
         })
         await capture(page, 'waiting')
         await check('leaving-does-not-claim-cancellation-or-completion', async () => {
@@ -117,6 +125,7 @@ try {
             assert.equal(await page.locator('[data-testid=send_button]').isDisabled(), true)
             assert.equal(await page.locator('[data-testid=send_state]').innerText(), await page.evaluate(() => window.sendFeedbackFixture.messages('en').sendWorking))
             assert.equal(calls.length, 1)
+            await assertNoPreparationClaims(page, 'en')
             await page.locator('.card a[href="#/"]').last().focus()
             pendingFocus = await page.evaluateHandle(() => document.activeElement)
             await capture(page, 'waiting')
@@ -178,6 +187,7 @@ try {
             assert.equal(await page.locator('[data-testid=send_help]').innerText().then((value) => value.length > 10), true)
             const key = mode.startsWith('draft') || mode === 'delayed-draft' ? 'sendDraftFailed' : mode === 'local' ? 'sendNotSent' : 'sendNotConfirmed'
             assert.equal(await page.locator('[data-testid=send_state]').innerText(), await page.evaluate(([lang, name]) => window.sendFeedbackFixture.messages(lang)[name], [language, key]))
+            await assertNoPreparationClaims(page, language)
             await page.locator('[data-testid=send_exit]').focus()
             assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-testid')), 'send_exit')
             await capture(page, `${language}-${width}-magnified`)

@@ -158,8 +158,8 @@ async function main() {
     check('same owned receive retries into a decrypted three-photo sheet', sheet?.photos.size === 3)
     if (sheet) {
       createRoot(host).render(<CollageStage held={sheet} t={t} onClose={() => receiveSession.lock()} />)
-      await until(() => Boolean(host.querySelector('.stage')))
-      check('retried sheet is displayed in the actual stage', Boolean(host.querySelector('canvas')))
+      await until(() => host.querySelector('canvas')?.dataset.painted === 'ready')
+      check('retried sheet is painted in the actual stage', host.querySelector('canvas')?.dataset.painted === 'ready')
     }
   } catch (error) {
     check(String(error), false)

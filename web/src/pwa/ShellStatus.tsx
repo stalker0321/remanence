@@ -10,7 +10,7 @@ export function ShellStatus({ t, details }: { t: (key: MessageKey) => string; de
       : state.support === 'unavailable' ? 'shellUnavailable' : 'shellPreparing'
   return (
     <>
-      {!details ? <div className="status" role="status" aria-live="polite">
+      {!details ? <div className={state.offline || state.waiting ? 'status' : undefined} role="status" aria-live="polite">
         {state.offline ? <p>{t('shellOffline')}</p> : null}
         {state.waiting ? <p>{t('shellUpdate')}</p> : null}
       </div> : null}

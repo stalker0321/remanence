@@ -93,6 +93,12 @@ export class RecipientDraft {
     return this.#confirmed
   }
 
+  /** Editing an unconfirmed query retires its reply, not a confirmed address. */
+  cancelPending(): void {
+    this.#ticket += 1
+    this.#pending = null
+  }
+
   confirm(): void {
     if (this.#confirmed) return
     if (!this.#pending) throw new AuthError('ILLEGAL_PHASE')

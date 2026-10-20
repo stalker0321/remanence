@@ -539,6 +539,8 @@ export function Create({
       if (imageBridge.current === bridge) imageBridge.current = null
       frozenRef.current = null
       abort.current?.abort()
+      abort.current = null
+      recipient.cancelPending()
       musicAbort.current?.abort()
       if (musicTimer.current !== null) clearTimeout(musicTimer.current)
       fpAttempt.current += 1
@@ -548,6 +550,21 @@ export function Create({
       forgetPhotos()
     }
   }, [])
+
+  useEffect(() => {
+    let generation = store.getSnapshot().generation
+    return store.subscribe(() => {
+      const next = store.getSnapshot().generation
+      if (next === generation) return
+      generation = next
+      if (abort.current === null) return
+      abort.current.abort()
+      abort.current = null
+      recipient.cancelPending()
+      setBusy(false)
+      setStamp((value) => value + 1)
+    })
+  }, [store, recipient])
 
   useEffect(() => {
     if (bound) return
@@ -887,17 +904,30 @@ export function Create({
     }
   }
 
+  function editRecipient(value: string): void {
+    abort.current?.abort()
+    abort.current = null
+    recipient.cancelPending()
+    setBusy(false)
+    setHandle(value)
+    setStamp((next) => next + 1)
+    onNotice('errorRegion')
+  }
+
   async function lookup(mode: 'named' | 'self') {
     if (busy || !open || view.accountId === null) return
     abort.current?.abort()
     const controller = new AbortController()
     abort.current = controller
     const ticket = recipient.nextTicket(view.accountId)
+    const generation = store.getSnapshot().generation
+    const current = () => mounted.current && abort.current === controller
+      && !controller.signal.aborted && store.getSnapshot().generation === generation
     setBusy(true)
     setStamp((value) => value + 1)
     try {
       const outcome = await lookupRecipient(store, transport, handle, controller.signal, mode)
-      if (controller.signal.aborted) return
+      if (!current()) return
       if (outcome.kind === 'not-found') {
         onNotice('recipientNotFound')
         return
@@ -905,10 +935,13 @@ export function Create({
       if (!recipient.offer(ticket, view.accountId, outcome.snapshot)) return
       onNotice('errorRegion')
     } catch (error) {
-      if (!controller.signal.aborted) onNotice(explainFailure(error))
+      if (current()) onNotice(explainFailure(error))
     } finally {
-      if (abort.current === controller) setBusy(false)
-      setStamp((value) => value + 1)
+      if (current()) {
+        abort.current = null
+        setBusy(false)
+        setStamp((value) => value + 1)
+      }
     }
   }
 
@@ -947,7 +980,7 @@ export function Create({
               autoCorrect="off"
               spellCheck={false}
               maxLength={32}
-              onChange={(event) => setHandle(event.target.value)}
+              onChange={(event) => editRecipient(event.target.value)}
             />
           </label>
           <div className="actions">

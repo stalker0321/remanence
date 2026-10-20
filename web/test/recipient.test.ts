@@ -53,6 +53,27 @@ function directory(handle: string, userId = OTHER) {
 }
 
 describe('recipient lookup', () => {
+  it('query cancellation retires pending and late tickets without losing a confirmed address', async () => {
+    const session = new SessionStore()
+    unlock(session)
+    const { transport } = scripted(() => ({ status: 200, body: directory('ada') }))
+    const result = await lookupRecipient(session, transport, 'ada')
+    if (result.kind !== 'found') throw new Error('expected found')
+    const draft = new RecipientDraft()
+    const old = draft.nextTicket(ACCOUNT)
+    draft.offer(old, ACCOUNT, result.snapshot)
+    draft.cancelPending()
+    expect(draft.pending()).toBeNull()
+    expect(draft.offer(old, ACCOUNT, result.snapshot)).toBe(false)
+    expect(() => draft.confirm()).toThrow()
+    const next = draft.nextTicket(ACCOUNT)
+    draft.offer(next, ACCOUNT, result.snapshot)
+    draft.confirm()
+    draft.confirm()
+    draft.cancelPending()
+    expect(draft.confirmed()).toBe(result.snapshot)
+  })
+
   it('confirms one directory snapshot and ignores a late reply', async () => {
     const session = new SessionStore()
     unlock(session)

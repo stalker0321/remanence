@@ -287,6 +287,15 @@ export function Scan({
 
   useEffect(() => {
     let previous = store.getSnapshot()
+    // Native Back bypasses the explicit Back link. Cancel in the navigation
+    // event, before a completed async receive can run and before React's
+    // passive unmount cleanup. Same-route presentation history stays owned by
+    // PresentationHistory; it is not a departure from this Scan visit.
+    const onRouteDeparture = () => {
+      if (parseRoute(window.location.hash) !== 'scan') close()
+    }
+    window.addEventListener('popstate', onRouteDeparture, true)
+    window.addEventListener('hashchange', onRouteDeparture, true)
     const unsubscribe = store.subscribe(() => {
       const next = store.getSnapshot()
       if (next.accountId !== previous.accountId || next.bundleId !== previous.bundleId ||
@@ -295,7 +304,12 @@ export function Scan({
       }
       previous = next
     })
-    return () => { unsubscribe(); release() }
+    return () => {
+      window.removeEventListener('popstate', onRouteDeparture, true)
+      window.removeEventListener('hashchange', onRouteDeparture, true)
+      unsubscribe()
+      release()
+    }
   }, [store])
 
   async function open() {

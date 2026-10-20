@@ -1,8 +1,21 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
+const staticBase =
+  (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.REMANENCE_STATIC_BASE ?? '/'
+
 export default defineConfig({
+  base: staticBase,
   plugins: [react()],
+  // Public assets (fonts/boot/etc.) are referenced with root-absolute URLs.
+  // Prefix them with the selected static base at build time; hashed assets and
+  // import.meta.env.BASE_URL keep their normal Vite behavior.
+  experimental: {
+    renderBuiltUrl(filename: string, { type }: { type: string }) {
+      if (type === 'public') return `${staticBase}${filename.replace(/^\/+/, '')}`
+      return undefined
+    },
+  },
   server: {
     host: '127.0.0.1',
     strictPort: true,

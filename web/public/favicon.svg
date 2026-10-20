@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
+  <!--
+    Authored source: android/app/src/main/res/drawable/remainder_foreground.xml
+    (original Remanence mark, not a redesign). Exact paths/groups preserved.
+    Palette: hold_paper #f4f2ec, hold_ink #333951 (values/colors.xml).
+    Original 108dp transform: translate(21.96,19.8) scale(0.72); do not
+    bbox-center. The paper rectangle is the opaque icon background.
+  -->
+  <rect width="108" height="108" fill="#f4f2ec"/>
+  <g transform="translate(21.96 19.8) scale(0.72)">
+    <path fill="#333951" d="M15,14H35V47C35,57 39,61 49,61H65V81H46C25,81 15,70 15,50V14Z"/>
+    <path fill="#333951" d="M47,14H67C76,14 82,20 82,29V48H63V36C63,33 61,31 58,31H47V14Z"/>
+  </g>
+</svg>

@@ -13,7 +13,7 @@ import type { CvContourRuntime, CvDetectedQuad, CvWarpedRgba } from './opencvCon
 import type { Point2D } from './cornerGeometry'
 
 /** Fixed same-origin vendor directory. */
-export const OPENCV_VENDOR_BASE = '/opencv/'
+export const OPENCV_VENDOR_BASE = `${import.meta.env.BASE_URL}opencv/`
 const OPENCV_SCRIPT_URL = `${OPENCV_VENDOR_BASE}opencv.js`
 
 interface RawSize {

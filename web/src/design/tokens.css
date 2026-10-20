@@ -56,7 +56,10 @@ button:focus-visible, a:focus-visible {
 .shell {
   width: min(100%, var(--column));
   margin: 0 auto;
-  padding: 1.5rem 1.25rem 3rem;
+  padding-top: max(1.5rem, env(safe-area-inset-top));
+  padding-right: max(1.25rem, env(safe-area-inset-right));
+  padding-bottom: max(3rem, env(safe-area-inset-bottom));
+  padding-left: max(1.25rem, env(safe-area-inset-left));
 }
 
 .mark {

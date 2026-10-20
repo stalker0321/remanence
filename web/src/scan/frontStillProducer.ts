@@ -294,8 +294,22 @@ export async function produceLocalizedFingerprint(
 ): Promise<LocalizedFingerprint> {
   const fence = options.fence
   if (typeof fence !== 'function') throw refuse('stale')
+  // Capture the original owner fence/signal before any await.
+  const signal = options.signal
   const jpeg = captureJpegBytes(source)
-  return produceLocalizedFromOwnedJpeg(jpeg, options)
+  const localized = await produceLocalizedFromOwnedJpeg(jpeg, options)
+  // The core promise boundary is an await. Recheck the ORIGINAL captured
+  // fence/signal at this output handover and wipe the transferred wire if the
+  // owner went stale or the visit was cancelled in between (identity-free
+  // query has no sender wrapper to perform this recheck).
+  try {
+    throwIfFence(fence)
+    throwIfAborted(signal)
+  } catch (error) {
+    localized.wire.fill(0)
+    throw error
+  }
+  return localized
 }
 
 /** Localize -> warp -> SIFT -> wire over an owned JPEG copy (identity-free). */

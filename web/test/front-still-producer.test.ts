@@ -534,4 +534,95 @@ describe('T343 identity-free receiving query producer', () => {
     )
     expect(wiped).toBe(true)
   })
+
+  function afterNativeWarp(effect: () => void): CvContourRuntime {
+    const runtime = makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift })
+    const warp = runtime.warpRgbaQuad.bind(runtime)
+    runtime.warpRgbaQuad = (...args) => {
+      const out = warp(...args)
+      queueMicrotask(effect)
+      return out
+    }
+    return runtime
+  }
+
+  /** One run; returns the typed refusal code and whether a wire-length buffer
+   * was nonzero before being zeroed (stable: no fence-call counting). */
+  async function handoverOutcome(run: () => Promise<unknown>, wireLength: number): Promise<{ code: string; wiped: boolean }> {
+    const records: Array<{ before: Uint8Array; after: Uint8Array }> = []
+    const originalFill = Uint8Array.prototype.fill
+    const installFill = originalFill as unknown as (value: number, start?: number, end?: number) => Uint8Array
+    ;(Uint8Array.prototype as { fill: unknown }).fill = function (
+      this: Uint8Array,
+      value: number,
+      start?: number,
+      end?: number,
+    ): Uint8Array {
+      records.push({ before: this.slice(), after: this })
+      return installFill.call(this, value, start, end)
+    }
+    try {
+      await run()
+      return { code: 'ok', wiped: false }
+    } catch (error) {
+      const wiped = records.some(
+        (record) =>
+          record.before.length === wireLength &&
+          record.before.some((byte) => byte !== 0) &&
+          record.after.every((byte) => byte === 0),
+      )
+      return { code: (error as { code?: string }).code ?? 'other', wiped }
+    } finally {
+      ;(Uint8Array.prototype as { fill: unknown }).fill = originalFill
+    }
+  }
+
+  it('refuses query stale queued in the native-to-promise handover and wipes the wire', async () => {
+    const jpeg = jpegWithDims(320, 240)
+    const control = await produceQueryFingerprint(plainStill(jpeg), {
+      fence: () => true,
+      runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }),
+      decode: async () => workingFrame(),
+    })
+    const wireLength = control.wire.length
+    control.wire.fill(0)
+    let current = true
+    const outcome = await handoverOutcome(
+      () =>
+        produceQueryFingerprint(plainStill(jpeg), {
+          fence: () => current,
+          runtime: afterNativeWarp(() => {
+            current = false
+          }),
+          decode: async () => workingFrame(),
+        }),
+      wireLength,
+    )
+    expect(outcome.code).toBe('stale')
+    expect(outcome.wiped).toBe(true)
+  })
+
+  it('refuses query cancelled queued in the native-to-promise handover and wipes the wire', async () => {
+    const jpeg = jpegWithDims(320, 240)
+    const control = await produceQueryFingerprint(plainStill(jpeg), {
+      fence: () => true,
+      runtime: makeFakeContourRuntime({ quads: [BIG_QUAD], ...sift }),
+      decode: async () => workingFrame(),
+    })
+    const wireLength = control.wire.length
+    control.wire.fill(0)
+    const controller = new AbortController()
+    const outcome = await handoverOutcome(
+      () =>
+        produceQueryFingerprint(plainStill(jpeg), {
+          fence: () => true,
+          signal: controller.signal,
+          runtime: afterNativeWarp(() => controller.abort()),
+          decode: async () => workingFrame(),
+        }),
+      wireLength,
+    )
+    expect(outcome.code).toBe('cancelled')
+    expect(outcome.wiped).toBe(true)
+  })
 })

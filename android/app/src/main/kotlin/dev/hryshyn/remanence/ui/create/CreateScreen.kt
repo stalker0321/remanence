@@ -536,17 +536,17 @@ private fun ContentStepContent(
         recipient?.let { PersonChip(it.handle.toDisplayString()) }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
             .testTag("create_content_scroll")) {
-            if (error != null) {
-                Text(error, color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 16.dp).testTag("create_error"))
-            }
             Text(stringResource(R.string.create_for_one_person), color = HoldColors.Muted,
                 style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(16.dp))
             Text(stringResource(R.string.hold_content_title), style = MaterialTheme.typography.headlineLarge,
                 modifier = Modifier.testTag("create_step_label"))
             Spacer(Modifier.height(16.dp))
+            if (error != null) {
+                Text(error, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 16.dp).testTag("create_error"))
+            }
             Text(stringResource(R.string.create_choose_photographs), color = HoldColors.Muted,
                 style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(14.dp))

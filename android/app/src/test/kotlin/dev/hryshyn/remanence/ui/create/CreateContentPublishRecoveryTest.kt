@@ -332,7 +332,19 @@ class CreateContentPublishRecoveryTest {
     @Test
     @Config(qualifiers = "w390dp-h844dp-xhdpi")
     @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
-    fun contentGuardErrorKeepsHeadingStillAndDraftIntact() {
+    fun contentGuardErrorKeepsHeadingStillAndDraftIntact() = verifyContentError("")
+
+    @Test
+    @Config(qualifiers = "ru-w390dp-h844dp-xhdpi")
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    fun russianContentErrorKeepsHeadingStillAndDraftIntact() = verifyContentError("-ru")
+
+    @Test
+    @Config(qualifiers = "uk-w390dp-h844dp-xhdpi")
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    fun ukrainianContentErrorKeepsHeadingStillAndDraftIntact() = verifyContentError("-uk")
+
+    private fun verifyContentError(localeSuffix: String) {
         val (vm, _, _) = contentStage()
         lateinit var rootView: android.view.View
         composeRule.setContent {
@@ -357,11 +369,11 @@ class CreateContentPublishRecoveryTest {
         }
         composeRule.runOnIdle { vm.noteEditor.onChange("A draft that must survive retry") }
         val titleBefore = composeRule.onNodeWithTag("create_step_label").fetchSemanticsNode().boundsInRoot
-        capture("content-before-error")
+        capture("content$localeSuffix-before-error")
         // Excite the production readiness guard; no bypass of the 3..5 photo gate.
         composeRule.runOnIdle { assertFalse(vm.goToCompose()) }
         composeRule.onNodeWithTag("create_error").assertIsDisplayed()
-        capture("content-after-error")
+        capture("content$localeSuffix-after-error")
         assertEquals(titleBefore, composeRule.onNodeWithTag("create_step_label").fetchSemanticsNode().boundsInRoot)
         assertEquals("A draft that must survive retry", vm.noteEditor.text)
         composeRule.onNodeWithTag("create_next").assertIsNotEnabled()

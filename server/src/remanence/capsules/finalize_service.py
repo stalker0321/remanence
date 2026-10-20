@@ -333,6 +333,7 @@ class CapsuleFinalizeService:
                 now=publication_at,
                 publication_sequence=publication_sequence,
                 locator_issuance=locator_issuance,
+                accounted=allocation is not None,
             )
             # Flush/optional locator work can also wait. Raising here requires
             # the caller's outer rollback, just like any late finalize failure.
@@ -512,6 +513,7 @@ class CapsuleFinalizeService:
         now: datetime,
         publication_sequence: int,
         locator_issuance: LocatorIssuance | None,
+        accounted: bool,
     ) -> CapsuleFinalizeResult:
         signature = authorization.signature
         if type(signature) is not bytes or len(signature) != _SIGNATURE_LENGTH:
@@ -523,6 +525,7 @@ class CapsuleFinalizeService:
             "signed_statement_sha256": capsule.signed_statement_sha256,
             "publish_signature": capsule.publish_signature,
             "ready_at": capsule.ready_at,
+            "send_accounting_version": capsule.send_accounting_version,
         }
         envelope_row = CapsuleEnvelope(
             capsule_id=capsule.id,
@@ -548,6 +551,10 @@ class CapsuleFinalizeService:
             capsule.publish_signature = signature
             capsule.ready_at = now
             capsule.state = CapsuleState.READY
+            # One state-transition UPDATE: a later marker-only UPDATE can
+            # recheck users FKs and deadlock opposing recipient locks (T376).
+            if accounted:
+                capsule.send_accounting_version = 1
             self._session.add(envelope_row)
             self._session.add(delivery_row)
             self._session.flush()
@@ -645,6 +652,7 @@ class CapsuleFinalizeService:
             capsule.signed_statement_sha256 = original["signed_statement_sha256"]
             capsule.publish_signature = original["publish_signature"]
             capsule.ready_at = original["ready_at"]
+            capsule.send_accounting_version = original["send_accounting_version"]
         except Exception:
             pass
         for row in (envelope_row, delivery_row, locator_row):

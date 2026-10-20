@@ -464,6 +464,9 @@ def finalize_delivery(
     delivery.finalize_operation_id = operation_id
     delivery.finalize_request_digest = request_digest
     delivery.state = "PENDING"
+    # Locator savepoint/preflush above must still see DRAFT + NULL marker.
+    if allocation is not None:
+        delivery.send_accounting_version = 1
     session.flush()
     # Cover locator/flush waits as well. Caller retains commit/rollback ownership.
     send_access.record(session, delivery, allocation, now=check_deadlines())

@@ -161,18 +161,17 @@ def record(
     session: Session, source: Capsule | PendingDelivery, allocation: Allocation | None,
     *, now: datetime,
 ) -> None:
-    """After source/locator persistence, outside any degrading savepoint."""
+    """Validate the staged marker and INSERT only, after source/locator work."""
     if allocation is None:
         return
     expected_state = CapsuleState.READY if isinstance(source, Capsule) else "PENDING"
     if (
         source.state != expected_state or _identity(source) != allocation.identity
         or _statement_hash(source) != allocation.publication_sha256
-        or source.send_accounting_version is not None
+        or source.send_accounting_version != 1
         or (isinstance(source, Capsule) and source.ready_at != allocation.published_at)
     ):
         raise SendAccessError()
-    source.send_accounting_version = 1
     session.add(SendPublication(
         **vars(allocation.identity), publication_sha256=allocation.publication_sha256,
         funding=allocation.funding, free_slot=allocation.free_slot, policy_version=1,

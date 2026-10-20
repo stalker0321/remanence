@@ -130,7 +130,7 @@ class CapsuleMediaRenderTest {
         rule.onNodeWithTag("collage_canvas").assertDoesNotExist()
     }
 
-    private fun showBer1(withTrack: Boolean = true, launch: (String) -> Boolean = { false }) {
+    private fun showBer1(withTrack: Boolean = true, fontScale: Float = 1f, launch: (String) -> Boolean = { false }) {
         val state = Ber1PresentationState(testV2Expression(), { byteArrayOf(it.toByte()) },
             decoder = Ber1PhotoDecoder { bytes ->
                 Bitmap.createBitmap(120, 120, Bitmap.Config.ARGB_8888).apply {
@@ -138,12 +138,12 @@ class CapsuleMediaRenderTest {
                 }.asImageBitmap()
             }, track = track.takeIf { withTrack })
         runBlocking { state.load() }
-        rule.setContent { HoldTheme {
+        rule.setContent { CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) { HoldTheme {
             scope = rememberCoroutineScope()
             Ber1PresentationHost(state, {}, openTrackUrl = launch, exportFactory = { validate ->
                 rememberCapsuleImageExport(validate).also { export = it }
             })
-        } }
+        } } }
     }
 
     @Test fun legacyTrackLabelEn() = trackLabel("en")
@@ -178,6 +178,19 @@ class CapsuleMediaRenderTest {
         for (photo in listOf(0xffd05b49.toInt(), 0xff4e8c75.toInt(), 0xff526fbd.toInt())) {
             assertTrue("all three actual photo colors must be exported", colors.count { it == photo } > 1000)
         }
+    }
+
+    @Test @Config(qualifiers = "ru-w640dp-h360dp-land-xhdpi")
+    fun legacyLandscapeLargeFontKeepsPhotosAndSuccessfulExport() {
+        showBer1(fontScale = 1.8f, launch = { true })
+        rule.onNodeWithTag("capsule_track_open").assertIsDisplayed()
+        val before = png("ber1-landscape-ru-f18")
+        val pixels = IntArray(before.width * before.height)
+        before.getPixels(pixels, 0, before.width, 0, 0, before.width, before.height)
+        mediaPhotoColors.forEach { c -> assertTrue("legacy landscape must retain every photo", pixels.count { it == c } > 20) }
+        rule.onNodeWithTag("capsule_track_open").performClick()
+        rule.onNodeWithTag("capsule_track_open_spotify").performClick()
+        assertTrue(before.sameAs(png("ber1-landscape-player-success")))
     }
 
     private fun png(name: String): Bitmap {

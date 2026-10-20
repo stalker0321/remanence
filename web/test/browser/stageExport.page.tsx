@@ -175,6 +175,7 @@ async function main(): Promise<void> {
   statusNode.textContent = 'starting'
   document.body.appendChild(statusNode)
   const report: Record<string, unknown> = { pass: false, synthetic: true }
+  let step = 'build-helds'
   try {
     const a = await buildHeld('#b33b2e')
     const b = await buildHeld('#245a9c')
@@ -190,6 +191,7 @@ async function main(): Promise<void> {
       )
     }
 
+    step = 'pending-gate'
     // A pending decode keeps export disabled and says so accessibly.
     const pending = deferred<PaintImage>()
     render(a.held, {
@@ -205,6 +207,7 @@ async function main(): Promise<void> {
     assert('ready: export enabled only after paint', canvasStatus() === '')
     assert('ready: canvas marked painted', stageCanvas().dataset.painted === 'ready')
 
+    step = 'positive-export'
     // Real current composition exports exactly the composition canvas.
     exportButton().click()
     await waitFor(() => downloads.length === 1, 'composition download')
@@ -226,6 +229,7 @@ async function main(): Promise<void> {
     assert('export: decoded PNG pixels agree with the painted composition', pngPixels.length === canvasPixels.length && pngPixels.every((value, index) => value === canvasPixels[index]), `${pngPixels.join(',')} vs ${canvasPixels.join(',')}`)
     const downloadsAfterSuccess = downloads.length
 
+    step = 'missing-image'
     // A missing image refuses honestly, stays disabled, and leaves a cleared canvas.
     const broken: HeldSheet = { ...b.held, photos: new Map([...b.held.photos].slice(0, 2)) }
     render(broken)
@@ -235,12 +239,14 @@ async function main(): Promise<void> {
     assert('missing image: no download', downloads.length === downloadsAfterSuccess)
     assert('missing image: canvas cleared', stageCanvas().dataset.painted === 'refused' && [...stageCanvas().getContext('2d')!.getImageData(0, 0, 360, 640).data].every((value) => value === 0))
 
+    step = 'decode-reject'
     // A rejected decode is handled, never an unhandled rejection.
     render(b.held, { loadImage: () => Promise.reject(new Error('decode refused')) })
     await waitFor(() => canvasStatus() === t('sheetUnavailable'), 'decode rejection refused')
     assert('decode rejection: refused status', canvasStatus() === t('sheetUnavailable'))
     assert('decode rejection: export disabled', exportButton().disabled)
 
+    step = 'null-encode'
     // Null and thrown encodes are honest save failures with no URL/download.
     render(a.held)
     await waitFor(() => !exportButton().disabled, 'null-encode stage ready')
@@ -261,6 +267,7 @@ async function main(): Promise<void> {
     assert('thrown/tainted encode: truthful save failure', canvasStatus() === t('sheetSaveFailed'))
     assert('thrown/tainted encode: no URL/download', created.length === beforeThrow.created && downloads.length === beforeThrow.downloads)
 
+    step = 'stale-paint'
     // Replacing the sheet while an image is pending never commits stale paint.
     const staleLoad = deferred<PaintImage>()
     render(a.held, { loadImage: () => staleLoad.promise })
@@ -273,6 +280,7 @@ async function main(): Promise<void> {
     assert('stale paint: replaced sheet is not overwritten', stageCanvas().toDataURL() === beforeStale)
     assert('stale paint: replacement remains ready', stageCanvas().dataset.painted === 'ready')
 
+    step = 'late-export-replace'
     // Replacing while toBlob awaits drops the late blob and creates no URL/download.
     render(b.held)
     await waitFor(() => !exportButton().disabled, 'stale-export stage ready')
@@ -289,6 +297,7 @@ async function main(): Promise<void> {
     assert('late export after replacement: no download', downloads.length === beforeLate.downloads)
     assert('late export after replacement: no revoke churn', revoked.length === beforeLate.revoked)
 
+    step = 'late-export-unmount'
     // Unmount while toBlob awaits drops the late blob with no URL/download.
     render(b.held)
     await waitFor(() => !exportButton().disabled, 'unmount-export stage ready')
@@ -312,7 +321,7 @@ async function main(): Promise<void> {
     report.revoked = revoked.length
     report.pass = failures.length === 0
   } catch (error) {
-    fail('stage export connected harness', String(error) + ' | stage=' + stageText().slice(-400))
+    fail('stage export connected harness', String(error) + ' | step=' + step + ' | stage=' + stageText().slice(-400))
   }
   ;(window as unknown as { __stageExport?: unknown }).__stageExport = { assertions, failures, notices, report }
   statusNode.textContent = failures.length === 0 ? 'done' : 'failed'

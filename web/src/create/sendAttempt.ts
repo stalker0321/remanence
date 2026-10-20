@@ -71,8 +71,8 @@ export interface SendPorts {
 
 export type SendOutcome =
   | { kind: 'sent'; readyAt: string; locator: { code: string; hint: string } | null }
-  /** Nothing left the device: local preflight/seal failure, or the server
-   * explicitly rejected the draft before any capsule existed. */
+  /** Local preflight/seal failure, or a received error response to draft
+   * creation. The latter does not prove absence or rollback of server effects. */
   | { kind: 'refused'; stage: 'preflight' | 'seal' | 'draft'; code: string }
   /** Publishing started and its final result cannot prove absence of server
    * effects (upload/finalize trouble, lost finalize, mid-flight cancel). */

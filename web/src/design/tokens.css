@@ -181,6 +181,16 @@ button:focus-visible, a:focus-visible {
 
 .music-draft li button { text-align: start; }
 
+.send-block {
+  display: grid;
+  justify-items: start;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.send-block .button { max-width: 100%; }
+
 video.preview {
   display: block;
   width: 100%;

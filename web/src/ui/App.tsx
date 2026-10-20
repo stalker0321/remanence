@@ -34,6 +34,7 @@ import type { CreatorFreeze } from '../create/creatorFreeze'
 import { CreatorImageBridge, browserImageDecode, type CreatorImageDecode } from '../create/creatorImages'
 import { FrontHold, type FrontStill } from '../create/front'
 import { FrontFingerprintHold } from '../create/frontFingerprint'
+import { sendFeedback } from '../create/sendFeedback'
 import {
   SendAttemptController,
   nextCreateVisitEpoch,
@@ -492,6 +493,7 @@ export function Create({
   if (capsuleIdRef.current === undefined) capsuleIdRef.current = crypto.randomUUID()
   const [sendPhase, setSendPhase] = useState<SendPhase>('idle')
   const [sendOutcome, setSendOutcome] = useState<SendOutcome | null>(null)
+  const feedback = sendFeedback(sendOutcome)
   const sendControllerRef = useRef<SendAttemptController | null>(null)
   const sendPortsRef = useRef<SendPortsFull | null>(null)
   const sendUploadCapable = typeof (transport as { uploadBytes?: unknown }).uploadBytes === 'function'
@@ -787,9 +789,8 @@ export function Create({
       // visit, not only on a notice-time tuple check.
       if (!coherentVisit()) return
       setSendOutcome(outcome)
-      if (outcome.kind === 'sent') onNotice('sendSent')
-      else if (outcome.kind === 'refused') onNotice('sendNotSent')
-      else if (outcome.kind === 'unknown') onNotice('sendNotConfirmed')
+      const resultFeedback = sendFeedback(outcome)
+      if (resultFeedback) onNotice(resultFeedback.notice)
     })()
   }
 
@@ -1181,13 +1182,20 @@ export function Create({
                 {t('sendAction')}
               </button>
               {sendPhase === 'working' ? (
-                <p data-testid="send_state">{t('sendWorking')}</p>
-              ) : sendOutcome?.kind === 'sent' ? (
-                <p data-testid="send_state">{t('sendSent')}</p>
-              ) : sendOutcome?.kind === 'refused' ? (
-                <p data-testid="send_state" role="alert">{t('sendNotSent')}</p>
-              ) : sendOutcome?.kind === 'unknown' ? (
-                <p data-testid="send_state" role="alert">{t('sendNotConfirmed')}</p>
+                <>
+                  <p data-testid="send_state">{t('sendWorking')}</p>
+                  <p data-testid="send_help">{t('sendWorkingHelp')}</p>
+                </>
+              ) : feedback ? (
+                <>
+                  <p data-testid="send_state" role={feedback.help ? 'alert' : undefined}>{t(feedback.notice)}</p>
+                  {feedback.help ? (
+                    <>
+                      <p data-testid="send_help">{t(feedback.help)}</p>
+                      <a className="button" data-testid="send_exit" href={href('home')}>{t('sendExit')}</a>
+                    </>
+                  ) : null}
+                </>
               ) : null}
             </div>
           <div className="actions">

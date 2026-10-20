@@ -773,7 +773,7 @@ private fun ContentAndCompositionFlow(
                                         style = MaterialTheme.typography.bodyMedium, color = HoldColors.Muted,
                                         modifier = Modifier.padding(vertical = 16.dp))
                                     ForwardAction(stringResource(R.string.create_attach_capsule), "create_publish",
-                                        viewModel::startPublishing, enabled = frozen != null)
+                                        viewModel::startPublishing, enabled = viewModel.isFrozenCollageDrawable)
                                     TextButton(onClick = { reviewing = false }, modifier = Modifier.fillMaxWidth()
                                         .testTag("create_review_back")) { Text(stringResource(R.string.create_back_to_expression)) }
                                 } else {
@@ -789,7 +789,7 @@ private fun ContentAndCompositionFlow(
                                             else if (viewModel.selectCollageCandidate(session.displayIndex))
                                                 viewModel.freezeCollageSelection()
                                         },
-                                        enabled = !session.isPreparing && session.displayed != null,
+                                        enabled = !session.isPreparing && viewModel.isDisplayedCollageDrawable,
                                     )
                                 }
                                 val error = flowError ?: publishError

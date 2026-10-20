@@ -42,6 +42,21 @@ internal data class PrepareInputs(
 )
 
 /**
+ * In-memory identity of the cohort's inputs. A fresh host may retain authored
+ * geometry only for this exact draft/content/source lifetime. Font/layout
+ * readiness is deliberately NOT retained: every host runs renderer prepare.
+ */
+internal data class CollagePreparationInputs(
+    val input: GeneratorExpression.GeneratorInput,
+    val sources: List<GeneratorPreviewSource>,
+    val note: String?,
+    val track: CapsuleTrackSnapshotV1?,
+    val cropSource: CollageCropSource,
+    val artwork: GeneratorExpression.ArtworkRef?,
+    val artworkBitmap: ImageBitmap?,
+)
+
+/**
  * Kept mounted while editing content and browsing. All candidates pass the
  * recipient's real text/layout prepare before entering the browse list. The
  * content screen can withhold the parcels while this work is in progress.
@@ -82,13 +97,20 @@ internal fun CollageChoiceHost(
     val preparingCopy = stringResource(R.string.create_preparing_expressions)
     val noteArg = note?.takeIf { it.isNotBlank() }
     val currentOnPrepared by rememberUpdatedState(onPrepared)
+    val preparationInputs = CollagePreparationInputs(input, sources, note, track, cropSource, artwork, artworkBitmap)
+    val host = remember(session) { Any() }
+    DisposableEffect(session, preparationInputs, measurer) {
+        session.attachHost(host)
+        onDispose { session.detachHost(host) }
+    }
 
     LaunchedEffect(session, session.draftGeneration, input, sources, note, track, cropSource, artwork, artworkBitmap, measurer) {
-        val generation = session.beginPreparing()
+        val retained = session.retainedCandidates(preparationInputs)
+        val generation = session.beginPreparing(retainCandidates = retained != null)
         try {
             val decoded = images.ifEmpty { withContext(Dispatchers.Default) { decodeSources(sources) } }
             images = decoded
-            val sealed = candidateBuilder?.invoke(measurer)
+            val sealed = retained ?: candidateBuilder?.invoke(measurer)
             val candidates = if (!sealed.isNullOrEmpty()) sealed else {
                 when (val result = CollageCandidateProvider(cropSource, measurer)
                     .candidates(input, note, track, artwork)) {
@@ -111,15 +133,19 @@ internal fun CollageChoiceHost(
             }
             if (BuildConfig.DEBUG) Log.d("CollagePreparation", "built=${candidates.size} drawable=${drawable.size} decoded=${decoded.size}")
             ensureActive()
-            if (!session.isCurrentPreparation(generation)) return@LaunchedEffect
+            if (!session.isCurrentHost(host) || !session.isCurrentPreparation(generation)) return@LaunchedEffect
             if (drawable.isEmpty()) {
                 session.showNotice(noFitCopy)
             } else {
                 // A rejected permutation cannot consume its grammar/style's
                 // single slot: deduplicate only after actual renderer prepare.
-                val variants = session.arrangePreparedCandidates(drawable)
+                val variants = if (retained != null && drawable.size == retained.size) retained
+                    else session.arrangePreparedCandidates(drawable)
                 if (BuildConfig.DEBUG) Log.d("CollagePreparation", "uniqueVariants=${variants.size}")
-                session.replaceCandidates(variants)
+                // Revalidation of unchanged inputs must not replace the
+                // cohort: that would erase its cursor, selection and crops.
+                if (variants !== retained) session.replaceCandidates(variants)
+                session.finishPreparing(preparationInputs)
                 // Replacement invalidates prior proofs. Report the new proofs
                 // afterwards, in the same uninterrupted main turn.
                 prepareInputs?.let { proof ->
@@ -130,7 +156,7 @@ internal fun CollageChoiceHost(
             throw cancelled
         } catch (error: Exception) {
             if (BuildConfig.DEBUG) Log.d("CollagePreparation", "failure=${error::class.simpleName}")
-            if (session.isCurrentPreparation(generation)) session.showNotice(noFitCopy)
+            if (session.isCurrentHost(host) && session.isCurrentPreparation(generation)) session.showNotice(noFitCopy)
         }
     }
 
@@ -146,8 +172,11 @@ internal fun CollageChoiceHost(
             )
         }
     }
-    LaunchedEffect(displayed, prepared, prepareInputs, session.buildGeneration) {
-        if (displayed != null && prepareInputs != null) {
+    LaunchedEffect(displayed, prepared, prepareInputs, session.buildGeneration, session.isPreparing) {
+        // Empty images during remount are not a renderer rejection of the
+        // authored sheet. Wait for this host's complete validation pass.
+        if (displayed != null && prepareInputs != null &&
+            session.isCurrentHost(host) && session.isPreparedFor(preparationInputs)) {
             currentOnPrepared(displayed.candidateId, prepared is CollageRenderer.SceneResult.Ready, prepareInputs)
         }
     }

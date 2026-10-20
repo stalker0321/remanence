@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.ui.create
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.setValue
 import android.graphics.BitmapFactory
 import android.util.Log
@@ -523,10 +524,16 @@ class CreateViewModel(
     )
 
     /** Positive Ready inputs by candidate id (equality-checked on every use). */
-    private val drawableInputs = mutableMapOf<String, PrepareInputs>()
+    private val drawableInputs = mutableStateMapOf<String, PrepareInputs>()
 
     /** Drawable inputs recorded alongside the frozen selection, if any. */
-    private var frozenDrawableInputs: PrepareInputs? = null
+    private var frozenDrawableInputs: PrepareInputs? by mutableStateOf(null)
+
+    internal val isFrozenCollageDrawable: Boolean
+        get() = frozenCollageSelection != null && frozenDrawableInputs == prepareInputs()
+
+    internal val isDisplayedCollageDrawable: Boolean
+        get() = collageChoices.displayed?.let { drawableMatches(it.candidateId) } == true
 
     /** Current positive drawable evidence for [candidateId], if any. */
     private fun drawableMatches(candidateId: String): Boolean =
@@ -539,13 +546,19 @@ class CreateViewModel(
      * fail-closed: the sheet flipped Ready→Rejected (e.g. late artwork
      * changing the measured band).
      */
-    internal fun onCandidatePrepared(candidateId: String, ready: Boolean, inputs: PrepareInputs) {        if (ready) {
+    internal fun onCandidatePrepared(candidateId: String, ready: Boolean, inputs: PrepareInputs) {
+        if (inputs != prepareInputs() || collageChoices.candidates.none { it.candidateId == candidateId }) return
+        if (ready) {
             drawableInputs[candidateId] = inputs
+            // Keep the authored choice through host recreation, but permit it
+            // only after the NEW host has actually prepared the same sheet.
+            if (frozenCollageSelection?.candidateId == candidateId &&
+                collageChoices.selected?.candidateId == candidateId) {
+                frozenDrawableInputs = inputs
+            }
         } else {
             drawableInputs.remove(candidateId)
-            if (frozenCollageSelection?.candidateId == candidateId &&
-                frozenDrawableInputs == inputs
-            ) {
+            if (frozenCollageSelection?.candidateId == candidateId) {
                 frozenCollageSelection = null
                 frozenDrawableInputs = null
             }
@@ -1018,6 +1031,7 @@ class CreateViewModel(
      */
     val collageChoices = CollageChoiceSession().also { session ->
         session.onTelemetryInvalidated = { telemetrySession?.reset() }
+        session.onReadinessInvalidated = ::clearDrawableProofs
         session.beginDraft(_capsuleId)
         session.onCandidatesReplaced = {
             telemetrySession?.reset()
@@ -2191,6 +2205,7 @@ class CreateViewModel(
         previewGeneration += 1
         _generatorPreview.value = GeneratorPreviewState.Idle
         generatorPreviewCoordinator.zeroize()
+        collageChoices.clear()
         frozenCollageSelection = null
         frozenDrawableInputs = null
         clearDrawableProofs()

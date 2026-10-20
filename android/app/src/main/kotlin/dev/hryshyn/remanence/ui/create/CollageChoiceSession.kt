@@ -57,6 +57,41 @@ class CollageChoiceSession {
     var onCandidatesReplaced: (() -> Unit)? = null
     /** Privacy observer only: clearing a cohort must discard optional collection immediately. */
     internal var onTelemetryInvalidated: (() -> Unit)? = null
+    /** Drawable evidence belongs to a live host, not to retained authored edits. */
+    internal var onReadinessInvalidated: (() -> Unit)? = null
+
+    private var preparedInputs: CollagePreparationInputs? = null
+    private var attachedHost: Any? = null
+
+    internal fun attachHost(host: Any) {
+        attachedHost = host
+        invalidatePreparation()
+    }
+
+    internal fun detachHost(host: Any) {
+        if (attachedHost !== host) return
+        attachedHost = null
+        invalidatePreparation()
+    }
+
+    internal fun isCurrentHost(host: Any): Boolean = attachedHost === host
+
+    private fun invalidatePreparation() {
+        preparationGeneration += 1
+        isPreparing = false
+        onReadinessInvalidated?.invoke()
+    }
+
+    internal fun retainedCandidates(inputs: CollagePreparationInputs): List<CollageCandidate>? =
+        candidates.takeIf { it.isNotEmpty() && preparedInputs == inputs }
+
+    internal fun finishPreparing(inputs: CollagePreparationInputs) {
+        preparedInputs = inputs
+        isPreparing = false
+    }
+
+    internal fun isPreparedFor(inputs: CollagePreparationInputs): Boolean =
+        !isPreparing && preparedInputs == inputs
 
     /** Typed invalidation/unavailability copy; non-null means no candidates. */
     var notice: String? by mutableStateOf(null)
@@ -69,10 +104,14 @@ class CollageChoiceSession {
 
     fun isCurrentPreparation(generation: Long): Boolean = preparationGeneration == generation
 
-    fun beginPreparing(): Long {
-        clear()
+    fun beginPreparing(retainCandidates: Boolean = false): Long {
+        if (retainCandidates) {
+            invalidatePreparation()
+        } else {
+            clear()
+            onCandidatesReplaced?.invoke()
+        }
         isPreparing = true
-        onCandidatesReplaced?.invoke()
         return preparationGeneration
     }
 
@@ -100,6 +139,7 @@ class CollageChoiceSession {
     /** A fresh build resets the browse cursor to the first candidate and drops
      *  any explicit selection; it never auto-freezes. */
     fun replaceCandidates(built: List<CollageCandidate>) {
+        preparedInputs = null
         isPreparing = false
         candidates = built
         displayIndex = 0
@@ -110,11 +150,8 @@ class CollageChoiceSession {
     }
 
     fun showNotice(reason: String) {
-        onTelemetryInvalidated?.invoke()
-        isPreparing = false
-        candidates = emptyList()
-        displayIndex = 0
-        selectedIndex = null
+        clear()
+        onCandidatesReplaced?.invoke()
         notice = reason
     }
 
@@ -156,8 +193,8 @@ class CollageChoiceSession {
     /** Source/note/music edit invalidation: drops candidates and selection. */
     fun clear() {
         onTelemetryInvalidated?.invoke()
-        preparationGeneration += 1
-        isPreparing = false
+        invalidatePreparation()
+        preparedInputs = null
         candidates = emptyList()
         displayIndex = 0
         selectedIndex = null

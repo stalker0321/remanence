@@ -83,7 +83,8 @@ describe('stage composition export fence', () => {
   })
 
   it('revokes the URL when starting the download throws', async () => {
-    const setup = ports({ download: () => { throw new Error('blocked') } })
+    const setup = ports()
+    setup.value.download = () => { setup.calls.download += 1; throw new Error('blocked') }
     await expect(exportComposition(setup.value)).resolves.toBe('failed')
     expect(setup.calls.create).toBe(1)
     expect(setup.calls.download).toBe(1)

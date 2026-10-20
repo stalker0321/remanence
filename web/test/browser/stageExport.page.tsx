@@ -130,7 +130,7 @@ async function waitFor(condition: () => boolean, what: string, timeoutMs = 30000
 }
 
 function buttonByText(text: string): HTMLButtonElement | null {
-  return [...document.querySelectorAll('button')].find((button) => button.textContent === text) as HTMLButtonElement | null
+  return [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === text) as HTMLButtonElement | null
 }
 
 function stageCanvas(): HTMLCanvasElement {

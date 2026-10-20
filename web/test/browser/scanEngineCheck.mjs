@@ -108,7 +108,7 @@ const server = createServer((req, res) => {
         if (admissionHeld) await new Promise((resolve) => { releaseAdmission = resolve })
         if (admissionMode === 'lost') { admitted.add(opening[1]); res.destroy(); return }
         if (admissionMode === 'offline') { res.destroy(); return }
-        if (admissionMode === 'deny') { res.writeHead(409, json).end(JSON.stringify({ code: 'CAPSULE_STATE_INVALID' })); return }
+        if (admissionMode === 'deny') { res.writeHead(409, json).end(JSON.stringify({ status: 409, code: 'CAPSULE_STATE_INVALID' })); return }
         if (admissionMode === 'auth') { res.writeHead(401, json).end('{}'); return }
         if (admissionMode === 'unknown') { res.writeHead(503, json).end('{}'); return }
         const replay = admitted.has(opening[1])

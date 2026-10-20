@@ -9,6 +9,7 @@
  * are handled. Deferred image/encode seams are isolated test overrides; the
  * normal path uses the production image/font/toBlob pipeline.
  */
+import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { CollageStage, type StagePorts } from '../../src/collage/stage'
 import type { HeldSheet } from '../../src/collage/memory'
@@ -186,9 +187,11 @@ async function main(): Promise<void> {
     document.body.appendChild(host)
     const render = (held: HeldSheet, ports?: Partial<StagePorts>): void => {
       root.current ??= createRoot(host)
-      root.current.render(
-        <CollageStage held={held} t={t} onClose={() => undefined} ports={ports} />,
-      )
+      flushSync(() => {
+        root.current!.render(
+          <CollageStage held={held} t={t} onClose={() => undefined} ports={ports} />,
+        )
+      })
     }
 
     step = 'pending-gate'

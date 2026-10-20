@@ -70,7 +70,7 @@ async function check(name, work) {
 }
 async function assertNoPreparationClaims(page, language) {
   const visible = await page.locator('main.shell').innerText()
-  for (const key of ['recipientHeld', 'frontReady', 'photoCount', 'musicNotSent']) {
+  for (const key of ['recipientHeld', 'frontHeld', 'frontWorking', 'frontReady', 'photoCount', 'musicNotSent']) {
     const text = await page.evaluate(([lang, name]) => window.sendFeedbackFixture.messages(lang)[name], [language, key])
     assert.equal(visible.includes(text), false, `old preparation-only claim remained: ${key}`)
   }
@@ -90,6 +90,11 @@ try {
       await page.goto(`${host.url}?mode=${mode}#/create`)
       await page.waitForFunction(() => Boolean(window.sendFeedbackFixture))
       await page.evaluate(() => window.sendFeedbackFixture.ready())
+      for (const key of ['frontReady', 'photoCount', 'musicNotSent']) {
+        assert.equal(await page.locator('main.shell').innerText().then(async (text) => text.includes(
+          await page.evaluate((name) => window.sendFeedbackFixture.messages('en')[name], key),
+        )), true, `preparation claim remains available before Send: ${key}`)
+      }
       await page.locator('[data-testid=send_button]').click()
       // Second activation on the same mounted visit cannot admit another send.
       await page.locator('[data-testid=send_button]').evaluate((button) => button.click())
@@ -167,7 +172,9 @@ try {
           const before = calls.length
           assert.equal(await page.locator('[data-testid=send_button]').isDisabled(), true)
           await page.locator('[data-testid=send_button]').evaluate((button) => button.click())
+          await page.locator('textarea').fill('Synthetic draft edit after a terminal attempt.')
           await page.waitForTimeout(150)
+          assert.equal(await page.locator('[data-testid=send_button]').isDisabled(), true, 'draft edit must not rearm Send')
           assert.equal(calls.length, before)
           assert.equal(await page.evaluate(() => window.sendFeedbackFixture.state().signs), 1)
         })

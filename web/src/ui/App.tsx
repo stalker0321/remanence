@@ -1052,8 +1052,8 @@ export function Create({
       {confirmed ? (
         <>
           <div ref={host} />
-          {pictured && fpState === 'idle' ? <p>{t('frontHeld')}</p> : null}
-          {pictured && fpState === 'working' ? <p>{t('frontWorking')}</p> : null}
+          {pictured && fpState === 'idle' && sendPhase === 'idle' ? <p>{t('frontHeld')}</p> : null}
+          {pictured && fpState === 'working' && sendPhase === 'idle' ? <p>{t('frontWorking')}</p> : null}
           {pictured && fpState === 'ready' && sendPhase === 'idle' ? <p>{t('frontReady')}</p> : null}
           {pictured && fpState === 'failed' ? <p role="alert">{t('frontScanFailed')}</p> : null}
           <label className="handle-form">

@@ -46,7 +46,8 @@ import {
 } from '../create/sendAttempt'
 import { FrontStillError } from '../scan/frontStillProducer'
 import { browserPhotoCodec } from '../create/browserPhoto'
-import { PhotoIntake, PhotoNormalizer, type PhotoCodec } from '../create/normalize'
+import { PhotoIntake, PhotoNormalizer, type PhotoCodec, type IntakeFence, type IntakeOutcome } from '../create/normalize'
+import { PhotoIntakeActivity } from '../create/intakeActivity'
 import { MUSIC_QUERY_MAX_CODE_POINTS, MUSIC_SEARCH_DEBOUNCE_MS, musicCoverKey, musicLine, MusicDraft, searchMusic } from '../create/music'
 import { NOTE_MAX_UTF8_BYTES, type NoteDraft } from '../create/note'
 import { PHOTO_COUNT_MAX, type PhotoDraft } from '../create/photos'
@@ -472,6 +473,7 @@ export function Create({
   const urls = useRef(new Map<string, string>())
   const mounted = useRef(true)
   const intake = useRef<PhotoIntake | null>(null)
+  const intakeActivity = useRef(new PhotoIntakeActivity())
   const imageBridge = useRef<CreatorImageBridge | null>(null)
   const frozenRef = useRef<CreatorFreeze | null>(null)
   const [creatorImages, setCreatorImages] = useState<CreatorComposerPhoto[] | null>(null)
@@ -519,8 +521,18 @@ export function Create({
       (phase) => setSendPhase(phase),
     )
   }
+  function intakeFence(): IntakeFence {
+    const current = store.getSnapshot()
+    return { owner: current.accountId, generation: current.generation,
+      confirmed: recipient.confirmed(), mounted: mounted.current }
+  }
+  function pendingPhotoIntakes(): number {
+    return intakeActivity.current.pending(intake.current, intakeFence())
+  }
+  const photoIntakePending = pendingPhotoIntakes() > 0
   // Render-time availability (no attempt consumed on an unready click).
   const sendReady = (() => {
+    if (photoIntakePending) return false
     if (!sendUploadCapable || keys === undefined || sendPhase !== 'idle') return false
     const snap = store.getSnapshot()
     if (snap.phase !== 'keys-unlocked' || snap.accountId === null || !confirmed) return false
@@ -569,6 +581,7 @@ export function Create({
     return () => {
       mounted.current = false
       next.dispose()
+      intakeActivity.current.retire(next)
       if (intake.current === next) intake.current = null
       bridge.dispose()
       if (imageBridge.current === bridge) imageBridge.current = null
@@ -756,6 +769,9 @@ export function Create({
 
   /** ONE admitted Send: capture the coherent visit synchronously at click. */
   function handleSend(): void {
+    // Re-read synchronously: an earlier render/callback may still say ready
+    // after a picker has queued work but before React commits its busy state.
+    if (pendingPhotoIntakes() > 0) return
     const controller = sendControllerRef.current
     if (!controller || !sendReady || sendPhase !== 'idle') return
     const freeze = frozenRef.current
@@ -869,39 +885,37 @@ export function Create({
 
   async function addPhotos(list: File[] | FileList | null) {
     if (!list || list.length === 0 || !confirmed) return
-    invalidateSend()
     const intakePort = intake.current
-    if (!intakePort) return
-    // Capture the FULL tuple up front. The intake fences internally too,
-    // and this handler re-checks everything after the await BEFORE any
-    // rememberPhotos/state/notice side effect: mere mounted/completed is
-    // not enough for owner changes landing in the final promise boundary.
-    const view = store.getSnapshot()
-    const owner = view.accountId
-    const generation = view.generation
-    const snap = confirmed
-    if (owner === null) return
-    onNotice('photoLoading')
-    const outcome = await intakePort.addFiles(list, () => ({
-      owner: store.getSnapshot().accountId,
-      generation: store.getSnapshot().generation,
-      confirmed: recipient.confirmed(),
-      mounted: mounted.current,
-    }))
-    const live = store.getSnapshot()
-    const current =
-      mounted.current &&
-      outcome.completed &&
-      live.accountId === owner &&
-      live.generation === generation &&
-      recipient.confirmed() === snap
-    // Stale completion: no URLs, no state, no parent notice mutation —
-    // loading clears only while still current (handled by the next live
-    // action). Never report dropped output as success.
-    if (!current) return
-    rememberPhotos()
+    const fence = intakeFence()
+    if (!intakePort || !fence.mounted || fence.owner === null || fence.confirmed !== confirmed) return
+    const work = intakeActivity.current.begin(intakePort, fence)
+    const photoKey = () => photos.photos().map((photo) => `${photo.id}:${photo.contentHash}`).join(',')
+    const before = photoKey()
+    // Acquire before any callback/await; includes picks queued in PhotoIntake.
+    invalidateSend()
     setStamp((value) => value + 1)
-    onNotice(outcome.refused ? 'photoRejected' : 'errorRegion')
+    onNotice('photoLoading')
+    let outcome: IntakeOutcome | undefined
+    let failed = false
+    try {
+      outcome = await intakePort.addFiles(list, intakeFence)
+    } catch {
+      failed = true
+    } finally {
+      const current = intakeActivity.current.owns(work, intake.current, intakeFence())
+      // Drop a changed selection BEFORE releasing this busy lease, not in a
+      // later React effect. A wholly failed/cancelled unchanged pick preserves
+      // an otherwise valid freeze; it never restores an invalidated freeze.
+      if (current && ((outcome?.added ?? 0) > 0 || photoKey() !== before)) frozenRef.current = null
+      intakeActivity.current.finish(work)
+      // An old owner/recipient/mount cannot clear a replacement's busy,
+      // object URLs or notice, even after a late read rejection.
+      if (current) {
+        rememberPhotos()
+        setStamp((value) => value + 1)
+        onNotice(failed || outcome?.refused ? 'photoRejected' : pendingPhotoIntakes() > 0 ? 'photoLoading' : 'errorRegion')
+      }
+    }
   }
 
   function onMusicInput(value: string) {
@@ -1074,7 +1088,7 @@ export function Create({
           </label>
           <p>{note.bytes()} / {NOTE_MAX_UTF8_BYTES}</p>
           {note.fits() ? null : <p>{t('noteTooLong')}</p>}
-          <div className="photo-draft">
+          <div className="photo-draft" aria-busy={photoIntakePending}>
             <label>
               {t('addPhotos')}
               <input

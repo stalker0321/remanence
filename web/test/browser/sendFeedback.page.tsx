@@ -163,3 +163,6 @@ Object.assign(window, { sendFeedbackFixture: {
   messages: (language: Language) => catalog[language],
   state: () => ({ signs, fetches: fetches.slice(), phase: store.getSnapshot().phase, photoCount: photos.photos().length, confirmed: recipient.confirmed()?.handle }),
 } })
+
+// Reuse the exact real-App setup in further isolated browser regressions.
+export { store, keys, recipient, photos, note, ready, jpeg, waitFor, button }

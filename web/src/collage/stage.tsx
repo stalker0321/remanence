@@ -4,6 +4,7 @@ import { exportComposition } from './exportComposition'
 import { paintScene, type PaintImage } from './paint'
 import type { HeldSheet } from './memory'
 import type { Scene } from './prepare'
+import { PhotoViewer } from './PhotoViewer'
 
 export interface StagePorts {
   loadImage(url: string): Promise<PaintImage>
@@ -32,16 +33,14 @@ export function CollageStage({
   const loadFacesPort = ports?.loadFaces ?? loadFaces
   const encodePort = ports?.encode ?? encodePng
   const canvas = useRef<HTMLCanvasElement>(null)
-  const closeViewer = useRef<HTMLButtonElement>(null)
   const epoch = useRef(0)
   const exportUrls = useRef(new Set<string>())
-  const [photo, setPhoto] = useState<number | null>(null)
+  const restoreFocus = useRef<{ trigger: HTMLButtonElement; owner: HeldSheet } | null>(null)
+  const [viewer, setViewer] = useState<{ index: number; owner: HeldSheet } | null>(null)
   const [paintState, setPaintState] = useState<PaintState>('loading')
   const [exporting, setExporting] = useState(false)
   const [exportFailed, setExportFailed] = useState(false)
-  const ids = held.scene.photos.map((item) => item.contentId)
-  const current = photo === null ? null : ids[photo] ?? null
-  const currentUrl = current ? held.photos.get(current) ?? null : null
+  const viewerOpen = viewer !== null && viewer.owner === held
   const status = paintState === 'loading'
     ? t('sheetPreparing')
     : paintState === 'failed'
@@ -96,21 +95,20 @@ export function CollageStage({
   }, [])
 
   useEffect(() => {
-    if (photo === null) return
-    closeViewer.current?.focus()
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        setPhoto(null)
-      } else if (event.key === 'ArrowRight') {
-        setPhoto((index) => index === null ? index : Math.min(ids.length - 1, index + 1))
-      } else if (event.key === 'ArrowLeft') {
-        setPhoto((index) => index === null ? index : Math.max(0, index - 1))
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [photo, ids.length])
+    if (viewer !== null && viewer.owner !== held) setViewer(null)
+  }, [held, viewer])
+
+  useEffect(() => {
+    if (viewer !== null) return
+    const pending = restoreFocus.current
+    restoreFocus.current = null
+    if (pending !== null && pending.owner === held && pending.trigger.isConnected) pending.trigger.focus()
+  }, [viewer, held])
+
+  function openPhoto(index: number, trigger: HTMLButtonElement): void {
+    restoreFocus.current = { trigger, owner: held }
+    setViewer({ index, owner: held })
+  }
 
   async function exportSheet() {
     if (paintState !== 'ready' || exporting) return
@@ -145,41 +143,46 @@ export function CollageStage({
 
   return (
     <div className="stage">
-      <div className="sheet">
-        <canvas ref={canvas} width={held.scene.canvasWidth} height={held.scene.canvasHeight} />
-        {held.scene.photos.map((item, index) => (
-          <button
-            key={item.contentId}
-            type="button"
-            className="hit"
-            style={{
-              left: `${(item.destination.x / held.scene.canvasWidth) * 100}%`,
-              top: `${(item.destination.y / held.scene.canvasHeight) * 100}%`,
-              width: `${(item.destination.width / held.scene.canvasWidth) * 100}%`,
-              height: `${(item.destination.height / held.scene.canvasHeight) * 100}%`,
-            }}
-            onClick={() => setPhoto(index)}
-          >
-            {t('photoViewer')}
-          </button>
-        ))}
-      </div>
-      <p className="status" role="status" aria-live="polite">{status}</p>
-      <div className="actions">
-        <button type="button" disabled={paintState !== 'ready' || exporting} onClick={exportSheet}>
-          {t('exportComposition')}
-        </button>
-        <button type="button" onClick={onClose}>{t('closeSheet')}</button>
-      </div>
-      {currentUrl ? (
-        <div className="viewer" role="dialog" aria-modal="true" aria-label={t('photoViewer')}>
-          <img src={currentUrl} alt="" />
-          <div className="actions">
-            <button type="button" disabled={photo === 0} onClick={() => setPhoto((index) => index === null ? index : index - 1)}>{t('previousPhoto')}</button>
-            <button type="button" disabled={photo === ids.length - 1} onClick={() => setPhoto((index) => index === null ? index : index + 1)}>{t('nextPhoto')}</button>
-            <button ref={closeViewer} type="button" className="primary" onClick={() => setPhoto(null)}>{t('back')}</button>
+      <div className="stage-main" inert={viewerOpen}>
+        <div className="stage-viewport">
+          <div className="sheet">
+            <canvas ref={canvas} width={held.scene.canvasWidth} height={held.scene.canvasHeight} />
+            {held.scene.photos.map((item, index) => (
+              <button
+                key={item.contentId}
+                type="button"
+                className="hit"
+                style={{
+                  left: `${(item.destination.x / held.scene.canvasWidth) * 100}%`,
+                  top: `${(item.destination.y / held.scene.canvasHeight) * 100}%`,
+                  width: `${(item.destination.width / held.scene.canvasWidth) * 100}%`,
+                  height: `${(item.destination.height / held.scene.canvasHeight) * 100}%`,
+                }}
+                onClick={(event) => openPhoto(index, event.currentTarget)}
+              >
+                {t('photoViewer')}
+              </button>
+            ))}
           </div>
         </div>
+        <div className="stage-chrome">
+          <p className="status" role="status" aria-live="polite">{status}</p>
+          <div className="actions">
+            <button type="button" disabled={paintState !== 'ready' || exporting} onClick={exportSheet}>
+              {t('exportComposition')}
+            </button>
+            <button type="button" onClick={onClose}>{t('closeSheet')}</button>
+          </div>
+        </div>
+      </div>
+      {viewerOpen && viewer !== null ? (
+        <PhotoViewer
+          held={held}
+          index={viewer.index}
+          t={t}
+          onIndex={(index) => setViewer({ index, owner: held })}
+          onClose={() => setViewer(null)}
+        />
       ) : null}
     </div>
   )

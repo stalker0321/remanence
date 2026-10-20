@@ -449,6 +449,10 @@ class CreateScreenCollageChooserTest {
             composeRule.runOnIdle { edit() }
             composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing && vm.collageChoices.candidates.isNotEmpty() }
             composeRule.waitForIdle()
+            composeRule.runOnIdle {
+                vm.clearFrozenCollageSelection()
+                while (vm.collageChoices.displayIndex > 0) vm.collageChoices.previous()
+            }
             repeat(vm.collageChoices.candidates.size) { index ->
                 composeRule.onNodeWithTag("collage_canvas").assertIsDisplayed()
                 composeRule.onNodeWithTag("collage_notice").assertDoesNotExist()

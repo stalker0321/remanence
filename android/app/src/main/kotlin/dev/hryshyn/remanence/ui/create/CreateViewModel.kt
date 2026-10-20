@@ -2178,6 +2178,10 @@ class CreateViewModel(
         collageCropSource = null
         cropSourceBuiltIds = null
         retainedOriginals.clear()
+        // The preview cache is backed by these originals, not just picker
+        // IDs. Reusing it after a photo revision would skip the retain sink.
+        // Drop references only: the outgoing host may still draw its JPEGs.
+        generatorPreviewCoordinator.reset()
     }
 
     /** Drops all preview ownership (sources + in-flight load) on any change. */

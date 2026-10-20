@@ -257,6 +257,13 @@ try {
 
     await hit.click()
     await page.waitForSelector(".viewer")
+    await page.keyboard.press("Escape")
+    await page.waitForSelector(".viewer", { state: "detached" })
+    await page.waitForFunction((element) => document.activeElement === element, hitHandle)
+    check("Escape closes the modal and returns focus", await page.evaluate((element) => document.activeElement === element, hitHandle))
+
+    await hit.click()
+    await page.waitForSelector(".viewer")
     const oldSrc = await page.locator(".viewer-image").getAttribute("src")
     await page.evaluate(() => window.__stageViewer.replace())
     await page.waitForTimeout(120)

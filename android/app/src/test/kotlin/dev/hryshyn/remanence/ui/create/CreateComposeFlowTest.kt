@@ -11,6 +11,12 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -73,6 +79,7 @@ import kotlinx.serialization.json.*
 class CreateComposeFlowTest {
 
     private val testDispatcher = UnconfinedTestDispatcher()
+    private val ownedViewModels = CreateTestViewModels(testDispatcher.scheduler)
 
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var stagingDir: File
@@ -99,9 +106,16 @@ class CreateComposeFlowTest {
 
     @After
     fun tearDown() {
-        Dispatchers.resetMain()
-        if (::database.isInitialized) database.close()
-        stagingDir.deleteRecursively()
+        try {
+            // RED: the original fixture reset Main without retiring its VMs.
+            assertTrue("owned VM work must complete BEFORE resetMain", ownedViewModels.allCompleted)
+        } finally {
+            // Bound the RED run itself: never leak work into the next test.
+            runBlocking { withTimeout(10_000) { ownedViewModels.clearAndJoin() } }
+            Dispatchers.resetMain()
+            if (::database.isInitialized) database.close()
+            stagingDir.deleteRecursively()
+        }
     }
 
     private class Accepting(private val result: ProcessedStill.Accepted) : StillProcessor {
@@ -160,7 +174,7 @@ class CreateComposeFlowTest {
         directoryVersion = "v1",
     )
 
-    private fun previewLoader() = DefaultGeneratorPreviewLoader(
+    private fun previewLoader(worker: CoroutineDispatcher) = DefaultGeneratorPreviewLoader(
         openSource = { pickerId ->
             PhotoSource { ByteArrayInputStream(originalFor(pickerId)) }
         },
@@ -170,6 +184,7 @@ class CreateComposeFlowTest {
         normalizer = PhotoNormalizerPort {
             NormalizedPhotoDto(byteArrayOf(9, 8, 7), 100, 100)
         },
+        workerDispatcher = worker,
     )
 
     private fun originalFor(pickerId: String): ByteArray = memoryTestJpegForPhotoId(pickerId)
@@ -180,6 +195,7 @@ class CreateComposeFlowTest {
         severableTip: Boolean = false,
         persistence: SealedFingerprintPersistence = NoPersistence(),
         telemetry: TelemetryCoordinator? = null,
+        previewWorker: CoroutineDispatcher = Dispatchers.IO,
     ): CreateViewModel {
         val roots = AccountScopedFileRoots(stagingDir)
         val retryStore = SenderRetryMaterialStore(roots)
@@ -195,14 +211,23 @@ class CreateComposeFlowTest {
             frontProcessor = Accepting(goldenSynthetic()),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
-            generatorPreviewLoader = previewLoader(),
+            generatorPreviewLoader = previewLoader(previewWorker),
             generatorBridgeProvider = bridge.provider,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
             collageSourceFactory = if (withCropSource) testCollageSourceFactory(cornerFace, severableTip) else null,
             telemetryCoordinator = telemetry,
-        ).also { it.beginSession(1L, ownerUuid.toString()) }
+        ).also { ownedViewModels.own(it); it.beginSession(1L, ownerUuid.toString()) }
+    }
+
+    @Test fun ownedPreviewMustFinishBeforeMainReset() {
+        val vm = newViewModel(previewWorker = StandardTestDispatcher(testDispatcher.scheduler))
+        driveToContent(vm)
+        assertEquals(GeneratorPreviewState.Loading, vm.generatorPreview.value)
+        assertTrue(requireNotNull(vm.viewModelScope.coroutineContext[Job]).children.any { it.isActive })
+        // Worker return is queued, so the missing teardown ownership cannot
+        // be hidden by a fast preview. The @After invariant must fail on RED.
     }
 
     private fun driveToContent(vm: CreateViewModel, photos: Int = 3) {
@@ -322,23 +347,11 @@ class CreateComposeFlowTest {
     }
 
     private fun awaitReadyPreview(vm: CreateViewModel) {
-        val deadline = System.currentTimeMillis() + 10_000
-        while (vm.generatorPreview.value !is GeneratorPreviewState.Ready) {
-            if (System.currentTimeMillis() > deadline) {
-                error("preview never Ready, got ${vm.generatorPreview.value}")
-            }
-            Thread.sleep(20)
-        }
+        runBlocking { withTimeout(10_000) { vm.generatorPreview.first { it is GeneratorPreviewState.Ready } } }
     }
 
     private fun awaitTerminalPublish(vm: CreateViewModel) {
-        val deadline = System.currentTimeMillis() + 10_000
-        while (vm.step.value == CreateViewModel.Step.PUBLISHING) {
-            if (System.currentTimeMillis() > deadline) {
-                error("publishing never reached a terminal step; publishError=" + vm.publishError.value)
-            }
-            Thread.sleep(20)
-        }
+        runBlocking { withTimeout(10_000) { vm.step.first { it != CreateViewModel.Step.PUBLISHING } } }
     }
 
     private fun hit(id: String) = MusicTrackHit(
@@ -1010,7 +1023,7 @@ class CreateComposeFlowTest {
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
             collageSourceFactory = testCollageSourceFactoryWithAnalysisDims(analysisWidth, analysisHeight),
-        ).also { it.beginSession(1L, ownerUuid.toString()) }
+        ).also { ownedViewModels.own(it); it.beginSession(1L, ownerUuid.toString()) }
     }
 
     @Test

@@ -28,7 +28,7 @@ const fixture = window as unknown as {
 }
 const credentials = fixture.t398Credentials!
 delete fixture.t398Credentials
-const checks: { name: string; ok: boolean }[] = []
+const checks: { name: string; ok: boolean; detail?: string }[] = []
 function check(name: string, value: boolean): void {
   checks.push({ name, ok: value })
   if (!value) throw new Error(name)
@@ -150,6 +150,13 @@ fixture.t398 = { checks, async run(phase) {
     const departed = new Promise<void>((ok) => window.addEventListener('popstate', () => { pending.release(); ok() }, { once: true }))
     history.back(); await departed
     await waitFor(() => zero(rec.plain), 'native Back plaintext cleanup')
+    checks.push({ name: 'native Back event checkpoint (observation, not verdict)', ok: true,
+      detail: JSON.stringify({ hash: location.hash, phase: rec.store.getSnapshot().phase,
+        offRoute, stage: stage(), sheet: rec.memory.getSnapshot() !== null, urls: rec.urls.size }) })
+    // Decrypt outputs may already be zero before receive's admission catch has
+    // settled. Observe the terminal phase, retaining the monotonic subscriber
+    // above so even a transient off-route admit cannot disappear from evidence.
+    await waitFor(() => rec.store.getSnapshot().phase !== 'postcard-matched', 'native receive settled')
     check('native Back cannot admit late real committed response', !offRoute && location.hash === '#/' && !stage()
       && rec.memory.getSnapshot() === null && rec.store.getSnapshot().phase === 'keys-unlocked' && rec.urls.size === 0)
     detach(); admissionGate = null

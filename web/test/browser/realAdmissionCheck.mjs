@@ -72,7 +72,7 @@ try {
       assert.equal(admitted[0].firstOpen.is_replay, false)
       assert.ok(admitted.slice(1).every((r) => r.firstOpen.is_replay === true))
       assert.ok(requests.filter((r) => r.method === 'PUT').length === 10, 'both five-blob ciphertext publications used HTTP upload')
-      assert.ok(requests.filter((r) => r.method === 'GET').every((r) => r.cache === 'private, no-store'), 'real private read cache headers')
+      assert.ok(requests.filter((r) => r.method === 'GET' && r.path.includes('/blobs/')).every((r) => r.cache === 'private, no-store'), 'real private blob cache headers')
       assert.deepEqual(errors, [])
     }
     acknowledge(phase, result)

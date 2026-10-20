@@ -171,6 +171,12 @@ try {
     await page.setViewportSize({ width: 900, height: 900 })
     await page.waitForTimeout(100)
 
+    await page.evaluate(() => {
+      const background = document.createElement("button")
+      background.id = "background-account"
+      background.textContent = "background-account"
+      document.body.prepend(background)
+    })
     const hit = page.locator(".hit").nth(0)
     const hitHandle = await hit.elementHandle()
     if (!hitHandle) throw new Error("first photo trigger missing")
@@ -213,6 +219,13 @@ try {
     check("Tab from close wraps to the first enabled modal control", await page.evaluate(() => document.activeElement?.textContent?.trim()) === "next")
     await page.keyboard.press("Shift+Tab")
     check("Shift+Tab wraps back to close", await page.evaluate(() => document.activeElement?.textContent?.trim()) === "back")
+
+    await trustedClick(".viewer-actions button:nth-of-type(2)")
+    await trustedClick(".viewer-actions button:nth-of-type(1)")
+    check("focused previous becomes disabled at the first original", await page.evaluate(() => document.activeElement?.textContent?.trim()) === "previous" && await page.evaluate(() => (document.activeElement instanceof HTMLButtonElement) && document.activeElement.disabled))
+    await page.keyboard.press("Shift+Tab")
+    check("Shift+Tab from a newly disabled focused previous stays in the modal", await page.evaluate(() => document.querySelector(".viewer")?.contains(document.activeElement) === true))
+    check("background App-like control never receives focus", await page.evaluate(() => document.activeElement?.id !== "background-account"))
 
     await trustedClick(".viewer-actions button:nth-of-type(2)")
     await page.waitForTimeout(50)

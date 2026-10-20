@@ -54,7 +54,10 @@ export function PhotoViewer({
       const first = nodes[0]!
       const last = nodes[nodes.length - 1]!
       const active = document.activeElement
-      if (event.shiftKey && active === first) {
+      if (!nodes.some((element) => element === active)) {
+        event.preventDefault()
+        ;(event.shiftKey ? last : first).focus()
+      } else if (event.shiftKey && active === first) {
         event.preventDefault()
         last.focus()
       } else if (!event.shiftKey && active === last) {

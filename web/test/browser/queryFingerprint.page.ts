@@ -106,6 +106,11 @@ async function main(): Promise<void> {
     assert('same JPEG yields the same profile id', query.profileId === sender.profileId)
     assert('same JPEG yields the same crop provenance', JSON.stringify(query.provenance) === JSON.stringify(sender.provenance))
 
+    const distinctJpeg = await texturedQuadJpeg(99, 640, 480)
+    const distinct = await produceQueryFingerprint(plainStill(distinctJpeg, 640, 480), { fence: () => true })
+    assert('distinct frame yields a distinct query wire', bytesToHex(distinct.wire) !== bytesToHex(query.wire))
+    report.distinctWireHex = bytesToHex(distinct.wire)
+
     const queryFingerprint = parseSiftFingerprint(query.wire)
     const referenceFingerprint = parseSiftFingerprint(sender.wire)
     assert('query wire parses to a nonempty fingerprint', queryFingerprint.keypoints.length > 0)

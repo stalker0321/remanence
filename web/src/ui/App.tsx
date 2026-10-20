@@ -23,7 +23,8 @@ import { type RecognitionEngine } from '../scan/grant'
 import { explainScan } from '../scan/notice'
 import { receivePostcard } from '../scan/receive'
 import { createRecognitionEngine } from '../scan/recognitionEngine'
-import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
+import { downloadCiphertext } from '../sync/incoming'
+import { fetchCompleteIncoming, wipeIncomingCatalog } from '../sync/incomingAll'
 import { buildRecognitionIndex, type RecognitionIndex } from '../scan/recognitionIndex'
 import { canvasTextMeasurer } from '../collage/measure'
 import { CreatorComposer, type CreatorComposerPhoto } from '../collage/CreatorComposer'
@@ -270,7 +271,10 @@ export function Scan({
     openAbort.current = controller
     const engineForAttempt = engine ?? createRecognitionEngine({ signal: controller.signal })
     try {
-      const incoming = await fetchIncoming(store, transport, controller.signal)
+      // T353: exhaust the ordered server pages, then present ONE complete
+      // catalog to the unchanged index/engine/grant flow. Terminal non-null
+      // server cursors are normalized only after exhaustion.
+      const incoming = await fetchCompleteIncoming(store, transport, controller.signal)
       if (controller.signal.aborted) return
       if (incoming.items.length === 0) {
         onNotice('emptyIndex')
@@ -303,6 +307,8 @@ export function Scan({
         )
       } finally {
         index?.dispose()
+        // This attempt owns the collected metadata buffers.
+        wipeIncomingCatalog(incoming.items)
       }
       if (!controller.signal.aborted) onNotice('errorRegion')
     } catch (error) {

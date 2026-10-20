@@ -64,6 +64,7 @@ export function explainScan(error: unknown): MessageKey {
   if (error instanceof SyncError) {
     if (error.code === 'HASH_MISMATCH') return 'integrityFailed'
     if (error.code === 'STALE' || error.code === 'CANCELLED') return 'scanCancelled'
+    if (error.code === 'INCOMPLETE') return 'incompleteIndex'
     return 'syncRejected'
   }
   return 'syncRejected'

@@ -62,10 +62,13 @@ await cp(vendor, join(dist, 'opencv'), { recursive: true })
 const fontsDir = join(web, 'public', 'fonts')
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.otf': 'font/otf', '.wasm': 'application/wasm' }
 
-let catalogPage = null
+let catalogPages = null
 let signingRecord = null
 const blobs = new Map()
 const downloads = { recognition: 0, content: 0, photo: 0, paths: [] }
+const incomingRequests = []
+let delayCursor = null
+let delayMs = 0
 const json = { 'content-type': 'application/json', 'cache-control': 'no-store' }
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1')
@@ -75,11 +78,23 @@ const server = createServer((req, res) => {
     try {
       const body = Buffer.concat(chunks)
       if (req.method === 'GET' && url.pathname === '/__capture') {
-        res.writeHead(200, json).end(JSON.stringify({ ...downloads }))
+        res.writeHead(200, json).end(JSON.stringify({ ...downloads, incoming: incomingRequests }))
         return
       }
       if (req.method === 'POST' && url.pathname === '/__catalog') {
-        catalogPage = JSON.parse(body.toString('utf8'))
+        const parsed = JSON.parse(body.toString('utf8'))
+        if (Array.isArray(parsed.pages)) {
+          catalogPages = new Map(parsed.pages.map((page) => [page.cursor ?? null, page]))
+        } else {
+          catalogPages = new Map([[null, parsed]])
+        }
+        res.writeHead(200, json).end(JSON.stringify({ ok: true }))
+        return
+      }
+      if (req.method === 'POST' && url.pathname === '/__delay') {
+        const parsed = JSON.parse(body.toString('utf8'))
+        delayCursor = parsed.cursor ?? null
+        delayMs = Number(parsed.ms) || 0
         res.writeHead(200, json).end(JSON.stringify({ ok: true }))
         return
       }
@@ -94,8 +109,13 @@ const server = createServer((req, res) => {
         return
       }
       if (req.method === 'GET' && url.pathname === '/v1/capsules/incoming') {
-        if (!catalogPage) { res.writeHead(404, json).end(JSON.stringify({ code: 'missing' })); return }
-        res.writeHead(200, json).end(JSON.stringify(catalogPage))
+        const cursor = url.searchParams.get('cursor')
+        const limit = url.searchParams.get('limit')
+        incomingRequests.push({ cursor, limit })
+        if (delayCursor === cursor && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+        const page = catalogPages ? catalogPages.get(cursor) : undefined
+        if (!page) { res.writeHead(404, json).end(JSON.stringify({ code: 'missing' })); return }
+        res.writeHead(200, json).end(JSON.stringify(page))
         return
       }
       const directory = /^\/v1\/directory\/key-bundles\/([0-9a-f-]{36})$/.exec(url.pathname)
@@ -112,8 +132,11 @@ const server = createServer((req, res) => {
         const blobId = blobRoute[2]
         const bytes = blobs.get(blobId)
         downloads.paths.push(url.pathname)
-        if (!catalogPage) { res.writeHead(404).end(); return }
-        const meta = catalogPage.items.map((item) => item.blobs.find((blob) => blob.blob_id === blobId)).find(Boolean)
+        if (!catalogPages) { res.writeHead(404).end(); return }
+        const meta = [...catalogPages.values()]
+          .flatMap((page) => page.items)
+          .map((item) => item.blobs.find((blob) => blob.blob_id === blobId))
+          .find(Boolean)
         const kind = meta ? meta.kind : 'UNKNOWN'
         if (kind === 'RECOGNITION_MANIFEST') downloads.recognition += 1
         else if (kind === 'CONTENT_MANIFEST') downloads.content += 1

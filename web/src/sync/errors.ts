@@ -2,6 +2,7 @@ export const syncCodes = [
   'CANCELLED',
   'HASH_MISMATCH',
   'ILLEGAL_PHASE',
+  'INCOMPLETE',
   'OVERSIZED',
   'STALE',
   'SYNC_REJECTED',

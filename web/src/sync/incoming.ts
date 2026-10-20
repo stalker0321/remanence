@@ -33,6 +33,12 @@ export interface IncomingCatalog {
   nextCursor: string | null
 }
 
+/** Optional raw-page paging inputs (opaque server cursor + bounded limit). */
+export interface IncomingPageOptions {
+  readonly cursor?: string | null
+  readonly limit?: number
+}
+
 const READY_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/
 const KIND_CAP = {
   RECOGNITION_MANIFEST: limits.recognitionCiphertext,
@@ -48,6 +54,7 @@ export async function fetchIncoming(
   session: SessionStore,
   transport: ApiTransport,
   signal?: AbortSignal,
+  options: IncomingPageOptions = {},
 ): Promise<IncomingCatalog> {
   const view = session.getSnapshot()
   if (view.phase === 'signed-out' || view.accountId === null || view.bundleId === null) {
@@ -68,11 +75,17 @@ export async function fetchIncoming(
     if (!secrets || session.getSnapshot().accountId !== accountId) throw new SyncError('STALE')
     return secrets.accessToken
   }
+  // Optional bounded paging goes through the existing ApiRequest.query contract
+  // (key/value validation, no manual `?` concatenation or path/auth bypass).
+  const query: Record<string, string> = {}
+  if (options.cursor !== undefined && options.cursor !== null) query.cursor = options.cursor
+  if (options.limit !== undefined) query.limit = String(options.limit)
   const page = await transport.request({
     path: '/v1/capsules/incoming',
     method: 'GET',
     token: token(),
     signal,
+    ...(Object.keys(query).length === 0 ? {} : { query }),
   })
   if (page.status !== 200) throw new SyncError('SYNC_REJECTED')
   const parsed = readPage(page.body, accountId, bundleId)

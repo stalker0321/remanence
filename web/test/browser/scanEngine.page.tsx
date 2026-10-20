@@ -99,6 +99,21 @@ async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as unknown as BufferSource))
 }
 
+function base64url(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+/** Canonical server-compatible version-1 cursor (25 bytes -> 34 chars). */
+function canonicalCursor(sequence: number): string {
+  const payload = new Uint8Array(25)
+  payload[0] = 1
+  new DataView(payload.buffer).setBigInt64(1, BigInt(sequence), false)
+  payload.fill(0x5a, 9)
+  return base64url(payload)
+}
+
 async function canvasJpeg(width: number, height: number, seed: number): Promise<Uint8Array> {
   const canvas = document.createElement('canvas')
   canvas.width = width
@@ -358,6 +373,39 @@ async function main(): Promise<void> {
     const sealed2 = await sealOne(crypto.randomUUID())
     const item1 = await wireItem(sealed1)
     const item2 = await wireItem(sealed2)
+    // Distinct visual reference so a cross-page unique page can contain a
+    // non-matching capsule before the matching one.
+    const otherQuad = await texturedQuadJpeg(99, 640, 480)
+    const otherHold = new FrontHold()
+    await otherHold.open({
+      open: async () => ({
+        preview: document.createElement('video') as HTMLVideoElement,
+        capture: async (): Promise<StillCapture> => ({ bytes: otherQuad.slice(), width: 640, height: 480 }),
+        stop: () => undefined,
+      }),
+    })
+    const otherStill = await otherHold.take(producerRecipient.confirmed()!)
+    const otherHolder = new FrontFingerprintHold()
+    const otherProduced = await otherHolder.run(otherStill, {
+      store: senderStore,
+      recipient: producerRecipient,
+      hold: otherHold,
+      mounted: () => true,
+    })
+    const sealedOther = await sealCapsule({
+      session: senderStore,
+      keys: senderKeys,
+      freeze,
+      recipient: recipientSnapshot(),
+      photos: ordered,
+      capsuleId: crypto.randomUUID(),
+      candidateId: 'cand-other',
+      createdAtEpochSeconds: 1_755_000_000n,
+      epoch: 1n,
+      frontFingerprint: otherProduced.wire,
+      placeLabel: null,
+    })
+    const itemOther = await wireItem(sealedOther)
     await postJson('/__signing', {
       key_bundle_id: sealed1.senderKeyBundleId,
       user_id: sealed1.senderUserId,
@@ -365,9 +413,14 @@ async function main(): Promise<void> {
       status: 'ACTIVE',
       signing_public_keyset: b64(SIGNING_PUBLIC),
     })
-    await postJson('/__blobs', [...sealed1.blobs, ...sealed2.blobs].map((blob) => ({ blobId: blob.blobId, bodyHex: bytesToHex(blob.ciphertext) })))
+    await postJson('/__blobs', [...sealed1.blobs, ...sealed2.blobs, ...sealedOther.blobs].map((blob) => ({ blobId: blob.blobId, bodyHex: bytesToHex(blob.ciphertext) })))
     const serveCatalog = async (items: unknown[], hasMore = false, nextCursor: string | null = null) => {
       await postJson('/__catalog', { items, has_more: hasMore, next_cursor: nextCursor })
+    }
+    const servePages = async (pages: Array<{ cursor: string | null; items: unknown[]; hasMore: boolean; nextCursor: string | null }>) => {
+      await postJson('/__catalog', {
+        pages: pages.map((page) => ({ cursor: page.cursor, items: page.items, has_more: page.hasMore, next_cursor: page.nextCursor })),
+      })
     }
 
     // ---- recipient helper + REAL App mount (production default engine) ----
@@ -432,12 +485,18 @@ async function main(): Promise<void> {
       await waitFor(() => buttonByText(t('matchPicture')) !== null, `${what} match`)
       await clickText(t('matchPicture'), `${what} match click`)
     }
-    const captureCounts = () => getJson<{ recognition: number; content: number; photo: number }>('/__capture')
+    const captureCounts = () => getJson<{
+      recognition: number
+      content: number
+      photo: number
+      incoming?: Array<{ cursor: string | null; limit: string | null }>
+    }>('/__capture')
     const waitNotice = (key: MessageKey) => waitFor(() => bodyText().includes(t(key)), `notice ${key}`)
     const stageShown = () => document.querySelector('.stage') !== null
 
     // ---- POSITIVE: production DEFAULT engine opens the exact sealed capsule ----
-    await serveCatalog([item1])
+    // Real server terminal semantics: has_more=false with a NON-NULL cursor.
+    await serveCatalog([item1], false, canonicalCursor(1))
     let rec = makeRecipient()
     const beforePositive = await captureCounts()
     mountApp(rec)
@@ -471,8 +530,12 @@ async function main(): Promise<void> {
     report.many = manyCounts
     rootRef.current?.unmount()
 
-    // ---- INCOMPLETE page fails closed, nothing opened ----
-    await serveCatalog([item1], true, 'next-page')
+    // ---- INCOMPLETE later page fails closed, nothing opened ----
+    const incompleteCursor = canonicalCursor(2)
+    await servePages([
+      { cursor: null, items: [item1], hasMore: true, nextCursor: incompleteCursor },
+      { cursor: incompleteCursor, items: [], hasMore: true, nextCursor: incompleteCursor },
+    ])
     rec = makeRecipient()
     const beforeIncomplete = await captureCounts()
     mountApp(rec)
@@ -484,6 +547,112 @@ async function main(): Promise<void> {
     assert('incomplete: zero content reads', incompleteCounts.content === beforeIncomplete.content)
     assert('incomplete: zero photo reads', incompleteCounts.photo === beforeIncomplete.photo)
     report.incomplete = incompleteCounts
+    rootRef.current?.unmount()
+
+    // ---- REPEATED CURSOR (non-advancing later page) fails closed ----
+    const repeatCursor = canonicalCursor(10)
+    await servePages([
+      { cursor: null, items: [item1], hasMore: true, nextCursor: repeatCursor },
+      { cursor: repeatCursor, items: [item2], hasMore: true, nextCursor: repeatCursor },
+    ])
+    rec = makeRecipient()
+    const beforeRepeat = await captureCounts()
+    mountApp(rec)
+    await runScan('repeated cursor')
+    await waitNotice('incompleteIndex')
+    const repeatCounts = await captureCounts()
+    assert('repeated cursor: incomplete notice', bodyText().includes(t('incompleteIndex')))
+    assert('repeated cursor: no CollageStage', !stageShown())
+    assert('repeated cursor: zero content reads', repeatCounts.content === beforeRepeat.content)
+    assert('repeated cursor: zero photo reads', repeatCounts.photo === beforeRepeat.photo)
+    report.repeated = repeatCounts
+    rootRef.current?.unmount()
+
+    // ---- DUPLICATE CAPSULE ID ACROSS PAGES fails closed ----
+    const duplicateCursor = canonicalCursor(11)
+    await servePages([
+      { cursor: null, items: [item1], hasMore: true, nextCursor: duplicateCursor },
+      { cursor: duplicateCursor, items: [item1], hasMore: false, nextCursor: canonicalCursor(12) },
+    ])
+    rec = makeRecipient()
+    const beforeDuplicate = await captureCounts()
+    mountApp(rec)
+    await runScan('duplicate id')
+    await waitNotice('incompleteIndex')
+    const duplicateCounts = await captureCounts()
+    assert('duplicate id: incomplete notice', bodyText().includes(t('incompleteIndex')))
+    assert('duplicate id: no CollageStage', !stageShown())
+    assert('duplicate id: zero content reads', duplicateCounts.content === beforeDuplicate.content)
+    assert('duplicate id: zero photo reads', duplicateCounts.photo === beforeDuplicate.photo)
+    report.duplicate = duplicateCounts
+    rootRef.current?.unmount()
+
+    // ---- CROSS-PAGE MANY: same visual reference on two pages ----
+    const manyPagesCursor = canonicalCursor(13)
+    await servePages([
+      { cursor: null, items: [item1], hasMore: true, nextCursor: manyPagesCursor },
+      { cursor: manyPagesCursor, items: [item2], hasMore: false, nextCursor: canonicalCursor(14) },
+    ])
+    rec = makeRecipient()
+    const beforeCrossMany = await captureCounts()
+    mountApp(rec)
+    await runScan('cross-page many')
+    await waitNotice('ambiguousMatch')
+    const crossManyCounts = await captureCounts()
+    assert('cross-page many: ambiguous notice', bodyText().includes(t('ambiguousMatch')))
+    assert('cross-page many: no CollageStage', !stageShown())
+    assert('cross-page many: zero content reads', crossManyCounts.content === beforeCrossMany.content)
+    assert('cross-page many: zero photo reads', crossManyCounts.photo === beforeCrossMany.photo)
+    report.crossMany = crossManyCounts
+    rootRef.current?.unmount()
+
+    // ---- CROSS-PAGE UNIQUE: non-matching page then the matching page ----
+    const crossCursor = canonicalCursor(15)
+    await servePages([
+      { cursor: null, items: [itemOther], hasMore: true, nextCursor: crossCursor },
+      { cursor: crossCursor, items: [item1], hasMore: false, nextCursor: canonicalCursor(16) },
+    ])
+    rec = makeRecipient()
+    const beforeCross = await captureCounts()
+    const beforeCrossRequests = beforeCross.incoming?.length ?? 0
+    mountApp(rec)
+    await runScan('cross-page unique')
+    await waitFor(() => rec.store.getSnapshot().phase === 'presentation-admitted', 'cross-page admitted', 60000)
+    await waitFor(() => stageShown(), 'cross-page stage', 60000)
+    const crossCounts = await captureCounts()
+    const crossRequests = (crossCounts.incoming ?? []).slice(beforeCrossRequests)
+    assert('cross-page: presentation admitted', rec.store.getSnapshot().phase === 'presentation-admitted')
+    assert('cross-page: CollageStage displayed', stageShown())
+    assert(
+      'cross-page: ordered canonical cursor requests',
+      JSON.stringify(crossRequests.map((request) => request.cursor)) === JSON.stringify([null, crossCursor]),
+    )
+    assert('cross-page: bounded page size 25', crossRequests.every((request) => request.limit === '25'))
+    assert('cross-page: content read after unique match', crossCounts.content > beforeCross.content)
+    assert('cross-page: photo read after unique match', crossCounts.photo > beforeCross.photo)
+    report.crossPage = crossRequests
+    rootRef.current?.unmount()
+
+    // ---- LOCK ACROSS A DELAYED LATER PAGE: no late view/content ----
+    const lockCursor = canonicalCursor(17)
+    await servePages([
+      { cursor: null, items: [item1], hasMore: true, nextCursor: lockCursor },
+      { cursor: lockCursor, items: [item2], hasMore: false, nextCursor: canonicalCursor(18) },
+    ])
+    await postJson('/__delay', { cursor: lockCursor, ms: 1500 })
+    rec = makeRecipient()
+    const beforeLockPage = await captureCounts()
+    mountApp(rec)
+    await runScan('lock mid-page')
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    rec.store.lock()
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    const lockPageCounts = await captureCounts()
+    assert('lock mid-page: no late CollageStage', !stageShown())
+    assert('lock mid-page: not admitted', rec.store.getSnapshot().phase !== 'presentation-admitted')
+    assert('lock mid-page: zero content reads', lockPageCounts.content === beforeLockPage.content)
+    assert('lock mid-page: zero photo reads', lockPageCounts.photo === beforeLockPage.photo)
+    report.lockPage = lockPageCounts
     rootRef.current?.unmount()
 
     // ---- explicit unavailable override still refuses ----

@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from remanence.api.dependencies import (
@@ -224,7 +225,9 @@ def _lookup_limiter(request: Request) -> LookupRateLimiter:
 
 
 def _map_error(exc: Exception) -> JSONResponse:
-    code = getattr(exc, "code", "INTERNAL_ERROR")
+    # SQLAlchemy's diagnostic `code` may be None or an internal documentation
+    # token, never a protocol code (including failures at the outer COMMIT).
+    code = "INTERNAL_ERROR" if isinstance(exc, SQLAlchemyError) else (getattr(exc, "code", None) or "INTERNAL_ERROR")
     status = {
         "SEND_LIMIT_REACHED": 409,
         "SEND_ACCESS_UNAVAILABLE": 503,

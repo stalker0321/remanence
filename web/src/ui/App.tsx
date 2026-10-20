@@ -439,7 +439,7 @@ export function Scan({
         ) : (
           <button type="button" className="primary" onClick={() => { void open() }}>{t('useCamera')}</button>
         )}
-        <a href={href('home')}>{t('back')}</a>
+        <a href={href('home')} onClick={close}>{t('back')}</a>
       </div>
     </section>
   )
@@ -1323,7 +1323,16 @@ function Account({
   const signedIn = view.phase !== 'signed-out'
   const unlocked = signedIn && view.phase !== 'authenticated'
 
-  useEffect(() => () => abort.current?.abort(), [])
+  useEffect(() => {
+    const leave = () => { if (parseRoute(window.location.hash) !== 'account') cancel() }
+    window.addEventListener('hashchange', leave)
+    window.addEventListener('popstate', leave)
+    return () => {
+      window.removeEventListener('hashchange', leave)
+      window.removeEventListener('popstate', leave)
+      abort.current?.abort()
+    }
+  }, [])
 
   useEffect(() => {
     let previous = store.getSnapshot()
@@ -1443,7 +1452,7 @@ function Account({
             {t('signOut')}
           </button>
         ) : null}
-        <a href={href('home')}>{t('back')}</a>
+        <a href={href('home')} onClick={cancel}>{t('back')}</a>
       </div>
       {busy ? <div className="actions"><p role="status">{t('accountWorking')}</p><button type="button" onClick={cancel}>{t('accountCancel')}</button></div> : null}
       {recoveryCode ? <p className="recovery-code">{t('recoveryCodeHint')} {recoveryCode}</p> : null}

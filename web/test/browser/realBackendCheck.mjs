@@ -63,11 +63,11 @@ await page.addInitScript((session) => { window.t384Session = session }, initial.
 delete initial.session
 const accessPath = '/v1/me/send-access', historyPath = '/v1/capsules/outgoing', recentPath = '/v1/recipients/recent'
 const isPath = (path) => (reply) => new URL(reply.url()).pathname === path
-const last = (path) => responses.filter((reply) => reply.path === path).at(-1)
 async function capture(name) {
   check(`${name}: no horizontal overflow`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
-  await page.screenshot({ path: join(proof, `${name}.png`), fullPage: true })
-  await writeFile(join(proof, `${name}.html`), await page.content())
+  // Evidence contains rendered synthetic UI, not a private DOM/locator dump.
+  await page.screenshot({ path: join(proof, `${name}.png`), fullPage: true,
+    mask: [page.locator('.history-code')] })
 }
 async function button(key, root = page) {
   return root.getByRole('button', { name: await page.evaluate((name) => window.t384.messages[name], key), exact: true })

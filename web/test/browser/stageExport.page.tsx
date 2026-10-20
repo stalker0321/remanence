@@ -191,7 +191,7 @@ async function main(): Promise<void> {
     render(a.held, {
       loadImage: () => pending.promise,
     })
-    await waitFor(() => exportButton() !== null, 'pending stage mounted')
+    await waitFor(() => buttonByText(t('exportComposition')) !== null, 'pending stage mounted')
     assert('pending: export starts disabled', exportButton().disabled)
     assert('pending: truthful preparing status', canvasStatus() === t('sheetPreparing'))
     assert('pending: no export/donload before ready', exportBlobs.length === 0 && downloads.length === 0)

@@ -230,6 +230,7 @@ internal fun CollagePresentationHost(
     modifier: Modifier = Modifier,
     openTrackUrl: ((String) -> Boolean)? = null,
     validateExport: () -> Unit = {},
+    exportFactory: @Composable (() -> Unit) -> CapsuleImageExport = { rememberCapsuleImageExport(it) },
 ) {
     when (val status = state.status) {
         CollagePresentationState.Status.Loading -> Unit
@@ -259,7 +260,7 @@ internal fun CollagePresentationHost(
                 is CollageRenderer.SceneResult.Ready -> {
                     var originalPhoto by remember(state, images) { mutableStateOf<String?>(null) }
                     val photoLabel = stringResource(R.string.capsule_view_original)
-                    val export = rememberCapsuleImageExport(validateExport)
+                    val export = exportFactory(validateExport)
                     val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
                     val musicLabel = state.track?.let { stringResource(R.string.track_open_action, it.title, it.artistDisplay) }
                     CapsuleSheetFrame(export, enabled = state.status is CollagePresentationState.Status.Ready,

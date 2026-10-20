@@ -108,12 +108,14 @@ internal fun Ber1PresentationHost(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     validateExport: () -> Unit = {},
+    openTrackUrl: ((String) -> Boolean)? = null,
+    exportFactory: @Composable (() -> Unit) -> CapsuleImageExport = { rememberCapsuleImageExport(it) },
 ) {
     if (!state.isOpen) return
     var exportReady by remember(state) { mutableStateOf(false) }
     var originalPhoto by remember(state) { mutableStateOf<String?>(null) }
     val photoLabel = stringResource(R.string.capsule_view_original)
-    val export = rememberCapsuleImageExport { check(state.isOpen && exportReady); validateExport() }
+    val export = exportFactory { check(state.isOpen && exportReady); validateExport() }
     CapsuleSheetFrame(export, enabled = state.isOpen && exportReady, ratio = 360f / 640f,
         onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_ber1_close") { sheetModifier ->
       Box(sheetModifier) {
@@ -150,7 +152,8 @@ internal fun Ber1PresentationHost(
                 track = track,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
                 onOpenService = { service ->
-                    context.openTrackUrl(service.searchUrl(track.title, track.artistDisplay))
+                    val url = service.searchUrl(track.title, track.artistDisplay)
+                    openTrackUrl?.invoke(url) ?: context.openTrackUrl(url)
                 },
             )
         }

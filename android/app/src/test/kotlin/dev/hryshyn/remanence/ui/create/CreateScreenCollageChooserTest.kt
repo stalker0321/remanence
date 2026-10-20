@@ -313,7 +313,9 @@ class CreateScreenCollageChooserTest {
                 CollageCropSourceFactory { holder ->
                     AndroidCollageCropSource(
                         bytesSource = holder.asUprightBytesSource(),
-                        imageDecoder = { _ ->
+                        imageDecoder = { bytes ->
+                            assertTrue("analysis must receive a selected ORIGINAL, never preview JPEG",
+                                originals.values.any { it.contentEquals(bytes) })
                             FieldStageImage(1000, 1000, IntArray(1_000_000) { 0xFF336699.toInt() })
                         },
                         fieldRunner = FieldStageRunner(FakeFieldRuntime()),
@@ -421,6 +423,43 @@ class CreateScreenCollageChooserTest {
             vm.collageChoices.candidates.isNotEmpty()
         }
         composeRule.waitForIdle()
+    }
+
+    @Test
+    fun lastPhotoOffOnAndRepickRestoreActuallyDrawableCandidates() {
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }
+        val vm = viewModel(originals, true)
+        driveToContent(vm, ids)
+        composeRule.setContent { CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false) }
+        driveToComposeCandidates(vm)
+        val edits: List<() -> Unit> = listOf(
+            {
+                vm.photoSelection.toggle(ids.last())
+                vm.photoSelection.toggle(ids.last())
+            },
+            { vm.onPhotosPicked(ids) },
+            { vm.onPhotosPicked(ids.reversed()) },
+            { vm.onPhotosPicked(emptyList()) },
+            { vm.noteEditor.onChange("A short note") },
+        )
+        edits.forEach { edit ->
+            composeRule.runOnIdle { edit() }
+            composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing && vm.collageChoices.candidates.isNotEmpty() }
+            composeRule.waitForIdle()
+            repeat(vm.collageChoices.candidates.size) { index ->
+                composeRule.onNodeWithTag("collage_canvas").assertIsDisplayed()
+                composeRule.onNodeWithTag("collage_notice").assertDoesNotExist()
+                composeRule.onNodeWithTag("collage_select").assertIsEnabled().performClick()
+                assertEquals(vm.collageChoices.displayed?.candidateId, vm.frozenCollageSelection?.candidateId)
+                if (index < vm.collageChoices.candidates.lastIndex) {
+                    composeRule.onNodeWithTag("collage_next").performClick()
+                }
+            }
+        }
+        vm.endSession()
     }
 
     @Test

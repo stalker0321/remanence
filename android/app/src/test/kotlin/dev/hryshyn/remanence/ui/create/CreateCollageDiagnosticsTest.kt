@@ -199,10 +199,12 @@ class CreateCollageDiagnosticsTest {
         decoderDims: Pair<Int, Int> = 1000 to 1000,
         parkDecodeCall: Int? = null,
         gate: CompletableDeferred<Unit>? = null,
+        reads: MutableList<String> = mutableListOf(),
     ): DefaultGeneratorPreviewLoader {
         var decodeCalls = 0
         return DefaultGeneratorPreviewLoader(
             openSource = { pickerId ->
+                reads += pickerId
                 PhotoSource { ByteArrayInputStream(originals.getValue(pickerId)) }
             },
             decoder = GeneratorSourceBinding.PhotoDecoderPort { _ ->
@@ -286,6 +288,59 @@ class CreateCollageDiagnosticsTest {
         assertEquals(sha256Hex(original), loaded!!.originalHash)
         // The holder-style copy survives the loader's own zeroization.
         assertTrue(seenBytes.contentEquals(original))
+    }
+
+    @Test
+    fun lastPhotoOffOnReloadsOriginalsEvenWhenPreviewIdsMatch() {
+        assertPhotoRevisionRetainsOriginals { vm, ids ->
+            vm.photoSelection.toggle(ids.last())
+            vm.photoSelection.toggle(ids.last())
+        }
+    }
+
+    @Test
+    fun identicalRepickReloadsOriginalsEvenWhenPreviewIdsMatch() {
+        assertPhotoRevisionRetainsOriginals { vm, ids -> vm.onPhotosPicked(ids) }
+    }
+
+    @Test
+    fun reorderedPhotosReloadButPickerCancelAndNoteOnlyReuseOriginals() {
+        assertPhotoRevisionRetainsOriginals { vm, ids -> vm.onPhotosPicked(ids.reversed()) }
+    }
+
+    private fun assertPhotoRevisionRetainsOriginals(edit: (CreateViewModel, List<String>) -> Unit) {
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { originalFor(it) }
+        val reads = mutableListOf<String>()
+        val loader = previewLoader(originals, reads = reads)
+        lateinit var retained: RetainedOriginalHolder
+        val vm = viewModel(loader, CollageCropSourceFactory { holder ->
+            retained = holder
+            null
+        })
+        vm.beginSession(1L, senderUserUuid.toString())
+        drivePhotos(vm, ids)
+        val staleSink = requireNotNull(loader.retainOriginal)
+        val before = reads.size
+        edit(vm, ids)
+        val ready = vm.generatorPreview.value as GeneratorPreviewState.Ready
+        assertEquals("a cleared holder requires a fresh original read per photo", before + 3, reads.size)
+        ready.expression.input.photos.forEach { photo ->
+            val expected = originals.values.single { sha256Hex(it) == photo.contentId.removePrefix("c") }
+            assertTrue("retained original must match identity, never thumbnail",
+                retained.bytesFor(photo.contentId)?.contentEquals(expected) == true)
+        }
+        val currentKeys = retained.retainedSizesForTests().keys.toSet()
+        val late = originalFor("obsolete")
+        staleSink(late, sha256Hex(late))
+        assertEquals("old revision callback must be inert", currentKeys, retained.retainedSizesForTests().keys)
+        vm.onPhotosPicked(emptyList())
+        vm.noteEditor.onChange("A short note")
+        vm.noteEditor.onChange("")
+        assertEquals("cancel and note-only edits must reuse originals", before + 3, reads.size)
+        assertEquals(currentKeys, retained.retainedSizesForTests().keys)
+        vm.endSession()
+        assertTrue(retained.retainedSizesForTests().isEmpty())
     }
 
     @Test

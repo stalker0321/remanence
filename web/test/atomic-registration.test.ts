@@ -51,6 +51,7 @@ describe('atomic A document ownership / real ADR011 crypto', () => {
     const original = c.f.passkeys.get
     c.f.passkeys.get = async (...args) => { const assertion = await original(...args); assertion.prf!.fill(8); return assertion }
     c.f.finalMode = 'ok'; await c.controller.save('ada')
+    await c.controller.save('ada')
     expect(c.f.intents).toHaveLength(1); expect(c.session.getSnapshot().phase).toBe('signed-out')
   })
 

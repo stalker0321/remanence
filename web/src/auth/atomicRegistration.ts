@@ -199,7 +199,7 @@ export class AtomicRegistration {
       if (assertion.id !== owner.credential) throw new AtomicError('WRONG_CREDENTIAL')
       const verified = await this.#post(owner, 'setup/verify', { epoch, flow, response })
       if (verified.authentication_verified !== true || verified.credential_id !== owner.credential || typeof verified.final_authorization !== 'string' || !/^rgf_[A-Za-z0-9_-]{43}$/.test(verified.final_authorization)) throw new AtomicError('SETUP_REJECTED')
-      owner.grant = verified.final_authorization
+      const grant = verified.final_authorization
       if (owner.candidate) {
         // Reassert the SAME credential. Prove its PRF still opens the frozen
         // candidate; do not silently reseal/generate against a different result.
@@ -211,6 +211,7 @@ export class AtomicRegistration {
         owner.candidate.prf.fill(0)
         owner.buffers.delete(owner.candidate.prf)
         owner.candidate = { ...owner.candidate, prf: secret }
+        owner.grant = grant
         retained = true
         return
       }
@@ -228,6 +229,7 @@ export class AtomicRegistration {
           prepared.code.fill(0) // Optional recovery code is not part of this journey.
           this.#check(owner)
           owner.candidate = { bundle, record: Object.freeze(prepared.record), prf: secret }
+          owner.grant = grant
           retained = true
         } finally {
           seeds.encryption.fill(0); seeds.signing.fill(0)

@@ -157,6 +157,9 @@ export async function fetchCompleteIncoming(
 
   const owned: IncomingCapsule[] = []
   const seen = new Set<string>()
+  // Attempt-wide requested/intermediate cursors. Refuse ANY replay before
+  // issuing it again; terminal echoes are not requested and stay allowed.
+  const requestedCursors = new Set<string>()
   let requests = 0
   let cursor: string | null = null
   let metadataBytes = 0
@@ -174,6 +177,9 @@ export async function fetchCompleteIncoming(
         })
       } catch (error) {
         if (signal?.aborted === true) throw new SyncError('CANCELLED')
+        // A rejected await is still an owner/phase boundary: recheck the
+        // captured context before mapping the dependency error.
+        assertLive()
         if (error instanceof SyncError) throw error
         throw new SyncError('SYNC_REJECTED')
       }
@@ -188,7 +194,8 @@ export async function fetchCompleteIncoming(
       if (page.hasMore === true) {
         if (page.items.length === 0) throw new SyncError('INCOMPLETE')
         if (page.nextCursor === null) throw new SyncError('INCOMPLETE')
-        if (page.nextCursor === cursor) throw new SyncError('INCOMPLETE')
+        if (requestedCursors.has(page.nextCursor)) throw new SyncError('INCOMPLETE')
+        requestedCursors.add(page.nextCursor)
       }
 
       for (const item of page.items) {

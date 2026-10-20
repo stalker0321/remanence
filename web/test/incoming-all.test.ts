@@ -199,6 +199,50 @@ describe('T353 complete incoming collector', () => {
     wipeIncomingCatalog(result.items)
   })
 
+  it('refuses an A-B-A cursor replay before issuing it again, even with distinct IDs', async () => {
+    const a = cursorFor(1)
+    const b = cursorFor(2)
+    const entries = await Promise.all([0, 1, 2].map((index) => signedItem(index)))
+    const { transport, incoming } = transportFor(
+      new Map([
+        [null, page([entries[0]], true, a)],
+        [a, page([entries[1]], true, b)],
+        [b, page([entries[2]], true, a)],
+      ]),
+    )
+    await expect(fetchCompleteIncoming(session(), transport)).rejects.toMatchObject({ code: 'INCOMPLETE' })
+    expect(incoming.map((call) => call.query?.cursor ?? null)).toEqual([null, a, b])
+  })
+
+  it('rechecks the captured owner after a rejected page await', async () => {
+    const first = await signedItem(0)
+    const next = cursorFor(1)
+    const store = session()
+    let calls = 0
+    const transport: ApiTransport = {
+      request(input) {
+        if (input.path === '/v1/capsules/incoming') {
+          calls += 1
+          if (calls === 1) return Promise.resolve({ status: 200, body: page([first], true, next) })
+          store.lock()
+          return Promise.reject(new Error('controlled page failure'))
+        }
+        return Promise.resolve({
+          status: 200,
+          body: {
+            key_bundle_id: SENDER_BUNDLE,
+            user_id: SENDER,
+            protocol_version: 1,
+            status: 'ACTIVE',
+            signing_public_keyset: SIGNING_PUBLIC,
+          },
+        })
+      },
+    }
+    await expect(fetchCompleteIncoming(store, transport)).rejects.toMatchObject({ code: 'STALE' })
+    expect(calls).toBe(2)
+  })
+
   it('refuses loops/duplicates/empty-more/malformed/missing pages without partial output', async () => {
     const first = await signedItem(0)
     const second = await signedItem(1)

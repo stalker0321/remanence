@@ -580,8 +580,13 @@ class CreateScreenCollageChooserTest {
                     android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
                 mounted = true
             }
-            composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing && vm.collageChoices.notice != null }
             composeRule.waitForIdle()
+            composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing }
+            composeRule.waitForIdle()
+            assertTrue("fresh decode must reject: candidates=${vm.collageChoices.candidates.size}, " +
+                "notice=${vm.collageChoices.notice}, " +
+                org.robolectric.shadows.ShadowLog.getLogsForTag("CollagePreparation").joinToString { it.msg },
+                vm.collageChoices.notice != null)
             assertTrue(vm.collageChoices.candidates.isEmpty())
             assertNull(vm.frozenCollageSelection)
             assertTrue(vm.cropCorrections.value.isEmpty())

@@ -37,6 +37,14 @@ class SendAccessViewModel internal constructor(
     val state = _state.asStateFlow()
     private val unregister = boundary.register(::leave)
 
+    /** Render fence, before mount effects: same-owner new leases cannot flash old counts. */
+    fun visibleFor(owner: String, session: SessionRequestLease?): SendAccessUiState {
+        val current = _state.value
+        if (current.owner != owner || epoch != boundary.currentEpoch()) return SendAccessUiState()
+        if (current.error == SendAccessFailure.SIGN_IN && current.value == null) return current
+        return if (session != null && session == lease && leaseLive(session)) current else SendAccessUiState()
+    }
+
     /** Called on mount/owner change. Ordinary bearer rotation retains the lease. */
     fun enter(rawOwner: String?) {
         val owner = rawOwner?.let { runCatching { UserId.parseRest(it) }.getOrNull() }

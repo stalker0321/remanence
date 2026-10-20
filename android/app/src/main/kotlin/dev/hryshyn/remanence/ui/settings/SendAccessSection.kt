@@ -21,7 +21,7 @@ fun SendAccessSection(state: SendAccessUiState, onRefresh: () -> Unit, onSession
     if (state.hidden) return
     Column(Modifier.fillMaxWidth().testTag("send_access_section"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(stringResource(R.string.send_access_title), style = MaterialTheme.typography.labelSmall,
-            color = HoldColors.Muted, modifier = Modifier.semantics { heading() })
+            color = HoldColors.Muted, modifier = Modifier.testTag("send_access_title").semantics { heading() })
         SettingsGroup {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val value = state.value
@@ -43,7 +43,8 @@ fun SendAccessSection(state: SendAccessUiState, onRefresh: () -> Unit, onSession
                     }
                 }
                 if (value != null) {
-                    Text(stringResource(R.string.send_access_advisory), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
+                    Text(stringResource(R.string.send_access_advisory), Modifier.testTag("send_access_advisory"),
+                        style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
                     HoldTextButton(onClick = onRefresh, modifier = Modifier.heightIn(min = 48.dp).testTag("send_access_refresh")) {
                         Text(stringResource(R.string.send_access_refresh))
                     }

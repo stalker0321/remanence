@@ -25,6 +25,9 @@ class SendAccessViewModelTest {
         answers.add(CompletableDeferred(SendAccessResult.Loaded(value)))
         vm.enter(owner); runCurrent()
         assertEquals(value, vm.state.value.value)
+        assertEquals(value, vm.visibleFor(owner, live).value)
+        assertEquals(SendAccessUiState(), vm.visibleFor(other, live))
+        assertEquals(SendAccessUiState(), vm.visibleFor(owner, lease(owner, 2)))
         val second = CompletableDeferred<SendAccessResult>(); answers.add(second)
         vm.refresh(); runCurrent()
         assertTrue(vm.state.value.loading); assertNull(vm.state.value.value)
@@ -100,7 +103,9 @@ class SendAccessViewModelTest {
         val vm = SendAccessViewModel(SendAccessPort { calls++; answer }, { live }, { it == live },
             SessionBoundary(), this)
         vm.enter(owner); runCurrent()
-        live = null; vm.refresh(); runCurrent()
+        live = null
+        assertEquals(SendAccessUiState(), vm.visibleFor(owner, live))
+        vm.refresh(); runCurrent()
         assertNull(vm.state.value.value); assertEquals(SendAccessFailure.SIGN_IN, vm.state.value.error)
         vm.refresh(); assertEquals(1, calls)
         live = lease(owner, 2); answer = SendAccessResult.Failed(SendAccessFailure.SIGN_IN)

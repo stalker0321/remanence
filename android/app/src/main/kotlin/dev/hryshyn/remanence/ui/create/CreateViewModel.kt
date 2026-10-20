@@ -1384,6 +1384,9 @@ class CreateViewModel(
         capsuleId: String,
     ) {
         if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
+        // A pending-v2 attempt has no v1 outbox row. A late/null Room
+        // projection must not erase its finalizer outcome or confirmed code.
+        if (pendingFinalizeAttempt == (owner to capsuleId)) return
         val localQueueFailure = _uploadStatus.value == CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
         // ENCRYPTED proves durable recovery material, not scheduler admission.
         // Room may deliver this older staging projection after enqueue refused.

@@ -128,4 +128,13 @@ class SendAccessRepositoryTest {
         assertTrue(job.isCancelled)
         assertEquals(0, server.requestCount)
     } }
+
+    @Test fun unknownLengthBodyIsBoundedAndCorrectChunkedJsonStillWorks() = runTest { fixture { server, stack ->
+        server.enqueue(MockResponse.Builder().setHeader("Content-Type", "application/json")
+            .chunkedBody(wire(0, 1), 7).build())
+        assertEquals(0, assertIs<SendAccessResult.Loaded>(stack.sendAccessRepository.read(owner)).value.self.remaining)
+        server.enqueue(MockResponse.Builder().setHeader("Content-Type", "application/json")
+            .chunkedBody(" ".repeat(40 * 1024), 1024).build())
+        assertEquals(SendAccessResult.Failed(SendAccessFailure.UNAVAILABLE), stack.sendAccessRepository.read(owner))
+    } }
 }

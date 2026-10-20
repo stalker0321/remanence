@@ -90,7 +90,9 @@ class SendAccessSettingsTest {
     private fun languageLayout(name: String, scale: Float) {
         var refresh = 0
         mount({ SendAccessUiState(owner, value = value(), hidden = false) }, scale) { refresh++ }
-        textFits("send_access_self"); textFits("send_access_other")
+        textFits("send_access_title"); textFits("send_access_self"); textFits("send_access_other")
+        snapshot(name + "-counts")
+        textFits("send_access_advisory")
         compose.onNodeWithTag("send_access_refresh").performScrollTo().assertIsDisplayed()
             .assertHeightIsAtLeast(48.dp).performTouchInput { click() }
         assertEquals(1, refresh)

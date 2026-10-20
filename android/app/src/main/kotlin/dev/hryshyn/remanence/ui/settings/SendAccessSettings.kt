@@ -15,6 +15,8 @@ internal fun SendAccessSettings(
         onDispose { viewModel.leave() }
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
-    SendAccessSection(if (state.owner == owner) state else SendAccessUiState(),
+    // Observe the flow, but derive visible metadata through the synchronous lease fence.
+    val visible = if (state.owner == owner) viewModel.visibleFor(owner, session) else SendAccessUiState()
+    SendAccessSection(visible,
         viewModel::refresh, onSessionRequired)
 }

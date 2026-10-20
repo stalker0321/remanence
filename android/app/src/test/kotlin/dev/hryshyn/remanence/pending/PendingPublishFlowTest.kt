@@ -113,6 +113,44 @@ class PendingPublishFlowTest {
         scope = null,
     )
 
+    @Test fun accessOutcomesAreFinalizerOnlyAndInvocationFencePrecedesPost() = runTest {
+        for ((reason, expected) in listOf(
+            PendingPublishFailure.SEND_LIMIT_REACHED to PendingPublishFlow.Reason.SEND_LIMIT_REACHED,
+            PendingPublishFailure.SEND_ACCESS_UNAVAILABLE to PendingPublishFlow.Reason.SEND_ACCESS_UNAVAILABLE,
+            PendingPublishFailure.HTTP to PendingPublishFlow.Reason.FINALIZE_UNKNOWN,
+        )) {
+            var started = 0
+            val publisher = flow(finalize = PendingPublishFlow.FinalizePort { _, _, _, _, _, _ ->
+                assertEquals(1, started)
+                PendingFinalizeResult.Failure(reason, if (reason == PendingPublishFailure.SEND_LIMIT_REACHED) 409 else 503, reason != PendingPublishFailure.SEND_LIMIT_REACHED)
+            })
+            assertEquals(PendingPublishFlow.State.Failed(expected),
+                publisher.publish(frozenPending(), capsule, "draft", "finalize", onFinalizeStarted = { started++ }))
+            assertEquals(1, started)
+        }
+        var started = false
+        val early = flow(draft = PendingPublishFlow.DraftPort { _, _, _, _, _, _, _, _, _, _ ->
+            PendingDraftResult.Failure(PendingPublishFailure.SEND_LIMIT_REACHED, 409, false)
+        })
+        assertEquals(PendingPublishFlow.State.Failed(PendingPublishFlow.Reason.GENERIC),
+            early.publish(frozenPending(), capsule, "draft", "finalize", onFinalizeStarted = { started = true }))
+        org.junit.Assert.assertFalse(started)
+    }
+
+    @Test fun cancellationAfterFinalPostAdmissionCannotAvoidInvocationFence() = runTest {
+        var started = false
+        val publisher = flow(finalize = PendingPublishFlow.FinalizePort { _, _, _, _, _, _ ->
+            assertTrue(started)
+            throw kotlinx.coroutines.CancellationException("synthetic cancellation after final POST")
+        })
+        try {
+            publisher.publish(frozenPending(), capsule, "draft", "finalize", onFinalizeStarted = { started = true })
+            org.junit.Assert.fail("cancellation must propagate")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            assertTrue(started)
+        }
+    }
+
     @Test
     fun frozenRoutePublishesToHandwrittenCode() = runTest {
         val result = flow().publish(

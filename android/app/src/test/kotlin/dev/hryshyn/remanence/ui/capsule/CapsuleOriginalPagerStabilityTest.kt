@@ -36,7 +36,7 @@ class CapsuleOriginalPagerStabilityTest {
     @Test @Config(qualifiers = "uk-w360dp-h640dp-xhdpi")
     fun ukrainianPagingKeepsCloseButtonAndStageStill() = verifyPaging("uk")
 
-    @Test @Config(qualifiers = "ru-w360dp-h640dp-xhdpi-night")
+    @Test @Config(qualifiers = "ru-w360dp-h640dp-night-xhdpi")
     fun largeRussianTextWithSystemDarkKeepsCloseReachable() = verifyPaging("ru-large-night", 1.5f)
 
     private fun verifyPaging(locale: String, fontScale: Float = 1f) {

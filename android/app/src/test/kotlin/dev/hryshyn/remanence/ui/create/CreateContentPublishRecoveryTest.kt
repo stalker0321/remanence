@@ -17,6 +17,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -327,6 +328,44 @@ class CreateContentPublishRecoveryTest {
     // ------------------------------------------------------------------
     // Note input visibility.
     // ------------------------------------------------------------------
+
+    @Test
+    @Config(qualifiers = "w390dp-h844dp-xhdpi")
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    fun contentGuardErrorKeepsHeadingStillAndDraftIntact() {
+        val (vm, _, _) = contentStage()
+        lateinit var rootView: android.view.View
+        composeRule.setContent {
+            rootView = androidx.compose.ui.platform.LocalView.current.rootView
+            dev.hryshyn.remanence.ui.hold.HoldTheme { CreateScreen(viewModel = vm) }
+        }
+        fun capture(name: String) {
+            composeRule.waitForIdle()
+            val semantics = composeRule.onNodeWithTag("create_content_scroll").printToString()
+            composeRule.runOnIdle {
+                val bitmap = android.graphics.Bitmap.createBitmap(rootView.width, rootView.height,
+                    android.graphics.Bitmap.Config.ARGB_8888)
+                try {
+                    rootView.draw(android.graphics.Canvas(bitmap))
+                    val directory = java.io.File("build/t360-review").apply { mkdirs() }
+                    java.io.File(directory, "$name.png").outputStream().use {
+                        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                    java.io.File(directory, "$name-semantics.txt").writeText(semantics)
+                } finally { bitmap.recycle() }
+            }
+        }
+        composeRule.runOnIdle { vm.noteEditor.onChange("A draft that must survive retry") }
+        val titleBefore = composeRule.onNodeWithTag("create_step_label").fetchSemanticsNode().boundsInRoot
+        capture("content-before-error")
+        // Excite the production readiness guard; no bypass of the 3..5 photo gate.
+        composeRule.runOnIdle { assertFalse(vm.goToCompose()) }
+        composeRule.onNodeWithTag("create_error").assertIsDisplayed()
+        capture("content-after-error")
+        assertEquals(titleBefore, composeRule.onNodeWithTag("create_step_label").fetchSemanticsNode().boundsInRoot)
+        assertEquals("A draft that must survive retry", vm.noteEditor.text)
+        composeRule.onNodeWithTag("create_next").assertIsNotEnabled()
+    }
 
     @Test
     fun noteTypingEchoesAndOversizedInputShowsVisibleLimitError() {

@@ -569,21 +569,31 @@ class CreateScreenCollageChooserTest {
         // Destroy only synthetic preview data while the host is absent.
         // A cached "Ready" bit would wrongly preserve publishing on remount;
         // a real decode/prepare must reject every sheet needing this photo.
-        composeRule.runOnIdle {
-            (vm.generatorPreview.value as GeneratorPreviewState.Ready).sources.first().jpegBytes.fill(0)
-            mounted = true
+        // Robolectric's legacy BitmapFactory may otherwise fabricate a bitmap
+        // for arbitrary bytes, even alongside native Canvas rendering.
+        org.robolectric.shadows.ShadowBitmapFactory.setAllowInvalidImageData(false)
+        try {
+            composeRule.runOnIdle {
+                val bytes = (vm.generatorPreview.value as GeneratorPreviewState.Ready).sources.first().jpegBytes
+                bytes.fill(0)
+                assertNull("fixture must really fail decoding",
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+                mounted = true
+            }
+            composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing && vm.collageChoices.notice != null }
+            composeRule.waitForIdle()
+            assertTrue(vm.collageChoices.candidates.isEmpty())
+            assertNull(vm.frozenCollageSelection)
+            assertTrue(vm.cropCorrections.value.isEmpty())
+            assertFalse(vm.isFrozenCollageDrawable)
+            assertFalse(vm.selectCollageCandidate(0))
+            composeRule.onNodeWithTag("collage_notice").assertIsDisplayed()
+            composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
+            composeRule.onNodeWithTag("collage_select").assertIsNotEnabled()
+        } finally {
+            org.robolectric.shadows.ShadowBitmapFactory.setAllowInvalidImageData(true)
+            vm.endSession()
         }
-        composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing && vm.collageChoices.notice != null }
-        composeRule.waitForIdle()
-        assertTrue(vm.collageChoices.candidates.isEmpty())
-        assertNull(vm.frozenCollageSelection)
-        assertTrue(vm.cropCorrections.value.isEmpty())
-        assertFalse(vm.isFrozenCollageDrawable)
-        assertFalse(vm.selectCollageCandidate(0))
-        composeRule.onNodeWithTag("collage_notice").assertIsDisplayed()
-        composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
-        composeRule.onNodeWithTag("collage_select").assertIsNotEnabled()
-        vm.endSession()
     }
 
     @Test

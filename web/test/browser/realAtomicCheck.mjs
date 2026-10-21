@@ -10,7 +10,7 @@ const next = async () => { const line = await lines.next(); assert.ok(!line.done
 const first = await next(); assert.equal(first.phase, 'start')
 assert.ok(Number.isInteger(first.apiPort) && first.apiPort > 0 && first.apiPort < 65536)
 const checks = [], errors = [], requests = [], intents = []
-let dropCommit = false, dropped = 0, saved = null
+let dropCommit = false, dropped = 0, droppedReplies = 0, saved = null
 const check = (name, ok) => { assert.ok(ok, name); checks.push({ name, ok: true }) }
 const host = await fixtureHost(web, proof, 'realAtomic.page.tsx', { async handle(req, res) {
   const path = new URL(req.url, 'http://fixture.invalid').pathname
@@ -31,8 +31,12 @@ const host = await fixtureHost(web, proof, 'realAtomic.page.tsx', { async handle
   const upstream = await fetch(`http://127.0.0.1:${first.apiPort}${path}`, { method: req.method, headers, body: body.length ? body : undefined, redirect: 'error' })
   const bytes = new Uint8Array(await upstream.arrayBuffer()); assert.ok(bytes.length <= 262144)
   if (!path.startsWith('/__fixture/')) requests.push({ method: req.method, path, status: upstream.status, noStore: upstream.headers.get('cache-control') === 'no-store' })
-  if (path.endsWith('/finalize') && upstream.status === 201 && dropCommit) {
-    dropCommit = false; dropped++; res.destroy(); return true // Real committed reply consumed, never delivered.
+  if (path.endsWith('/finalize') && [200, 201].includes(upstream.status) && dropCommit) {
+    // Chromium may retry a closed socket once before surfacing the fetch error.
+    // Drop that exact replay's outcome too, otherwise it legitimately recovers
+    // to restore-required and the UNKNOWN fault has not actually reached JS.
+    if (upstream.status === 201) dropped++
+    droppedReplies++; res.destroy(); return true
   }
   res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') ?? 'application/json', 'cache-control': 'no-store' }).end(bytes)
   return true
@@ -65,6 +69,7 @@ try {
       ack(input.phase)
     } else if (input.phase === 'lost') {
       dropCommit = true; await save('lost_reply'); await phase('unknown')
+      dropCommit = false
       saved = await page.evaluate(() => window.realAtomic.challenge())
       check('actual committed 201 dropped, controller UNKNOWN and not READY', dropped === 1 && (await state()).phase === 'signed-out' && !(await state()).keys)
       await page.screenshot({ path: join(proof, 'lost-reply-unknown.png'), fullPage: true })
@@ -87,6 +92,7 @@ try {
   }
 } finally {
   await writeFile(join(proof, 'report.json'), JSON.stringify({ outcome: complete ? 'PASS' : 'FAILED', realApp: true, realApi: true, syntheticProviders: true,
-    executableSha256: host.executableSha256, droppedCommittedReplies: dropped, checks, requests, errors }, null, 2))
+    executableSha256: host.executableSha256, droppedCommittedReplies: dropped, droppedTransportReplies: droppedReplies,
+    lastState: await state().catch(() => null), checks, requests, errors }, null, 2))
   await host.close()
 }

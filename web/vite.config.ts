@@ -11,7 +11,12 @@ export default defineConfig({
   plugins: [react(), {
     name: 'remanence-static-base',
     configResolved(config) { resolvedStaticBase = config.base },
-  }, staticShell()],
+  }, staticShell(), {
+    name: 'default-deployment-config',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'app-config.json', source: '{"version":1,"atomicRegistration":false}\n' })
+    },
+  }],
   // Public assets (fonts/boot/etc.) are referenced with root-absolute URLs.
   // Prefix them with the selected static base at build time; hashed assets and
   // import.meta.env.BASE_URL keep their normal Vite behavior.

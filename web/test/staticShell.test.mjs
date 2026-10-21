@@ -64,7 +64,7 @@ describe('static shell safety', () => {
   })
   it('rejects external, relative and noncanonical bases and sensitive output', () => {
     for (const base of ['./', 'https://cdn.invalid/', '//host/', '/a/../', '/a?b/']) expect(() => shellBase(base)).toThrow()
-    for (const name of ['v1/private.js', 'opencv/opencv.js', '../escape.js', 'assets/secret.json']) {
+    for (const name of ['v1/private.js', 'v2/private.js', 'app-config.json', 'atomic-test-config.json', 'opencv/opencv.js', '../escape.js', 'assets/secret.json']) {
       expect(() => shellArtifacts('/', new Map([...files(), [name, 'x']]))).toThrow()
     }
   })
@@ -73,6 +73,14 @@ describe('static shell safety', () => {
     await r.lifecycle('install')
     expect([...r.stores.get(r.manifest.cacheName).keys()].sort()).toEqual(r.manifest.entries.map((e) => `https://app.invalid${e.path}`).sort())
     for (const request of r.requests) expect(request.init).toEqual({ credentials: 'omit', redirect: 'error', cache: 'no-store' })
+  })
+  it('declares only its own static policy and base without activating or claiming clients', () => {
+    const r = rig('/prefix/'), replies = []
+    r.events.message({ data: { type: 'REMANENCE_STATIC_POLICY_V1' }, ports: [{ postMessage: value => replies.push(value) }] })
+    expect(replies).toEqual([{ type: 'REMANENCE_STATIC_POLICY_V1', base: '/prefix/', runtimeCache: false, configNetworkOnly: true }])
+    r.events.message({ data: { type: 'skipWaiting' }, ports: [] })
+    expect(replies).toHaveLength(1)
+    expect(shellArtifacts('/', files()).worker).not.toMatch(/skipWaiting\(|clients\.claim\(/)
   })
   for (const [name, option] of Object.entries({
     'wrong bytes': { badBody: true }, 'wrong MIME': { mime: 'application/json' },
@@ -115,6 +123,7 @@ describe('static shell safety', () => {
     await r.lifecycle('install')
     for (const [url, init] of [
       ['/v1/auth', {}], ['/recovery/x', {}], ['/music/v1/search', {}],
+      ['/app-config.json', {}], ['/atomic-test-config.json', {}], ['/v2/registration/options', {}],
       ['/v1/capsules/outgoing', {}], ['/v1/recipients/recent', {}],
       ['/v1/me/send-access', {}],
       ['/v2/pending-deliveries/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/cancel', { method: 'POST' }],

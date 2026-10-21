@@ -51,7 +51,8 @@ describe('dedicated TEST configuration, no ambient/public opt-in', () => {
     await expect(loadAtomicTestConfig(new URL('/atomic-test-config.json', config.appOrigin), config.appOrigin, true)).rejects.toThrow(AtomicTestConfigurationError)
   })
   it('ordinary entry remains gated; dedicated build has no fixture/provider-success or worker hook', () => {
-    expect(mainSource).not.toMatch(/atomicRegistration|atomicTest/)
+    expect(mainSource).toContain('loadDeploymentConfig')
+    expect(mainSource).not.toMatch(/assertUncontrolledTestContext|startOnlineOnlyShell|atomic-test-config/)
     expect(testEntrySource).toContain('browserAtomicTestAdapters(config, document, setNotice)')
     expect(testEntrySource).toContain('atomicRegistration: atomicTransport(config.apiOrigin)')
     expect(testEntrySource).not.toMatch(/from ['"].*(?:fixture|\/test\/)|startShell\(/)

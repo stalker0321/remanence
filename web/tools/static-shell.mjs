@@ -32,10 +32,16 @@ export function shellBase(base) {
 function workerProgram(manifest) {
   const { base, entries, namespace, cacheName } = manifest
   const allowed = new Map(entries.map((entry) => [entry.path, entry]))
-  const denied = /\/(?:api|v1|auth|recovery|music|blob|blobs|photo|photos|artwork|capsules|opencv)(?:\/|$)/i
+  const denied = /\/(?:api|v1|v2|auth|recovery|music|blob|blobs|photo|photos|artwork|capsules|opencv)(?:\/|$)|\/(?:app-config|atomic-test-config)\.json$/i
   const hex = (buffer) => Array.from(new Uint8Array(buffer), (n) => n.toString(16).padStart(2, '0')).join('')
   const validPath = (url) => url.origin === self.location.origin &&
     !url.search && !url.hash && !denied.test(url.pathname) && allowed.has(url.pathname)
+
+  self.addEventListener('message', (event) => {
+    if (event.data?.type === 'REMANENCE_STATIC_POLICY_V1' && event.ports?.length === 1) {
+      event.ports[0].postMessage({ type: 'REMANENCE_STATIC_POLICY_V1', base, runtimeCache: false, configNetworkOnly: true })
+    }
+  })
 
   self.addEventListener('install', (event) => {
     event.waitUntil((async () => {
@@ -111,7 +117,8 @@ export function shellArtifacts(base, files) {
     const path = `${base}${name}`
     if (!/^[A-Za-z0-9._~/-]+$/.test(name) || name.startsWith('/') ||
         name.split('/').some((part) => part === '..' || part === '.') ||
-        /^(?:api|v1|auth|recovery|music|blob|blobs|photo|photos|artwork|capsules|opencv)\//i.test(name)) {
+        /^(?:api|v1|v2|auth|recovery|music|blob|blobs|photo|photos|artwork|capsules|opencv)\//i.test(name)
+        || /(?:^|\/)(?:app-config|atomic-test-config)\.json$/i.test(name)) {
       throw new Error(`Non-shell output: ${name}`)
     }
     const mime = types[extname(name)]

@@ -194,6 +194,11 @@ private fun RootSurface(
     val sendAccessViewModel: dev.hryshyn.remanence.ui.settings.SendAccessViewModel = viewModel(factory = factory)
     val googleViewModel: dev.hryshyn.remanence.auth.GoogleAuthViewModel = viewModel(factory = factory)
     val googleState by googleViewModel.state.collectAsStateWithLifecycle()
+    val atomicViewModel: dev.hryshyn.remanence.auth.AtomicRegistrationViewModel = viewModel(factory = factory)
+    val atomicState by atomicViewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(atomicState.sessionEstablished) {
+        if (BuildConfig.REMANENCE_ATOMIC_REGISTRATION && atomicState.sessionEstablished) rootViewModel.onSessionEstablished()
+    }
     val activity = androidx.compose.ui.platform.LocalContext.current as android.app.Activity
     val googleCredentials = remember(activity) { dev.hryshyn.remanence.auth.AndroidGoogleCredentials(activity) }
     LaunchedEffect(googleState) {
@@ -252,6 +257,11 @@ private fun RootSurface(
     var showLegacyAuth by rememberSaveable { mutableStateOf(!BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) }
     var logoutRequested by remember { mutableStateOf(false) }
     BackHandler(authState == AuthUiState.SignedOut && homeIntent != null) {
+        if (BuildConfig.REMANENCE_ATOMIC_REGISTRATION) {
+            atomicViewModel.leave()
+            rootViewModel.cancelHomeIntent()
+            return@BackHandler
+        }
         // Consume Back while a provider request owns this surface; otherwise
         // the activity may finish and silently cancel its composition scope.
         if (!recoveryBusy && googleState != dev.hryshyn.remanence.auth.GoogleAuthState.Working) {
@@ -293,6 +303,11 @@ private fun RootSurface(
                             Text(stringResource(R.string.hold_logout), color = dev.hryshyn.remanence.ui.hold.HoldColors.Destructive)
                         }
                     }
+                }
+            } else if (BuildConfig.REMANENCE_ATOMIC_REGISTRATION && authState == AuthUiState.SignedOut) {
+                AccessPage(onBack = { atomicViewModel.leave(); rootViewModel.cancelHomeIntent() },
+                    footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) }) {
+                    dev.hryshyn.remanence.auth.AtomicRegistrationPanel(atomicViewModel, atomicState)
                 }
             } else {
                 val googleWorking = googleState == dev.hryshyn.remanence.auth.GoogleAuthState.Working

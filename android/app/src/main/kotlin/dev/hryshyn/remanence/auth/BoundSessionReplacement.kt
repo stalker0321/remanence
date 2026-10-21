@@ -27,26 +27,36 @@ class BoundSessionReplacement(
         accessToken: String,
         refreshToken: String,
         commitAccount: suspend () -> Unit,
+    ) = replaceGuarded(lease, expectedOwner, accessToken, refreshToken, { true }, { it() }, commitAccount)
+
+    override suspend fun replaceGuarded(
+        lease: Long, expectedOwner: UserId, accessToken: String, refreshToken: String,
+        admit: () -> Boolean, commitLocal: (() -> Unit) -> Unit, commitAccount: suspend () -> Unit,
     ) {
         replacementMutex.withLock {
             // Reject a retired response before account writes or fail-closed
             // cleanup. Neither belongs to this attempt after logout/new login.
-            check(coordinator.closeAdmission(lease)) { "bound session lease retired" }
+            check(coordinator.closeAdmission(lease, admit)) { "bound session lease retired" }
             var opened = false
             try {
                 commitAccount()
                 val accountOwner = currentAccountOwner()
-                if (!coordinator.publishBoundSession(
-                        lease = lease,
-                        expectedOwner = expectedOwner,
-                        accessToken = accessToken,
-                        refreshToken = refreshToken,
-                        currentAccountOwner = accountOwner,
-                    )
-                ) {
-                    throw IllegalStateException("bound session publish rejected")
-                }
-                opened = true
+                check(coordinator.commitLocalRecovery(lease) {
+                    commitLocal {
+                        check(admit()) { "bound operation retired before publish" }
+                        if (!coordinator.publishBoundSession(
+                                lease = lease,
+                                expectedOwner = expectedOwner,
+                                accessToken = accessToken,
+                                refreshToken = refreshToken,
+                                currentAccountOwner = accountOwner,
+                            )
+                        ) {
+                            throw IllegalStateException("bound session publish rejected")
+                        }
+                        opened = true
+                    }
+                }) { "bound session lease retired before publish" }
             } finally {
                 if (!opened) {
                     coordinator.discardPublishedCredentials()

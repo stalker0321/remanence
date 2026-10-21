@@ -247,10 +247,12 @@ class SessionRefreshCoordinator internal constructor(
      * When supplied, validate [lease] under the same fence before any mutation.
      * A retired login must not close a newer account's domain.
      */
-    fun closeAdmission(lease: Long? = null): Boolean {
+    fun closeAdmission(lease: Long? = null, admit: () -> Boolean = { true }): Boolean {
         publicationFence.lock()
         try {
             if (lease != null && accountLeaseEpoch.get() != lease) return false
+            // Optional operation fence is evaluated BEFORE touching a newer domain.
+            if (!admit()) return false
             invalidationEpoch.incrementAndGet()
             installedOwner.set(null)
             domainOpen.set(false)

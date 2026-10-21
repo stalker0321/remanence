@@ -27,4 +27,13 @@ interface SessionReplacementPort {
         refreshToken: String,
         commitAccount: suspend () -> Unit,
     )
+
+    /** Additional RAM operation fence, atomically checked before closing admission. */
+    suspend fun replaceGuarded(
+        lease: Long, expectedOwner: UserId, accessToken: String, refreshToken: String,
+        admit: () -> Boolean, commitLocal: (() -> Unit) -> Unit, commitAccount: suspend () -> Unit,
+    ) {
+        // An adapter without publication-fenced admission must never silently weaken it.
+        error("guarded replacement unavailable")
+    }
 }

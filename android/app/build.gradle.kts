@@ -27,6 +27,13 @@ val googleSignInEnabled = providers.gradleProperty("remanence.google.enabled").o
     require(it == "true" || it == "false")
     require(it != "true" || recoveryEnabled == "true") { "Google onboarding requires recovery" }
 }
+// T417: isolated TEST candidate only. Never enabled by release/beta or by server errors.
+val atomicRegistrationEnabled = providers.gradleProperty("remanence.atomicRegistration.enabled").orElse("false").get().also {
+    require(it == "true" || it == "false")
+    require(it != "true" || (googleSignInEnabled == "true" && recoveryEnabled == "true")) {
+        "Atomic registration requires Google and recovery; no unprotected fallback"
+    }
+}
 // T186: experimental pending-recipient journey. Default OFF everywhere;
 // only the debug variant consumes this opt-in property. Release and beta
 // are hard-disabled so an experimental build can never ride the live/beta
@@ -89,6 +96,13 @@ android {
                 resValue("string", "pending_app_name", "Remanence Pending Test")
                 manifestPlaceholders["pendingAppLabel"] = "@string/pending_app_name"
             }
+            if (atomicRegistrationEnabled == "true") {
+                applicationIdSuffix = ".atomicregistrationtest"
+                versionNameSuffix = "-atomic-registration-test"
+                resValue("string", "atomic_test_app_name", "Remanence Atomic Test")
+                manifestPlaceholders["pendingAppLabel"] = "@string/atomic_test_app_name"
+            }
+            buildConfigField("boolean", "REMANENCE_ATOMIC_REGISTRATION", atomicRegistrationEnabled)
             buildConfigField(
                 "String",
                 "API_BASE_URL",
@@ -105,6 +119,7 @@ android {
             buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEYSET_B64", quoteBuildConfigString(pendingServiceKeysetB64))
         }
         named("release") {
+            buildConfigField("boolean", "REMANENCE_ATOMIC_REGISTRATION", "false")
             buildConfigField(
                 "String",
                 "API_BASE_URL",
@@ -125,6 +140,7 @@ android {
             initWith(getByName("release"))
             matchingFallbacks += "release"
             isDebuggable = false
+            buildConfigField("boolean", "REMANENCE_ATOMIC_REGISTRATION", "false")
             buildConfigField("boolean", "REMANENCE_PLAY_BETA", "true")
             buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", "true")
             buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", "true")

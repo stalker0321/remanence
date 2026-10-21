@@ -80,6 +80,7 @@ class RemanenceViewModelFactory(
         ) as T
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         dev.hryshyn.remanence.auth.GoogleAuthViewModel::class.java -> dev.hryshyn.remanence.auth.GoogleAuthViewModel(container) as T
+        dev.hryshyn.remanence.auth.AtomicRegistrationViewModel::class.java -> dev.hryshyn.remanence.auth.AtomicRegistrationViewModel(container) as T
         RegistrationViewModel::class.java -> RegistrationViewModel(container.registrationUseCase) as T
         dev.hryshyn.remanence.ui.settings.SendAccessViewModel::class.java ->
             dev.hryshyn.remanence.ui.settings.SendAccessViewModel(

@@ -8,7 +8,7 @@ import dev.hryshyn.remanence.recovery.RecoveryCredentialPort
 import dev.hryshyn.remanence.recovery.RecoveryCapabilityUnavailable
 import dev.hryshyn.remanence.recovery.RecoveryVerificationPending
 import dev.hryshyn.remanence.recovery.publicCredential
-import dev.hryshyn.remanence.ui.auth.isCredentialUserCancellation
+import dev.hryshyn.remanence.ui.auth.credentialFailure
 import androidx.credentials.exceptions.NoCredentialException
 import java.nio.ByteBuffer
 import java.util.UUID
@@ -315,8 +315,7 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
                 failure is AtomicRegistrationRejected -> failure.reason
                 failure is RecoveryCapabilityUnavailable -> "PRF_UNAVAILABLE"
                 failure is RecoveryVerificationPending -> "CREDENTIAL_PENDING"
-                isCredentialUserCancellation(failure) -> "PROVIDER_CANCELLED"
-                else -> "SETUP_REJECTED"
+                else -> credentialFailure(failure)?.reason ?: "SETUP_REJECTED"
             }
             when (reason) {
                 "SETUP_AUTH_INVALID", "SETUP_REAUTH_REQUIRED", "STALE_SETUP", "RESERVATION_TERMINAL" -> { current.wipe(); show(AtomicPhase.REAUTHENTICATE, reason) }

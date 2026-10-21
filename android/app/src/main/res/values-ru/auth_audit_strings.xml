@@ -13,6 +13,10 @@
     <string name="auth_identity_rejected">Настройка аккаунта не завершена. Попробуй позже.</string>
     <string name="auth_registration_failed">Не удалось создать аккаунт. Попробуй ещё раз.</string>
     <string name="auth_recovery_required">Ты вошёл в аккаунт, но его ключей нет на этом устройстве. Восстанови доступ, чтобы открыть зашифрованные воспоминания. Существующие ключи не будут заменены.</string>
-    <string name="auth_passkey_cancelled">Отменено. Можно попробовать снова, когда будешь готов.</string>
+    <string name="auth_passkey_cancelled">Вход или действие с пасскеем не завершены. Если ты не закрывал окно, проверь настройки провайдера перед новой попыткой.</string>
+    <string name="auth_credential_missing">Подходящие данные для входа или пасскей не найдены. Проверь выбранного провайдера и аккаунт.</string>
+    <string name="auth_credential_not_configured">Вход или пасскеи настроены некорректно. Проверь настройки входа; если проблема остаётся, обратись в поддержку.</string>
+    <string name="auth_credential_unavailable">Вход или пасскеи здесь недоступны. Проверь обновления устройства и настройки входа.</string>
+    <string name="auth_credential_failed">Провайдер входа или пасскеев не смог завершить этот шаг. Попробуй позже.</string>
     <string name="auth_passkey_setup_failed">Настройка пасскея не завершена. Существующие ключи не изменены. Проверь подключение и попробуй ещё раз.</string>
 </resources>

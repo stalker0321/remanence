@@ -1,4 +1,6 @@
 <resources>
+    <string name="atomic_registration_prf_unavailable">Этот пасскей не может защитить ключи аккаунта в выбранном менеджере. Настройка не завершена. Используй менеджер с поддержкой этого шага.</string>
+    <string name="atomic_registration_failed">Не удалось завершить этот шаг настройки аккаунта. Проверь подключение и попробуй позже.</string>
     <string name="atomic_registration_title">Настройка аккаунта</string>
     <string name="atomic_registration_intro">Войдите через Google, затем выберите менеджер ключей доступа. Аккаунт сохраняется только вместе с записью восстановления.</string>
     <string name="atomic_registration_unknown">Аккаунт уже мог сохраниться. Проверьте состояние, повторите тот же запрос или войдите снова, чтобы восстановить исходные ключи.</string>

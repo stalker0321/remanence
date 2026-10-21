@@ -203,7 +203,7 @@ export function App({
         />
       ) : null}
       <p className="status" role="status">{t(phaseKey(view.phase))}</p>
-      {route === 'account' && atomicRegistration ? null : <p className="status" role="alert">{t(notice)}</p>}
+      {deploymentUnavailable || (route === 'account' && atomicRegistration) ? null : <p className="status" role="alert">{t(notice)}</p>}
     </main>
     {presenting && held ? (
       <CollageStage held={held} t={t} onClose={() => navigation.closeSheet()} navigation={{

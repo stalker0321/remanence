@@ -151,7 +151,7 @@ const phase = (page, value) => page.waitForFunction(value => document.querySelec
 const begin = async page => { await page.getByRole('button', { name: 'continue with Google', exact: true }).click(); await phase(page, 'handle') }
 const save = async page => { await page.locator('#atomic-handle').fill('ada'); await page.getByRole('button', { name: 'Save and verify keys', exact: true }).click() }
 const reset = () => { saved = null; commits = 0; verifiedCredential = false; wrongRp = false; badClient = false; admissionClosed = false; holdRecord = false }
-const shot = async (page, name) => { await page.screenshot({ path: join(proof, `${name}.png`), fullPage: true }); images.push(name) }
+const shot = async (page, name) => { await page.evaluate(() => window.scrollTo(0, 0)); await page.screenshot({ path: join(proof, `${name}.png`), fullPage: true }); images.push(name) }
 const poll = async (fn, label) => {
   const end = Date.now() + 12000
   while (!(await fn())) { assert.ok(Date.now() < end, label); await new Promise(done => setTimeout(done, 50)) }
@@ -173,6 +173,7 @@ try {
   for (const mode of ['wrong-origin', 'wrong-rp', 'prod', 'cached']) {
     configMode = mode; const before = wire.length, page = await fresh()
     await page.locator('[data-deployment-unavailable]').waitFor()
+    assert.equal(await page.getByText('nothing needs attention', { exact: true }).count(), 0, 'no contradictory all-clear under configuration failure')
     await page.getByRole('button', { name: 'continue with Google', exact: true }).click()
     check(mode + ': static App remains usable; no API or provider dispatch', wire.length === before && await page.locator('[data-atomic-phase]').count() === 0 && await page.evaluate(() => window.__t428Providers.google === 0))
     if (mode === 'wrong-origin') await shot(page, 'invalid-config')

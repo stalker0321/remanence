@@ -60,6 +60,9 @@ import dev.hryshyn.remanence.create.PhotoNormalizerPort
 import dev.hryshyn.remanence.create.PhotoSource
 import dev.hryshyn.remanence.ui.collage.AndroidCollageCropSource
 import dev.hryshyn.remanence.ui.collage.CollageAnalysis
+import dev.hryshyn.remanence.ui.collage.CropTransform
+import dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection
+import dev.hryshyn.remanence.ui.collage.NormalizedCrop
 import dev.hryshyn.remanence.ui.collage.analysis.FieldStageImage
 import dev.hryshyn.remanence.ui.collage.analysis.FieldStageMaps
 import dev.hryshyn.remanence.ui.collage.analysis.FieldStageRunner
@@ -1145,24 +1148,81 @@ class CreateScreenCollageChooserTest {
             composeRule.onNodeWithTag("crop_frame").fetchSemanticsNode()
                 .config[SemanticsProperties.StateDescription]
 
+        val contentId = requireNotNull(vm.cropSlot.value)
+        val base = requireNotNull(FixedFrameCropCorrection.normalizedCrop(
+            requireNotNull(vm.cropSlotGeometry(contentId)?.baseCrop),
+        ))
+        fun sourceWindow(): NormalizedCrop {
+            val correction = vm.cropCorrections.value[contentId]
+            return requireNotNull(CropEditorGeometry.window(base, CropTransform(
+                correction?.zoom?.toDouble() ?: 1.0,
+                correction?.panX?.toDouble() ?: 0.0,
+                correction?.panY?.toDouble() ?: 0.0,
+            )))
+        }
+        fun assertRenderedWindow(window: NormalizedCrop) {
+            val source = composeRule.onNodeWithTag("crop_source_surface").fetchSemanticsNode().boundsInRoot
+            val frame = composeRule.onNodeWithTag("crop_frame").fetchSemanticsNode().boundsInRoot
+            // Actual mounted frame, with at most one physical pixel of layout rounding.
+            assertEquals("frame x", source.left + (window.x * source.width).toFloat(), frame.left, 1f)
+            assertEquals("frame y", source.top + (window.y * source.height).toFloat(), frame.top, 1f)
+            assertEquals("frame width", (window.width * source.width).toFloat(), frame.width, 1f)
+            assertEquals("frame height", (window.height * source.height).toFloat(), frame.height, 1f)
+        }
+
         // Identity default: no correction yet, window is the approved base.
-        val identity = windowState()
+        val identity = sourceWindow()
+        val identityDescription = windowState()
+        val identityFrame = composeRule.onNodeWithTag("crop_frame").fetchSemanticsNode().boundsInRoot
+        assertRenderedWindow(identity)
+        // The solver may start against an edge. Pan into available source space,
+        // on the axis with more room, rather than asserting movement into a clamp.
+        val horizontal = identity.width < identity.height
+        val start = if (horizontal) identity.x else identity.y
+        val extent = if (horizontal) identity.width else identity.height
+        assertTrue("fixture needs room for base-zoom movement: $identity", extent < 1.0)
+        val direction = if (start >= (1.0 - extent) / 2) 1f else -1f
+        fun pan(amount: Float) = vm.updateCrop(1f,
+            if (horizontal) direction * amount else 0f,
+            if (horizontal) 0f else direction * amount)
         // Source-space movement is available at base zoom too: the whole
         // source stays visible and the crop frame moves within it.
-        vm.updateCrop(1.0f, 1.0f, 0.0f)
+        pan(1f)
         composeRule.waitForIdle()
         assertTrue(vm.cropCorrections.value.isNotEmpty())
-        assertTrue(windowState() != identity)
+        val smallMove = sourceWindow()
+        // Localized accessibility percentages round to integers; they are not
+        // a lossless geometry oracle for a sub-percent source-space movement.
+        val displacement = if (horizontal) smallMove.x - identity.x else smallMove.y - identity.y
+        assertTrue("base-zoom source window must move inward: $identity -> $smallMove", displacement * direction < 0)
+        assertEquals(identity.width, smallMove.width, 1e-9)
+        assertEquals(identity.height, smallMove.height, 1e-9)
+        assertRenderedWindow(smallMove)
+        println("T420_CROP identity=$identity smallMove=$smallMove " +
+            "descriptionBefore=$identityDescription descriptionAfter=${windowState()}")
+
+        // A larger movement must visibly move the real frame, not just VM state.
+        pan(20f)
+        composeRule.waitForIdle()
+        val visibleMove = composeRule.onNodeWithTag("crop_frame").fetchSemanticsNode().boundsInRoot
+        val frameDisplacement = if (horizontal) visibleMove.left - identityFrame.left else visibleMove.top - identityFrame.top
+        assertTrue("frame must visibly move at base zoom", kotlin.math.abs(frameDisplacement) >= 1f)
+        assertRenderedWindow(sourceWindow())
 
         // Pinching changes the window size; Reset returns to the solver's
         // original frame. Touch behavior has separate surface tests.
         vm.updateCrop(1.25f, 1.0f, 0.0f)
         composeRule.waitForIdle()
-        val moved = windowState()
-        assertTrue("expected a moved window, got $moved", moved != identity)
+        val moved = sourceWindow()
+        assertTrue("pinch must shrink width", moved.width < identity.width)
+        assertTrue("pinch must shrink height", moved.height < identity.height)
+        assertRenderedWindow(moved)
         vm.resetCrop()
         composeRule.waitForIdle()
-        assertEquals(identity, windowState())
+        assertEquals(identity, sourceWindow())
+        assertEquals(identityDescription, windowState())
+        assertEquals(identityFrame, composeRule.onNodeWithTag("crop_frame").fetchSemanticsNode().boundsInRoot)
+        assertRenderedWindow(identity)
         vm.endSession()
     }
 

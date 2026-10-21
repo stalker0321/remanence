@@ -355,6 +355,8 @@ class AtomicRegistration:
     def cancel(self, row):
         if row.state == "ACTIVE":
             raise SetupFailure("ALREADY_ACTIVE", 409, persist=True)
+        if row.state == "EXPIRED":
+            raise SetupFailure("RESERVATION_TERMINAL", 410, persist=True)
         if row.state == "RESERVED":
             row.state, row.terminal_at, row.restart_authorized = "CANCELLED", self.clock(), False
             self._forget_setup(row)

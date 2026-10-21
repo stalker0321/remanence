@@ -229,5 +229,13 @@ describe('atomic A document ownership / real ADR011 crypto', () => {
     expect(c.controller.getSnapshot().phase).toBe('ready')
     expect(JSON.stringify(requests)).not.toContain('must-not-leave-the-provider')
   })
+
+  it('cancel observing expiry asks for fresh ownership instead of pretending the setup is still writable', async () => {
+    const c = context(); await c.controller.begin()
+    c.f.after = (action, result) => action === 'cancel' ? { status: 200, body: { reservation: { ...c.f.reservation, state: 'EXPIRED' } } } : result
+    await c.controller.cancelReservation()
+    expect(c.controller.getSnapshot()).toMatchObject({ phase: 'reauthenticate', reservationState: 'EXPIRED' })
+    expect(c.f.intents).toHaveLength(0)
+  })
 })
 class AuthErrorForTest extends Error { readonly code = 'TRANSPORT_FAILED' }

@@ -76,7 +76,7 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
   } as Record<string, MessageKey>)[state.error] ?? 'atomicFailure'
   return <section className="card atomic-account" data-atomic-phase={state.phase}>
     <h1 ref={heading} tabIndex={-1}>{t('authTitle')}</h1>
-    {choosing || state.phase === 'idle' || state.phase === 'google' ? <p>{t('atomicIntro')}</p> : signedIn && !unlocked ? <p>{t('authBody')}</p> : null}
+    {!signedIn && (choosing || state.phase === 'idle' || state.phase === 'google') ? <p>{t('atomicIntro')}</p> : signedIn && !unlocked ? <p>{t('authBody')}</p> : null}
     {unlocked ? <p role="status">{t('atomicReady')}</p> : phaseMessage ? <p role="status">{t(phaseMessage)}</p> : null}
     {errorMessage ? <p role="alert">{t(errorMessage)}</p> : null}
     {restoreNotice ? <p role="alert">{t(restoreNotice)}</p> : null}

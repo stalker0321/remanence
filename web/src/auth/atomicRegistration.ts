@@ -138,7 +138,7 @@ export class AtomicRegistration {
       const reply = await this.#post(owner, 'cancel', { epoch: owner.setup!.reservation.epoch })
       const next = reservation(reply.reservation)
       this.#sameReservation(owner, next)
-      if (next.state !== 'CANCELLED') throw new AtomicError('SETUP_REJECTED')
+      if (next.state !== 'CANCELLED' && next.state !== 'EXPIRED') throw new AtomicError('SETUP_REJECTED')
       this.#wipe(owner)
       owner.setup = { ...owner.setup!, reservation: next }
       // A new Google proof is required before restart after cancellation.

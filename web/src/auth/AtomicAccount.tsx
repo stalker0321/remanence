@@ -65,17 +65,18 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     } catch (error) { if (!abort.signal.aborted) setRestoreNotice(explainFailure(error)) }
     finally { if (restore.current === abort) { restore.current = null; setRestoring(false) } }
   }
-  const phaseMessage: MessageKey | null = state.phase === 'unknown' ? 'atomicUnknown' : state.phase === 'terminal' ? 'atomicTerminal'
+  const phaseMessage: MessageKey | null = state.busy && ['saving', 'unknown', 'restore-required'].includes(state.phase) ? 'atomicSaving'
+    : state.phase === 'unknown' ? 'atomicUnknown' : state.phase === 'terminal' ? 'atomicTerminal'
     : state.phase === 'reauthenticate' ? 'atomicReauthenticate' : state.phase === 'restore-required' ? 'atomicRestore'
     : state.phase === 'assertion-required' ? 'atomicAssertion' : state.phase === 'saving' ? 'atomicSaving' : null
-  const errorMessage: MessageKey | null = state.error === null ? null : ({ HANDLE_TAKEN: 'handleTaken', HANDLE_INVALID: 'handleInvalid',
+  const errorMessage: MessageKey | null = state.error === null || state.phase === 'unknown' ? null : ({ HANDLE_TAKEN: 'handleTaken', HANDLE_INVALID: 'handleInvalid',
     PRF_UNAVAILABLE: 'prfUnavailable', PASSKEY_CANCELLED: 'passkeyCancelled', PASSKEY_UNAVAILABLE: 'passkeyUnavailable',
     GOOGLE_CANCELLED: 'googleCancelled', EXISTING_ACCOUNT_REQUIRES_LINK: 'linkRequired', CLIENT_UPGRADE_REQUIRED: 'upgradeRequired',
     REGISTRATION_ADMISSION_CLOSED: 'atomicUnavailable', WRONG_CREDENTIAL: 'wrongPasskey', WRONG_ACCOUNT: 'wrongPasskey',
   } as Record<string, MessageKey>)[state.error] ?? 'atomicFailure'
   return <section className="card atomic-account" data-atomic-phase={state.phase}>
     <h1 ref={heading} tabIndex={-1}>{t('authTitle')}</h1>
-    <p>{t(signedIn ? 'authBody' : 'atomicIntro')}</p>
+    {choosing || state.phase === 'idle' || state.phase === 'google' ? <p>{t('atomicIntro')}</p> : signedIn && !unlocked ? <p>{t('authBody')}</p> : null}
     {unlocked ? <p role="status">{t('atomicReady')}</p> : phaseMessage ? <p role="status">{t(phaseMessage)}</p> : null}
     {errorMessage ? <p role="alert">{t(errorMessage)}</p> : null}
     {restoreNotice ? <p role="alert">{t(restoreNotice)}</p> : null}
@@ -88,7 +89,7 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     </form> : null}
     <div className="actions">
       {!signedIn && !choosing && state.phase !== 'terminal' ? <button className="primary" aria-disabled={busy} onClick={() => { void controller.begin() }}>{t('continueGoogle')}</button> : null}
-      {state.phase === 'unknown' ? <>
+      {state.phase === 'unknown' && !busy ? <>
         <button aria-disabled={busy} onClick={() => { void controller.resolve() }}>{t('atomicCheck')}</button>
         <button aria-disabled={busy} onClick={() => { void controller.retry() }}>{t('atomicRetry')}</button>
       </> : null}

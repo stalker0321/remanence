@@ -54,7 +54,7 @@ try {
     await font.load(); return document.styleSheets.length > 0 && font.status === 'loaded'
   }, base) && requests.some(x => x.url === `${base}fonts/nimbus_roman_regular.otf`))
   check('standalone TEST has no workers or caches', await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length === 0 && (await caches.keys()).length === 0))
-  for (const [lang, name, offline] of [['en', 'English', 'You appear to be offline'], ['ru', 'Русский', 'Похоже, нет соединения'], ['uk', 'Українська', 'Схоже, немає з’єднання']]) {
+  for (const [lang, name, offline] of [['en', 'English', 'This TEST entry needs a connection and is not saved for offline opening.'], ['ru', 'Русский', 'Для этого TEST-входа нужна сеть; он не сохранён для открытия без сети.'], ['uk', 'Українська', 'Для цього TEST-входу потрібна мережа; його не збережено для відкриття без мережі.']]) {
     await page.locator('.bar .language-trigger').click(); await page.getByRole('option', { name, exact: true }).click()
     await page.evaluate(() => { document.documentElement.style.fontSize = '200%' })
     await context.setOffline(true); await page.waitForFunction(() => !navigator.onLine)

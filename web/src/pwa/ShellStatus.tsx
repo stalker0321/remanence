@@ -12,7 +12,7 @@ export function ShellStatus({ t, details }: { t: (key: MessageKey) => string; de
   return (
     <>
       {!details ? <div className={state.offline || state.waiting ? 'status' : undefined} role="status" aria-live="polite">
-        {state.offline ? <p>{t('shellOffline')}</p> : null}
+        {state.offline ? <p>{t(state.support === 'disabled' ? 'shellTestOffline' : 'shellOffline')}</p> : null}
         {state.waiting ? <p>{t('shellUpdate')}</p> : null}
       </div> : null}
       {details ? (

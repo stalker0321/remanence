@@ -5,7 +5,8 @@ import { installShell, shellStore } from './shell'
 export function ShellStatus({ t, details }: { t: (key: MessageKey) => string; details: boolean }) {
   const state = useSyncExternalStore(shellStore.subscribe, shellStore.getSnapshot)
   const description = useRef<HTMLParagraphElement>(null)
-  const status: MessageKey = state.support === 'available' ? 'shellReady'
+  const status: MessageKey = state.support === 'disabled' ? 'shellTestOnly'
+    : state.support === 'available' ? 'shellReady'
     : state.support === 'unsupported' ? 'shellUnsupported'
       : state.support === 'unavailable' ? 'shellUnavailable' : 'shellPreparing'
   return (
@@ -18,9 +19,9 @@ export function ShellStatus({ t, details }: { t: (key: MessageKey) => string; de
         <section className="card settings-group">
           <h2>{t('shellTitle')}</h2>
           <p>{t(status)}</p>
-          <p ref={description} tabIndex={-1}>
+          {state.support !== 'disabled' ? <p ref={description} tabIndex={-1}>
             {t(state.installed ? 'shellInstalled' : 'shellInstallHelp')}
-          </p>
+          </p> : null}
           {state.installable && !state.installed ? (
             <button type="button" onClick={async () => {
               await installShell()

@@ -12,6 +12,11 @@ export class AtomicTestConfigurationError extends Error {
 }
 
 function fail(message: string): never { throw new AtomicTestConfigurationError(message) }
+
+/** Hosting boundary, not an unregister/cache cleanup operation. */
+export function assertUncontrolledTestContext(controlled: boolean): void {
+  if (controlled) fail('This TEST page is controlled by an existing service worker. Use a separate approved TEST origin; no registration started and no worker or cache was removed.')
+}
 function loopback(host: string): boolean { return ['localhost', '127.0.0.1', '[::1]'].includes(host) }
 
 function origin(value: unknown): URL {

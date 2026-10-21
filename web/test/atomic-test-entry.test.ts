@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import mainSource from '../src/main.tsx?raw'
 import testEntrySource from '../src/atomicTest/main.tsx?raw'
 import { configuredAtomicTestAdapters } from '../src/atomicTest/adapters'
-import { AtomicTestConfigurationError, loadAtomicTestConfig, parseAtomicTestConfig } from '../src/atomicTest/config'
+import { assertUncontrolledTestContext, AtomicTestConfigurationError, loadAtomicTestConfig, parseAtomicTestConfig } from '../src/atomicTest/config'
 import type { PasskeyAssertion, PasskeyPort } from '../src/auth/passkey'
 import { AuthError } from '../src/auth/errors'
 
@@ -11,6 +11,11 @@ const parsed = () => parseAtomicTestConfig(config, config.appOrigin, true)
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('dedicated TEST configuration, no ambient/public opt-in', () => {
+  it('refuses an already controlled TEST document without a destructive worker cleanup', () => {
+    expect(() => assertUncontrolledTestContext(false)).not.toThrow()
+    expect(() => assertUncontrolledTestContext(true)).toThrow(/existing service worker/)
+    expect(testEntrySource).not.toMatch(/unregister\(|caches\.delete\(/)
+  })
   it('accepts explicit public origins and existing parent RP without mutating input', () => {
     const result = parsed()
     expect(result).toEqual(config); expect(Object.isFrozen(result)).toBe(true)

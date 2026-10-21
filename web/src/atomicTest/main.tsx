@@ -10,9 +10,10 @@ import { PhotoDraft } from '../create/photos'
 import { RecipientDraft } from '../create/recipient'
 import { readLanguage, type PreferencePort } from '../preferences/language'
 import { SessionStore } from '../session/session'
+import { startOnlineOnlyShell } from '../pwa/shell'
 import { App } from '../ui/App'
 import { browserAtomicTestAdapters } from './adapters'
-import { AtomicTestConfigurationError, loadAtomicTestConfig, type AtomicTestConfig } from './config'
+import { assertUncontrolledTestContext, AtomicTestConfigurationError, loadAtomicTestConfig, type AtomicTestConfig } from './config'
 import '../design/tokens.css'
 
 function TestApplication({ config }: { config: AtomicTestConfig }) {
@@ -45,8 +46,11 @@ const root = createRoot(host)
 async function start() {
   try {
     if (import.meta.env.MODE !== 'atomic-test') throw new AtomicTestConfigurationError('Select the dedicated build:atomic-test configuration; normal/public builds cannot enable this entry.')
+    assertUncontrolledTestContext(Boolean(navigator.serviceWorker?.controller))
     const base = new URL(import.meta.env.BASE_URL, window.location.origin)
     const config = await loadAtomicTestConfig(new URL('atomic-test-config.json', base), location.origin, window.isSecureContext)
+    assertUncontrolledTestContext(Boolean(navigator.serviceWorker?.controller))
+    startOnlineOnlyShell()
     root.render(<StrictMode><TestApplication config={config} /></StrictMode>)
   } catch (error) {
     const message = error instanceof AtomicTestConfigurationError ? error.message : 'TEST configuration could not be loaded. No registration started.'

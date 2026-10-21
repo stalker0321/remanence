@@ -41,6 +41,11 @@ Serve `application/json`. It is static public configuration, **not** a secret
 store or an auth credential. Do not put OAuth secrets, tokens or recovery
 material in it. No URL/localStorage switch can enable the normal entry.
 Do not serve this on an origin controlled by an unrelated existing worker.
+The entry refuses an already controlled document before config/API/provider use
+(and checks again after loading config). It never unregisters workers or clears
+their caches. Use a separate TEST origin, including a distinct loopback port.
+TEST settings explicitly report online-only operation in EN/RU/UK; network
+status still follows online/offline events without registering an offline shell.
 
 There is **no new Google ID variable**: the existing backend
 `POST /v1/auth/google/options` returns `client_id` from its inspected/configured

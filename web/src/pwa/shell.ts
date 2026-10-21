@@ -4,7 +4,7 @@ interface InstallPrompt extends Event {
 }
 
 export interface ShellState {
-  readonly support: 'pending' | 'available' | 'unavailable' | 'unsupported'
+  readonly support: 'pending' | 'available' | 'unavailable' | 'unsupported' | 'disabled'
   readonly offline: boolean
   readonly waiting: boolean
   readonly installable: boolean
@@ -44,6 +44,20 @@ export async function installShell(): Promise<void> {
   }
 }
 
+function observeConnection(): void {
+  change({ offline: navigator.onLine === false })
+  window.addEventListener('online', () => change({ offline: false }))
+  window.addEventListener('offline', () => change({ offline: true }))
+}
+
+/** Explicit TEST root: honest online-only status, no worker/install hooks. */
+export function startOnlineOnlyShell(): void {
+  if (started) return
+  started = true
+  change({ support: 'disabled' })
+  observeConnection()
+}
+
 /** Called only by the production entry. Fixture entrypoints do not register. */
 export function startShell(base: string): void {
   if (started) return
@@ -52,8 +66,7 @@ export function startShell(base: string): void {
   const installed = () => standalone.matches ||
     (navigator as Navigator & { standalone?: boolean }).standalone === true
   change({ installed: installed() })
-  window.addEventListener('online', () => change({ offline: false }))
-  window.addEventListener('offline', () => change({ offline: true }))
+  observeConnection()
   window.addEventListener('beforeinstallprompt', (raw) => {
     const event = raw as InstallPrompt
     if (typeof event.prompt !== 'function' || !event.userChoice || installed()) return

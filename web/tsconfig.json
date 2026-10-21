@@ -16,5 +16,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "test", "harness", "vite.config.ts", "vite.harness.config.ts"]
+  "include": ["src", "test", "harness", "vite.config.ts", "vite.harness.config.ts", "vite.atomic-test.config.ts"]
 }

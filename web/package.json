@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "vite build",
+    "build:atomic-test": "vite build --config vite.atomic-test.config.ts --mode atomic-test",
     "harness": "vite build --config vite.harness.config.ts"
   },
   "dependencies": {

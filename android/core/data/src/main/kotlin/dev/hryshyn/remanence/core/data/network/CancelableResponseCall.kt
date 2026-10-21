@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -18,16 +19,18 @@ import okhttp3.coroutines.executeAsync
  * its continuation is complete once headers arrive; this boundary keeps
  * cancellation wired through bounded body consumption and parsing as well.
  */
+@OptIn(InternalCoroutinesApi::class) // Pinned coroutines: notification at cancellation, not completion after blocked IO.
 internal suspend fun <T> OkHttpClient.executeResponseWithCallLifetime(
     request: Request,
     consume: suspend (Response) -> T,
 ): T = withContext(Dispatchers.IO) {
     val call = newCall(request)
     val responseRef = AtomicReference<Response?>()
-    val cancellationHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+    val cancellationHandle = currentCoroutineContext()[Job]?.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
         if (cause is CancellationException) {
             call.cancel()
-            responseRef.get()?.close()
+            // The consuming IO owner closes the response in finally. Do not
+            // concurrently close/read the same Okio source in this callback.
         }
     }
 
@@ -40,6 +43,11 @@ internal suspend fun <T> OkHttpClient.executeResponseWithCallLifetime(
         call.cancel()
         responseRef.get()?.close()
         throw cancelled
+    } catch (failure: Exception) {
+        // Socket abort may surface as IOException; cancellation still owns the
+        // coroutine outcome and must not fail a newer sibling/parent operation.
+        currentCoroutineContext().ensureActive()
+        throw failure
     } finally {
         cancellationHandle?.dispose()
         responseRef.getAndSet(null)?.close()

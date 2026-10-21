@@ -8,7 +8,7 @@ import org.junit.Test
 import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
-/** Actual repository/OkHttp tests. SOURCE ONLY until a build slot is assigned. */
+/** Actual repository/OkHttp tests; native provider/device acceptance is separate. */
 class AtomicRegistrationRepositoryTest {
     private val reservation = "11111111-1111-4111-8111-111111111111"
     private val token = "rgs_" + "A".repeat(43)
@@ -97,6 +97,31 @@ class AtomicRegistrationRepositoryTest {
             request.cancel()
             withTimeout(2000) { request.join() }
             assertTrue(request.isCancelled); assertEquals(1, server.requestCount)
+        } finally { server.close() }
+    }
+
+    @Test fun cancellationAfterHeadersCancelsExactCallBeforeBodyTimeout(): Unit = runBlocking {
+        val server = MockWebServer(); server.start()
+        val entered = CompletableDeferred<Unit>()
+        val callRef = java.util.concurrent.atomic.AtomicReference<okhttp3.Call>()
+        val client = HttpClientFactory.create().newBuilder().eventListener(object : okhttp3.EventListener() {
+            override fun callStart(call: okhttp3.Call) { callRef.set(call) }
+        }).build()
+        try {
+            server.enqueue(MockResponse.Builder().setHeader("Content-Type", "application/json")
+                .body("{}").bodyDelay(20, TimeUnit.SECONDS).build())
+            val request = async {
+                client.executeResponseWithCallLifetime(okhttp3.Request.Builder().url(server.url("/body")).build()) { response ->
+                    assertEquals(200, response.code)
+                    entered.complete(Unit) // Actual response headers received; body not yet available.
+                    response.body.string()
+                }
+            }
+            withTimeout(5000) { entered.await() }
+            request.cancel()
+            withTimeout(2000) { request.join() }
+            assertTrue(request.isCancelled); assertTrue(callRef.get().isCanceled())
+            assertEquals(1, server.requestCount)
         } finally { server.close() }
     }
 

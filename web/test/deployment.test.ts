@@ -99,11 +99,12 @@ describe('normal entry guarded existing ports', () => {
     for (const [config, allowed] of [[null, true], [parseDeploymentConfig(target, target.appOrigin, true), false]] as const) {
       const report = vi.fn(), ports = deploymentPorts(config, () => allowed, report, doc)
       expect(ports.passkeys.canAuthenticate()).toBe(false)
-      expect(() => ports.transport.request({ method: 'GET', path: '/v1/me' })).toThrow()
-      expect(() => ports.transport.requestBytes({ path: '/v1/me/key-backup', maxBytes: 10 })).toThrow()
+      await expect(ports.transport.request({ method: 'GET', path: '/v1/me' })).rejects.toThrow()
+      await expect(ports.transport.requestBytes({ path: '/v1/me/key-backup', maxBytes: 10 })).rejects.toThrow()
+      await expect(ports.transport.uploadBytes({ path: '/v1/me/key-backup', token: 'synthetic', idempotencyKey: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', ciphertextSha256: new Uint8Array(32), body: new Uint8Array([1]) })).rejects.toThrow()
       await expect(ports.google.requestIdToken('client', 'nonce')).rejects.toThrow()
       await expect(ports.passkeys.get({})).rejects.toThrow()
-      if (ports.atomicRegistration) expect(() => ports.atomicRegistration!.request({ action: 'google/options', body: {} })).toThrow()
+      if (ports.atomicRegistration) await expect(ports.atomicRegistration.request({ action: 'google/options', body: {} })).rejects.toThrow()
       expect(report).toHaveBeenCalled()
     }
     expect(fetcher).not.toHaveBeenCalled()

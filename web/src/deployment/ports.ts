@@ -22,11 +22,13 @@ export function deploymentPorts(config: DeploymentConfig | null, allowed: () => 
   }
   return {
     transport: {
-      request: (input: Parameters<typeof api.request>[0]) => { guard(); return api.request(input) },
-      requestBytes: (input: Parameters<typeof api.requestBytes>[0]) => { guard(); return api.requestBytes(input) },
-      uploadBytes: (input: Parameters<typeof api.uploadBytes>[0]) => { guard(); return api.uploadBytes(input) },
+      // Preserve the HTTP ports' Promise contract even when admission fails.
+      // Local retirement must not be interrupted before best-effort cleanup can catch it.
+      request: async (input: Parameters<typeof api.request>[0]) => { guard(); return api.request(input) },
+      requestBytes: async (input: Parameters<typeof api.requestBytes>[0]) => { guard(); return api.requestBytes(input) },
+      uploadBytes: async (input: Parameters<typeof api.uploadBytes>[0]) => { guard(); return api.uploadBytes(input) },
     },
-    atomicRegistration: config?.atomicRegistration ? { request: (input: Parameters<typeof setup.request>[0]) => { guard(); return setup.request(input) } } : undefined,
+    atomicRegistration: config?.atomicRegistration ? { request: async (input: Parameters<typeof setup.request>[0]) => { guard(); return setup.request(input) } } : undefined,
     google: { async requestIdToken(clientId: string, nonce: string, signal?: AbortSignal) {
       guard(); const token = await adapters.google.requestIdToken(clientId, nonce, signal); guard(); return token
     } },

@@ -162,13 +162,14 @@ describe('atomic A document ownership / real ADR011 crypto', () => {
     if (point === 'finalize:after' || point === 'record:after') expect(c.f.provisions).toBe(1) // leave cannot uncommit
   })
 
-  it('late crypto completion locks its own capability and cannot replace newer session/key owner', async () => {
+  it.each(['different', 'same'] as const)('late crypto completion preserves newer %s account/bundle owner', async (kind) => {
     const c = context(); let locks = 0
     const original = ownerCrypto.unlockAccount
     const newer = { accountId: RESERVATION, bundleId: RESERVATION, openEnvelope: vi.fn(), decryptArtifact: vi.fn(), sign: vi.fn(), lock: vi.fn() }
     vi.spyOn(ownerCrypto, 'unlockAccount').mockImplementation(async (...args) => {
       const caps = await original(...args); const lock = caps.lock; caps.lock = () => { locks++; lock() }
-      c.session.signIn({ accountId: RESERVATION, bundleId: RESERVATION, handle: 'newer', accessToken: 'other', refreshToken: 'other', accessExpiresAt: '', refreshExpiresAt: '' })
+      if (kind === 'same') { newer.accountId = caps.accountId; newer.bundleId = caps.bundleId }
+      c.session.signIn({ accountId: newer.accountId, bundleId: newer.bundleId, handle: 'newer', accessToken: 'other', refreshToken: 'other', accessExpiresAt: '', refreshExpiresAt: '' })
       c.session.unlock(); c.keys.hold(c.session.getSnapshot(), newer)
       return caps
     })
@@ -176,9 +177,9 @@ describe('atomic A document ownership / real ADR011 crypto', () => {
     expect(locks).toBe(1); expect(c.keys.capabilities(c.session.getSnapshot())).toBe(newer); expect(newer.lock).not.toHaveBeenCalled()
   })
 
-  it('lost credential-verify ACK reconciles status before any further create', async () => {
+  it.each(['credential/verify', 'setup/verify'] as const)('lost %s ACK reconciles status before any further create', async (lost) => {
     const c = context(); let fail = true
-    c.f.after = (action, result) => { if (action === 'credential/verify' && fail) throw new AuthErrorForTest(); return result }
+    c.f.after = (action, result) => { if (action === lost && fail) throw new AuthErrorForTest(); return result }
     await saved(c); fail = false; await c.controller.save('ada')
     expect(c.f.creates).toBe(1); expect(c.controller.getSnapshot().phase).toBe('ready')
   })

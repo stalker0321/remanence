@@ -10,7 +10,7 @@ import type { ApiTransport } from './http'
 import type { MemoryKeys } from './memoryKeys'
 import type { PasskeyAssertion, PasskeyPort, PublicAssertion } from './passkey'
 import { AtomicError, binary, login, object, outcome, recoveryReply, reservation, setupReply, string, success, uuid,
-  type AtomicPort, type FinalIntent, type Reservation, type SetupAction, type SetupReply } from './atomicWire'
+  type AtomicPort, type AtomicRequest, type FinalIntent, type Reservation, type SetupAction, type SetupBodies, type SetupReply } from './atomicWire'
 
 export type AtomicPhase = 'idle' | 'google' | 'handle' | 'saving' | 'unknown' | 'handle-conflict' | 'assertion-required' | 'reauthenticate' | 'terminal' | 'restore-required' | 'ready' | 'existing'
 export interface AtomicView {
@@ -185,7 +185,7 @@ export class AtomicRegistration {
         owner.credential = created.id
       } finally { created.prf?.fill(0) }
     }
-    const begin = await this.#post(owner, 'setup/options', { epoch, credential_id: owner.credential })
+    const begin = await this.#post(owner, 'setup/options', { epoch, credential_id: owner.credential! })
     const flow = uuid(begin.flow)
     const allowed = object(begin.options).allowCredentials
     if (!Array.isArray(allowed) || allowed.length !== 1 || object(allowed[0]).id !== owner.credential) throw new AtomicError('WRONG_CREDENTIAL')
@@ -308,10 +308,10 @@ export class AtomicRegistration {
     } catch (error) { caps.lock(); throw error }
   }
 
-  async #post(owner: Owner, action: SetupAction, body: unknown, statuses?: number[]): Promise<Record<string, unknown>> {
+  async #post<A extends SetupAction>(owner: Owner, action: A, body: SetupBodies[A], statuses?: number[]): Promise<Record<string, unknown>> {
     this.#check(owner)
     const setup = owner.setup!
-    const result = await this.ports.setup.request({ action, reservation: setup.reservation.id, token: setup.setup_token, body, signal: owner.controller.signal })
+    const result = await this.ports.setup.request({ action, reservation: setup.reservation.id, token: setup.setup_token, body, signal: owner.controller.signal } as AtomicRequest)
     this.#check(owner)
     return success(result, statuses)
   }

@@ -11,7 +11,7 @@ describe('isolated atomic exact transport', () => {
     const port = atomicTransport('https://example.test', send)
     await port.request({ action: 'google/verify', body: { flow: RESERVATION, nonce: 'A'.repeat(43), id_token: 'synthetic', onboarding_version: 1 } })
     await port.request({ action: 'status', reservation: RESERVATION, token })
-    await port.request({ action: 'finalize', reservation: RESERVATION, token, body: { epoch: 1 } })
+    await port.request({ action: 'finalize', reservation: RESERVATION, token, body: { epoch: 1 } } as AtomicRequest)
     expect(send.mock.calls[0]).toMatchObject(['https://example.test/v1/auth/google/verify', { method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store' }])
     expect(send.mock.calls[1]).toEqual([`https://example.test/v2/registration/reservations/${RESERVATION}`, {
       method: 'GET', headers: { accept: 'application/json', 'x-remanence-profile-version': '2', authorization: `Bearer ${token}` }, body: undefined,
@@ -36,7 +36,7 @@ describe('isolated atomic exact transport', () => {
   })
   it('bounds request and streamed response, rejects HTML/malformed JSON and cancels streams', async () => {
     const send = vi.fn(async () => json()); const port = atomicTransport('', send)
-    await expect(port.request({ action: 'finalize', reservation: RESERVATION, token, body: { blob: 'x'.repeat(262144) } })).rejects.toMatchObject({ code: 'TRANSPORT_FAILED' })
+    await expect(port.request({ action: 'finalize', reservation: RESERVATION, token, body: { blob: 'x'.repeat(262144) } } as unknown as AtomicRequest)).rejects.toMatchObject({ code: 'TRANSPORT_FAILED' })
     expect(send).not.toHaveBeenCalled()
     for (const response of [new Response('<html>', { status: 404 }), json('x'.repeat(262144)), new Response('{', { headers: { 'content-type': 'application/json' } })]) {
       await expect(atomicTransport('', async () => response).request({ action: 'status', reservation: RESERVATION, token })).rejects.toMatchObject({ code: 'TRANSPORT_FAILED' })

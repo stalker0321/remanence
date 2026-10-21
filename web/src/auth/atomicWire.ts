@@ -3,6 +3,7 @@ import { isCanonicalUuid } from '../protocol/uuid'
 import type { PublicKeyBundle } from '../crypto/identity'
 import type { RecoveryReply } from '../crypto/keyOwner'
 import type { SignInInput } from '../session/session'
+import type { PublicAssertion } from './passkey'
 
 /** T403 API v1, SHA256 22e08ea72729432876b72e874cba349a54ae2e3bd78ee5fd78fe8e91ea818abf. */
 export interface Outcome {
@@ -23,11 +24,21 @@ export interface FinalIntent {
   key_bundle: PublicKeyBundle; record: RecoveryReply['record']
 }
 export type SetupAction = 'credential/options' | 'credential/verify' | 'setup/options' | 'setup/verify' | 'finalize' | 'leave' | 'cancel' | 'restart'
+export interface SetupBodies {
+  'credential/options': { epoch: number }
+  'credential/verify': { epoch: number; flow: string; response: PublicAssertion }
+  'setup/options': { epoch: number; credential_id: string }
+  'setup/verify': { epoch: number; flow: string; response: PublicAssertion }
+  finalize: FinalIntent
+  leave: { epoch: number }
+  cancel: { epoch: number }
+  restart: { epoch: number }
+}
 export type AtomicRequest =
   | { action: 'google/options'; body: Record<string, never>; signal?: AbortSignal }
   | { action: 'google/verify'; body: { flow: string; nonce: string; id_token: string; onboarding_version: 1 }; signal?: AbortSignal }
   | { action: 'status'; reservation: string; token: string; signal?: AbortSignal }
-  | { action: SetupAction; reservation: string; token: string; body: unknown; signal?: AbortSignal }
+  | { [A in SetupAction]: { action: A; reservation: string; token: string; body: SetupBodies[A]; signal?: AbortSignal } }[SetupAction]
 export interface AtomicPort { request(input: AtomicRequest): Promise<ApiResult> }
 export class AtomicError extends Error {
   constructor(readonly code: string, readonly status?: number) { super(code); this.name = 'AtomicError' }

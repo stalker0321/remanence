@@ -775,6 +775,19 @@ export function Create({
     setMusicQuery('')
   }, [open])
 
+  // A route departure can release a pending reply before React's passive
+  // unmount cleanup. Fence this UI search in capture phase, like Scan's Back
+  // cleanup; same-Create hash navigation must keep a legitimate search alive.
+  useEffect(() => {
+    const leave = () => { if (parseRoute(window.location.hash) !== 'create') stopMusicSearch() }
+    window.addEventListener('popstate', leave, true)
+    window.addEventListener('hashchange', leave, true)
+    return () => {
+      window.removeEventListener('popstate', leave, true)
+      window.removeEventListener('hashchange', leave, true)
+    }
+  }, [])
+
   function stopMusicSearch() {
     if (musicTimer.current !== null) {
       clearTimeout(musicTimer.current)
@@ -1002,9 +1015,11 @@ export function Create({
   async function runMusic(ticket: number, query: string) {
     const controller = new AbortController()
     musicAbort.current = controller
+    const current = () => mounted.current && musicAbort.current === controller &&
+      !controller.signal.aborted && parseRoute(window.location.hash) === 'create'
     try {
       const outcome = await searchMusic(store, transport, query, controller.signal)
-      if (controller.signal.aborted) return
+      if (!current()) return
       if (outcome.kind === 'empty') {
         music.offer(ticket, [])
         return
@@ -1012,9 +1027,9 @@ export function Create({
       if (!music.offer(ticket, outcome.hits)) return
       onNotice(outcome.hits.length === 0 ? 'musicNone' : 'errorRegion')
     } catch (error) {
-      if (!controller.signal.aborted) onNotice(explainFailure(error))
+      if (current()) onNotice(explainFailure(error))
     } finally {
-      setStamp((next) => next + 1)
+      if (current()) setStamp((next) => next + 1)
     }
   }
 

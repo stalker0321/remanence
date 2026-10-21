@@ -15,6 +15,7 @@ const { chromium } = requireTool('playwright-core')
 const executable = '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
 const executableSha256 = createHash('sha256').update(await readFile(executable)).digest('hex')
 assert.equal(executableSha256, '4fa61f0ba0b4f89b7bec242c32ca16d3bccf69dbfef0651924a9ba8fede5f9d6')
+assert.deepEqual(JSON.parse(await readFile(join(web, 'atomic-test-dist/atomic-test-config.json'), 'utf8')), { environment: 'UNCONFIGURED' })
 const checks = [], errors = [], images = [], wire = []
 const check = (name, ok) => { assert.ok(ok, name); checks.push({ name, ok: true }) }
 const account = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', reservationId = 'bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee'

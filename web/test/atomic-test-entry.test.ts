@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
+import mainSource from '../src/main.tsx?raw'
+import testEntrySource from '../src/atomicTest/main.tsx?raw'
 import { configuredAtomicTestAdapters } from '../src/atomicTest/adapters'
 import { AtomicTestConfigurationError, loadAtomicTestConfig, parseAtomicTestConfig } from '../src/atomicTest/config'
 import type { PasskeyAssertion, PasskeyPort } from '../src/auth/passkey'
@@ -45,12 +46,10 @@ describe('dedicated TEST configuration, no ambient/public opt-in', () => {
     await expect(loadAtomicTestConfig(new URL('/atomic-test-config.json', config.appOrigin), config.appOrigin, true)).rejects.toThrow(AtomicTestConfigurationError)
   })
   it('ordinary entry remains gated; dedicated build has no fixture/provider-success or worker hook', () => {
-    const main = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8')
-    expect(main).not.toMatch(/atomicRegistration|atomicTest/)
-    const test = readFileSync(new URL('../src/atomicTest/main.tsx', import.meta.url), 'utf8')
-    expect(test).toContain('browserAtomicTestAdapters(config, document, setNotice)')
-    expect(test).toContain('atomicRegistration: atomicTransport(config.apiOrigin)')
-    expect(test).not.toMatch(/from ['"].*(?:fixture|\/test\/)|startShell\(/)
+    expect(mainSource).not.toMatch(/atomicRegistration|atomicTest/)
+    expect(testEntrySource).toContain('browserAtomicTestAdapters(config, document, setNotice)')
+    expect(testEntrySource).toContain('atomicRegistration: atomicTransport(config.apiOrigin)')
+    expect(testEntrySource).not.toMatch(/from ['"].*(?:fixture|\/test\/)|startShell\(/)
   })
 })
 

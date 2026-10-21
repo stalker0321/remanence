@@ -40,6 +40,7 @@ Object.assign(window, { atomic: {
     if (config.terminal) fixture.reservation.state = 'EXPIRED'
   },
   state: () => ({ ...store.getSnapshot(), keys: keys.capabilities(store.getSnapshot()) !== null, setup: document.querySelector('[data-atomic-phase]')?.getAttribute('data-atomic-phase'),
+    reservationId: fixture.reservation.id,
     creates: fixture.creates, assertions: fixture.assertions, commits: fixture.provisions, attempts: fixture.intents.length, calls: fixture.calls,
     wiped: fixture.secrets.every((bytes) => bytes.every((b) => b === 0)) }),
   hold: (point: string) => { hold = point; reached = '' }, reached: () => reached, release: resume,

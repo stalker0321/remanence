@@ -230,7 +230,7 @@ describe('atomic A document ownership / real ADR011 crypto', () => {
     expect(JSON.stringify(requests)).not.toContain('must-not-leave-the-provider')
   })
 
-  it('cancel observing expiry asks for fresh ownership instead of pretending the setup is still writable', async () => {
+  it('historical non-contract 200/EXPIRED still cannot imply readiness or writable setup', async () => {
     const c = context(); await c.controller.begin()
     c.f.after = (action, result) => action === 'cancel' ? { status: 200, body: { reservation: { ...c.f.reservation, state: 'EXPIRED' } } } : result
     await c.controller.cancelReservation()

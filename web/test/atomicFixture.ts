@@ -97,7 +97,8 @@ export class AtomicFixture {
       }
     } else if (action === 'cancel') {
       if (this.saved) result = { status: 409, body: { reason: 'ALREADY_ACTIVE' } }
-      else { this.reservation.state = 'CANCELLED'; result.body = { reservation: this.reservation } }
+      else if (this.reservation.state === 'EXPIRED') result = { status: 410, body: { reason: 'RESERVATION_TERMINAL' } }
+      else { this.reservation.state = 'CANCELLED'; this.reservation.credential_ids = []; result.body = { reservation: this.reservation } }
     } else if (action === 'restart') {
       if (!['CANCELLED', 'EXPIRED'].includes(this.reservation.state)) throw new Error('invalid fixture restart')
       this.reservation = { ...this.reservation, id: crypto.randomUUID(), account_id: crypto.randomUUID(), state: 'RESERVED', credential_ids: [] }

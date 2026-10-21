@@ -49,7 +49,10 @@ try {
   const preparing = 'Preparing the app shell for another visit.'
   check('online-only TEST never promises a worker installation in progress', !(await page.textContent('body')).includes(preparing))
   check('TEST reports explicitly disabled offline shell', (await page.textContent('body')).includes('This TEST entry is online-only.'))
-  check('prefix loads styles and public fonts at its own base', await page.evaluate(async () => { await document.fonts.ready; return document.styleSheets.length > 0 && document.fonts.check('16px "Caveat"') }) && requests.some(x => x.url.startsWith(`${base}fonts/`)))
+  check('prefix loads styles and actually decodes a shipped public font', await page.evaluate(async base => {
+    const font = new FontFace('T424-synthetic-font-probe', `url(${base}fonts/nimbus_roman_regular.otf)`)
+    await font.load(); return document.styleSheets.length > 0 && font.status === 'loaded'
+  }, base) && requests.some(x => x.url === `${base}fonts/nimbus_roman_regular.otf`))
   check('standalone TEST has no workers or caches', await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length === 0 && (await caches.keys()).length === 0))
   for (const [lang, name, offline] of [['en', 'English', 'You appear to be offline'], ['ru', 'Русский', 'Похоже, нет соединения'], ['uk', 'Українська', 'Схоже, немає з’єднання']]) {
     await page.locator('.bar .language-trigger').click(); await page.getByRole('option', { name, exact: true }).click()

@@ -18,7 +18,7 @@ class AtomicProviderFailureTest {
         GetCredentialUnsupportedException(privateText) to "PROVIDER_UNAVAILABLE",
         GetCredentialInterruptedException(privateText) to "PROVIDER_FAILED",
         GetCredentialUnknownException(privateText) to "PROVIDER_FAILED",
-        object : GetCredentialException("synthetic.future.get", privateText) {} to "PROVIDER_FAILED",
+        GetCredentialCustomException("synthetic.future.get", privateText) to "PROVIDER_FAILED",
     )
     private fun createFailures() = listOf(
         CreateCredentialCancellationException(privateText) to "PROVIDER_CANCELLED",
@@ -27,7 +27,7 @@ class AtomicProviderFailureTest {
         CreateCredentialUnsupportedException(privateText) to "PROVIDER_UNAVAILABLE",
         CreateCredentialInterruptedException(privateText) to "PROVIDER_FAILED",
         CreateCredentialUnknownException(privateText) to "PROVIDER_FAILED",
-        object : CreateCredentialException("synthetic.future.create", privateText) {} to "PROVIDER_FAILED",
+        CreateCredentialCustomException("synthetic.future.create", privateText) to "PROVIDER_FAILED",
     )
 
     @Test fun googleFailureStopsBeforeVerifyAndNeverClaimsUserCancelForOtherSubtypes(): Unit = runBlocking {

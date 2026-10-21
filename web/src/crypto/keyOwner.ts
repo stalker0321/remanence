@@ -60,8 +60,9 @@ export async function unlockAccount(
   const raw = new Uint8Array(opened.encryptionSeed)
   opened.encryptionSeed.fill(0)
   opened.signingSeed.fill(0)
-  const recipientKey = await kem.importKey('raw', raw.buffer, false)
-  raw.fill(0)
+  let recipientKey: CryptoKey
+  try { recipientKey = await kem.importKey('raw', raw.buffer, false) }
+  finally { raw.fill(0) }
   let alive = true
   const signing = opened.signing
   const signingKeyId = opened.signingKeyId

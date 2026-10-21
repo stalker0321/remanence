@@ -94,8 +94,9 @@ export class LocalIdentity {
 
 export async function generateLocalIdentity(): Promise<LocalIdentity> {
   const encryption = await okp('X25519')
-  const signing = await okp('Ed25519')
+  let signing: Awaited<ReturnType<typeof okp>> | null = null
   try {
+    signing = await okp('Ed25519')
     const encryptionKeyId = freshKeyId()
     const signingKeyId = freshKeyId()
     const encryptionValue = hpkePublic(encryption.raw)
@@ -117,7 +118,7 @@ export async function generateLocalIdentity(): Promise<LocalIdentity> {
     })
   } catch (error) {
     encryption.seed.fill(0)
-    signing.seed.fill(0)
+    signing?.seed.fill(0)
     throw error
   }
 }

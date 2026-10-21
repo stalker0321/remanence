@@ -126,6 +126,7 @@ export class AtomicRegistration {
       if (next.reservation.id === owner.setup!.reservation.id || next.reservation.account_id === owner.setup!.reservation.account_id || next.reservation.state !== 'RESERVED') throw new AtomicError('SETUP_REJECTED')
       this.#wipe(owner)
       owner.setup = next
+      owner.credential = next.reservation.credential_ids[0] ?? null
       this.#state(owner)
     })
   }

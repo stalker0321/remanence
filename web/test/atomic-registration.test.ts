@@ -5,7 +5,7 @@ import { SessionStore } from '../src/session/session'
 import { restoreSignedInAccount } from '../src/auth/restore'
 import * as identity from '../src/crypto/identity'
 import * as ownerCrypto from '../src/crypto/keyOwner'
-import { AtomicFixture, RESERVATION } from './atomicFixture'
+import { AtomicFixture, CREDENTIAL, RESERVATION } from './atomicFixture'
 import { DhkemX25519HkdfSha256 } from '@hpke/core'
 import { unb64 } from '../../server/src/remanence/recovery/web/crypto.mjs'
 import { parseHpkePublicKeyset } from '../src/crypto/tink'
@@ -206,11 +206,27 @@ describe('atomic A document ownership / real ADR011 crypto', () => {
   })
 
   it('terminal reservation requires explicit restart; cancel/leave never restart automatically', async () => {
-    const c = context(); c.f.reservation.state = 'EXPIRED'; await c.controller.begin()
+    const c = context(); c.f.reservation.state = 'EXPIRED'; c.f.reservation.credential_ids = [CREDENTIAL]; await c.controller.begin()
     expect(c.controller.getSnapshot().phase).toBe('terminal'); expect(c.f.calls).not.toContain('restart')
     await c.controller.restart(); expect(c.controller.getSnapshot().phase).toBe('handle')
     expect(c.f.reservation.id).not.toBe(RESERVATION)
+    expect(c.controller.getSnapshot().credentialCount).toBe(0)
     await c.controller.cancelReservation(); expect(c.controller.getSnapshot().phase).toBe('reauthenticate')
+  })
+
+  it('copies only public credential fields, never provider extensions or arbitrary private properties', async () => {
+    const c = context(); const requests: unknown[] = []; const request = c.f.setup.request
+    c.f.setup.request = async (input) => { if (input.action === 'setup/verify') requests.push(input.body); return request(input) }
+    const original = c.f.passkeys.get
+    c.f.passkeys.get = async (...args) => {
+      const assertion = await original(...args)
+      assertion.publicResponse.response.privateSeed = 'must-not-leave-the-provider'
+      Object.assign(assertion.publicResponse, { rawPrf: 'must-not-leave-the-provider' })
+      return assertion
+    }
+    await saved(c)
+    expect(c.controller.getSnapshot().phase).toBe('ready')
+    expect(JSON.stringify(requests)).not.toContain('must-not-leave-the-provider')
   })
 })
 class AuthErrorForTest extends Error { readonly code = 'TRANSPORT_FAILED' }

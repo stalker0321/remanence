@@ -208,7 +208,62 @@ class AtomicRegistrationControllerTest {
         candidate.wipe(); assertTrue(secret.all { it == 0.toByte() })
     }
 
-    private class Fixture : AtomicRegistrationPort, RecoveryCredentialPort {
+    @Test fun backDuringEitherPermanentReadRevokesOnlyReceivedLogin(): Unit = runBlocking {
+        withTimeout(10000) {
+            for (path in listOf("status", "record")) {
+                val f = Fixture(); f.holdRead = path; val c = f.controller()
+                c.begin(f.google)
+                val saving = launch { c.save("original", f) }
+                f.readReached.await() // Login already parsed; this is NOT a pre-response cancellation.
+                assertNotNull(f.saved); assertNull(f.published)
+                c.leave(); f.readRelease.complete(Unit); saving.join()
+                assertEquals(listOf("pm_at_synthetic"), f.revoked)
+                assertNull(f.published); assertNull(f.installed)
+                assertEquals(AtomicPhase.IDLE, c.state.value.phase)
+                assertEquals("ACTIVE", f.reservationState); assertEquals(1, f.generations)
+            }
+        }
+    }
+
+    @Test fun replacementDuringReadbackCannotRevokeNewOwnersSession(): Unit = runBlocking {
+        withTimeout(10000) {
+            for (path in listOf("status", "record")) {
+                val f = Fixture(); f.holdRead = path; val c = f.controller()
+                c.begin(f.google)
+                val saving = launch { c.save("original", f) }
+                f.readReached.await()
+                val newer = f.replaceWithNewOwner()
+                f.readRelease.complete(Unit); saving.join()
+                assertEquals(listOf("pm_at_synthetic"), f.revoked)
+                assertSame(newer, f.published); assertNull(f.installed)
+                assertEquals(AtomicPhase.IDLE, c.state.value.phase)
+            }
+        }
+    }
+
+    @Test fun adoptedReadyAndRestoreRequiredSessionsAreNeverRevoked(): Unit = runBlocking {
+        for (mode in listOf("ok", "corrupt", "unavailable")) {
+            val f = Fixture(); f.readMode = mode; val c = f.controller()
+            c.begin(f.google); c.save("original", f)
+            assertTrue(c.state.value.sessionEstablished)
+            assertEquals(if (mode == "ok") AtomicPhase.READY else AtomicPhase.RESTORE_REQUIRED, c.state.value.phase)
+            c.leave() // Leaving after adoption is not logout or ACTIVE rollback.
+            assertNotNull(f.published); assertTrue(f.revoked.isEmpty())
+        }
+    }
+
+    @Test fun failedBestEffortLogoutDoesNotResurrectAbandonedFlow(): Unit = runBlocking {
+        withTimeout(10000) {
+            val f = Fixture(); f.holdRead = "record"; f.logoutFails = true; val c = f.controller()
+            c.begin(f.google)
+            val saving = launch { c.save("original", f) }
+            f.readReached.await(); c.leave(); f.readRelease.complete(Unit); saving.join()
+            assertEquals(listOf("pm_at_synthetic"), f.revoked)
+            assertNull(f.published); assertEquals(AtomicPhase.IDLE, c.state.value.phase)
+        }
+    }
+
+    internal class Fixture : AtomicRegistrationPort, RecoveryCredentialPort {
         var epoch = 0L; var account = ACCOUNT; var reservation = RESERVATION; var reservationState = "RESERVED"
         var registered = false; var freshTerminal = false; var restarts = 0; var restartReplay = false
         var generations = 0; var creates = 0; var assertions = 0; var immediateGets = 0; var discoveryGets = 0
@@ -219,10 +274,18 @@ class AtomicRegistrationControllerTest {
         val finals = mutableListOf<JsonObject>(); val reads = mutableListOf<String>()
         var hold: AtomicAction? = null
         val reached = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        var holdRead: String? = null; var logoutFails = false
+        val readReached = CompletableDeferred<Unit>(); val readRelease = CompletableDeferred<Unit>()
+        val revoked = mutableListOf<String>()
+        fun replaceWithNewOwner(): LoginResponseDto {
+            epoch++
+            return AtomicWire.login(login()).copy(accessToken = "pm_at_new_owner").also { published = it }
+        }
         val google = GoogleCredentialPort { _, _ -> "synthetic-google-proof" }
         fun controller() = AtomicRegistrationController(AtomicEnvironment(this, { epoch }, { it == epoch && published == null },
             read = { _, path ->
                 reads += path
+                if (holdRead == path) withContext(NonCancellable) { readReached.complete(Unit); readRelease.await() }
                 if (retireOnRead) epoch++
                 if (readMode == "unavailable") throw IOException("synthetic")
                 if (path == "status") buildJsonObject { put("state", "STORED"); put("credential_id", CREDENTIAL) }
@@ -239,7 +302,10 @@ class AtomicRegistrationControllerTest {
                     reads += if (keys == null) "publish-locked" else "publish-keys"
                     installed = keys; published = login
                 }
-            }, isPublished = { published === it }, generate = { generations++; AccountIdentityGenerator().generate() }, cryptoDispatcher = Dispatchers.Unconfined))
+            }, isPublished = { published === it }, revoke = { token ->
+                revoked += token
+                if (logoutFails) throw IOException("synthetic logout unavailable")
+            }, generate = { generations++; AccountIdentityGenerator().generate() }, cryptoDispatcher = Dispatchers.Unconfined))
 
         override suspend fun request(action: AtomicAction, reservation: String?, token: String?, body: JsonObject?): JsonObject {
             requests += action to body

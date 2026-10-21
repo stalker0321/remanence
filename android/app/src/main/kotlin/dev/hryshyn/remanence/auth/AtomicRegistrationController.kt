@@ -33,6 +33,7 @@ internal class AtomicEnvironment(
     val read: suspend (token: String, path: String) -> JsonObject,
     val publish: suspend (Long, LoginResponseDto, Crypto.Restored?, AtomicPublication) -> Unit,
     val isPublished: (LoginResponseDto) -> Boolean,
+    val revoke: suspend (token: String) -> Unit,
     val generate: () -> AccountIdentityGenerator.AccountIdentity = { AccountIdentityGenerator().generate() },
     val cryptoDispatcher: CoroutineDispatcher = Dispatchers.Default,
 )
@@ -75,7 +76,8 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
             })
             checkOwner(next)
             if (AtomicWire.text(reply, "status", 32) == "SIGNED_IN") {
-                publish(next, AtomicWire.login(reply.getValue("login").jsonObject), null, AtomicPhase.EXISTING)
+                val login = AtomicWire.login(reply.getValue("login").jsonObject)
+                withIssuedLogin(login) { publish(next, login, null, AtomicPhase.EXISTING) }
             } else {
                 next.setup = AtomicWire.setup(reply)
                 next.credential = next.setup!!.reservation.credentialIds.firstOrNull()
@@ -232,21 +234,34 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         require(result["credential_id"] == candidate.record["credential_id"] && AtomicWire.integer(result, "generation") == 1)
         if (reply["reauthenticate"] == JsonPrimitive(true)) { current.wipe(); show(AtomicPhase.RESTORE_REQUIRED); return }
         val login = AtomicWire.login(reply.getValue("login").jsonObject)
-        require(login.user.userId == AtomicWire.text(result, "account_id", 36))
-        require(login.activeKeyBundle.keyBundleId == AtomicWire.text(result, "bundle_id", 36) && login.user.handle == AtomicWire.text(result, "handle", 32))
-        show(AtomicPhase.RESTORE_REQUIRED)
-        val restored = try {
-            val status = env.read(login.accessToken, "status"); checkOwner(current)
-            require(AtomicWire.text(status, "state", 16) == "STORED" && AtomicWire.text(status, "credential_id", 2048) == current.credential)
-            val read = env.read(login.accessToken, "record"); checkOwner(current)
-            withContext(env.cryptoDispatcher) { unwrapAtomic(candidate, read) }.also { checkOwner(current) }
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) {
-            checkOwner(current)
-            publish(current, login, null, AtomicPhase.RESTORE_REQUIRED)
-            return
+        withIssuedLogin(login) {
+            require(login.user.userId == AtomicWire.text(result, "account_id", 36))
+            require(login.activeKeyBundle.keyBundleId == AtomicWire.text(result, "bundle_id", 36) && login.user.handle == AtomicWire.text(result, "handle", 32))
+            show(AtomicPhase.RESTORE_REQUIRED)
+            val restored = try {
+                val status = env.read(login.accessToken, "status"); checkOwner(current)
+                require(AtomicWire.text(status, "state", 16) == "STORED" && AtomicWire.text(status, "credential_id", 2048) == current.credential)
+                val read = env.read(login.accessToken, "record"); checkOwner(current)
+                withContext(env.cryptoDispatcher) { unwrapAtomic(candidate, read) }.also { checkOwner(current) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                checkOwner(current)
+                publish(current, login, null, AtomicPhase.RESTORE_REQUIRED)
+                return@withIssuedLogin
+            }
+            publish(current, login, restored, AtomicPhase.READY)
         }
-        publish(current, login, restored, AtomicPhase.READY)
+    }
+
+    /** Own a received ordinary login across readback AND publication. Setup LEAVE
+     * cannot revoke it. Never look up a replacement owner's token for cleanup. */
+    private suspend fun withIssuedLogin(login: LoginResponseDto, action: suspend () -> Unit) {
+        try { action() }
+        finally {
+            if (!env.isPublished(login)) withContext(NonCancellable) {
+                withTimeoutOrNull(5000) { runCatching { env.revoke(login.accessToken) } }
+            }
+        }
     }
 
     private suspend fun publish(current: Owner, login: LoginResponseDto, restored: Crypto.Restored?, phase: AtomicPhase) {

@@ -16,7 +16,8 @@ import kotlin.coroutines.cancellation.CancellationException
 /** Opt-in debug surface. No saved-state secret, provider text, clipboard or logs. */
 @Composable
 fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequired: Boolean,
-                    onRecovered: () -> Unit, onBusyChange: (Boolean) -> Unit = {}, mandatorySetup: Boolean = false) {
+                    onRecovered: () -> Unit, onBusyChange: (Boolean) -> Unit = {}, mandatorySetup: Boolean = false,
+                    enabled: Boolean = true, onBeforeSignIn: () -> Unit = {}) {
     if (!BuildConfig.REMANENCE_RECOVERY_ENABLED) return
     val passkeysAvailable = android.os.Build.VERSION.SDK_INT >= 28
     val activity = LocalContext.current as Activity
@@ -40,7 +41,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
         }
     }
     fun launch(protecting: Boolean = false, action: suspend () -> Unit) {
-        if (busy) return
+        if (busy || !enabled) return
         busy = true; onBusyChange(true); message = 0
         scope.launch {
             try { action() }
@@ -68,7 +69,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
             finally { busy = false; onBusyChange(false) }
         }
     }
-    RecoveryPanel(hasIdentity, recoveryRequired, mandatorySetup, passkeysAvailable, busy, verified,
+    RecoveryPanel(hasIdentity, recoveryRequired, mandatorySetup, passkeysAvailable, busy || !enabled, verified,
         offerAnotherManager, message, code != null, showCode, codeInput,
         onProtect = { launch(protecting = true) {
                 code = recovery.protect(credentials)
@@ -82,9 +83,12 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
                 verified = true; offerAnotherManager = false
                 message = R.string.recovery_verified
         } },
-        onRestore = { launch {
+        onRestore = { if (!busy && enabled) {
+            if (!recoveryRequired) onBeforeSignIn() // Retire atomic owner synchronously before provider/session work.
+            launch {
                 if (recoveryRequired) recovery.restoreSignedIn(credentials) else recovery.signIn(credentials)
                 message = R.string.recovery_restored; onRecovered()
+            }
         } },
         onCodeChange = { if (it.length <= 43) codeInput = it },
         onRestoreCode = { launch {

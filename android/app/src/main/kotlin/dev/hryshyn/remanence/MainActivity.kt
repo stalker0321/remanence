@@ -306,8 +306,13 @@ private fun RootSurface(
                 }
             } else if (BuildConfig.REMANENCE_ATOMIC_REGISTRATION && authState == AuthUiState.SignedOut) {
                 AccessPage(onBack = { atomicViewModel.leave(); rootViewModel.cancelHomeIntent() },
+                    backEnabled = !recoveryBusy,
                     footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) }) {
-                    dev.hryshyn.remanence.auth.AtomicRegistrationPanel(atomicViewModel, atomicState)
+                    dev.hryshyn.remanence.auth.AtomicRegistrationPanel(atomicViewModel, atomicState, recoveryBusy) { enabled, beforeSignIn ->
+                        dev.hryshyn.remanence.recovery.RecoveryActions(container, hasIdentity = false, recoveryRequired = false,
+                            onRecovered = rootViewModel::onSessionEstablished, onBusyChange = { recoveryBusy = it },
+                            enabled = enabled, onBeforeSignIn = beforeSignIn)
+                    }
                 }
             } else {
                 val googleWorking = googleState == dev.hryshyn.remanence.auth.GoogleAuthState.Working

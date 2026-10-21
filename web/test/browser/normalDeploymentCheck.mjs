@@ -23,7 +23,7 @@ const account = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', reservationId = 'bbbbbbb
 const flow = '11111111-1111-4111-8111-111111111111', credential = Buffer.alloc(16, 9).toString('base64url')
 const deadline = '2031-01-01T00:00:00Z', clientId = 'synthetic-t428.apps.googleusercontent.com'
 let saved = null, commits = 0, recordRelease = null, recordArrived = null, holdRecord = false, wrongRp = false, badClient = false, admissionClosed = false
-let configMode = 'valid', appOrigin = '', apiOrigin = '', activeContexts = [], workerRevision = 0
+let configMode = 'valid', appOrigin = '', apiOrigin = '', activeContexts = [], servedGraph = join(web, 'dist')
 const reservation = () => ({ id: reservationId, account_id: account, state: saved ? 'ACTIVE' : 'RESERVED', epoch: 1,
   expires_at: deadline, credential_ids: verifiedCredential ? [credential] : [], outcome: null, restarted_into: null })
 let verifiedCredential = false
@@ -100,14 +100,13 @@ const appServer = createServer(async (req, res) => {
         apiOrigin, rpId: configMode === 'wrong-rp' ? 'wrong.invalid' : '127.0.0.1' }
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': configMode === 'cached' ? 'max-age=600' : 'no-store' }).end(JSON.stringify(config)); return
   }
-  const relative = path === '/' ? 'index.html' : path.replace(/^\//, '')
-  const root = join(web, 'dist'), file = resolve(root, relative)
+  // A fixture-only unlisted URL lets current HTML meet an older controller;
+  // neither the release artifact nor the deployment gains this extra route.
+  const relative = ['/', '/fresh-document.html'].includes(path) ? 'index.html' : path.replace(/^\//, '')
+  const root = servedGraph, file = resolve(root, relative)
   if (file.startsWith(root + '/')) {
     try {
-      let bytes = await readFile(file)
-      // Explicit synthetic update trigger: identical production worker program
-      // plus a comment, not a second claimed production release.
-      if (relative === 'sw.js' && workerRevision) bytes = Buffer.concat([bytes, Buffer.from('\n// synthetic waiting-update trigger ' + workerRevision + '\n')])
+      const bytes = await readFile(file)
       res.writeHead(200, { 'content-type': { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.wasm': 'application/wasm', '.css': 'text/css', '.otf': 'font/otf', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json' }[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(bytes); return
     } catch { /* No SPA fallback for config or missing files. */ }
   }
@@ -179,16 +178,27 @@ try {
     if (mode === 'wrong-origin') await shot(page, 'invalid-config')
     await page.context().close()
   }
-  configMode = 'valid'; reset(); let page = await fresh()
-  await control(page); await phase(page, 'idle')
-  check('actual normal root is worker controlled and explicitly atomic; no TEST overlay or eager prompt', await page.evaluate(() => Boolean(navigator.serviceWorker.controller) && window.__t428Providers.google === 0) && await page.getByText(/TEST ONLY/).count() === 0)
-  await begin(page); await page.locator('#atomic-handle').fill('ada')
+  assert.ok(process.env.T428_PREVIOUS_PWA && process.env.T428_LEGACY_PWA)
+  servedGraph = process.env.T428_LEGACY_PWA; configMode = 'valid'; reset(); let page = await fresh()
+  await control(page)
+  const oldCaches = await page.evaluate(() => caches.keys()), oldConfigRequests = staticRequests.filter(path => path === '/app-config.json').length
+  servedGraph = join(web, 'dist'); await page.goto(`${appOrigin}/fresh-document.html#/account`)
+  await page.locator('[data-deployment-unavailable]').waitFor()
+  check('actual old same-URL worker refuses current normal entry before config, without deleting old caches', await page.locator('[data-atomic-phase]').count() === 0 && staticRequests.filter(path => path === '/app-config.json').length === oldConfigRequests && await page.evaluate(async old => { const current = await caches.keys(); return old.every(name => current.includes(name)) }, oldCaches))
+  await shot(page, 'old-worker-failclosed'); await page.context().close()
+  servedGraph = process.env.T428_PREVIOUS_PWA
+  const previousShell = JSON.parse(await readFile(join(servedGraph, 'shell-manifest.json'), 'utf8'))
+  assert.notEqual(previousShell.version, shell.version)
+  page = await fresh(); await control(page); await phase(page, 'idle'); await begin(page); await page.locator('#atomic-handle').fill('ada')
   await page.evaluate(() => { window.__t428Document = 'live-ceremony' })
-  workerRevision++
+  servedGraph = join(web, 'dist')
   await page.evaluate(async () => (await navigator.serviceWorker.getRegistration('/')).update())
   await poll(() => page.evaluate(async () => (await navigator.serviceWorker.getRegistration('/'))?.waiting?.state === 'installed'), 'waiting update')
   check('waiting worker does not activate/reload or replace live handle/ceremony', await page.locator('#atomic-handle').inputValue() === 'ada' && await page.evaluate(() => window.__t428Document === 'live-ceremony' && window.__t428Providers.google === 1))
   await shot(page, 'waiting-live-handle')
+  await page.context().close(); reset(); page = await fresh(); await control(page); await phase(page, 'idle')
+  check('actual final normal root is worker controlled and explicitly atomic; no TEST overlay or eager prompt', await page.evaluate(() => Boolean(navigator.serviceWorker.controller) && window.__t428Providers.google === 0) && await page.getByText(/TEST ONLY/).count() === 0)
+  await begin(page)
   const reached = new Promise(done => { recordArrived = done }); holdRecord = true
   await save(page); await reached
   check('normal PWA commit waits for authenticated permanent-record readback before READY', commits === 1 && await page.getByText('Your saved keys have been checked. You are ready.', { exact: true }).count() === 0)
@@ -246,7 +256,7 @@ try {
   recordRelease?.()
   await Promise.all(activeContexts.map(context => context.close())); await browser.close()
   await Promise.all([new Promise(done => apiServer.close(done)), new Promise(done => appServer.close(done))])
-  await writeFile(join(proof, 'report.json'), JSON.stringify({ complete, source: process.env.T428_TARGET ?? 'unspecified', actualBuiltEntry: true, actualNormalPwa: true, syntheticWorkerUpdateMarker: true,
+  await writeFile(join(proof, 'report.json'), JSON.stringify({ complete, source: process.env.T428_TARGET ?? 'unspecified', actualBuiltEntry: true, actualNormalPwa: true, actualPreviousGraph: process.env.T428_PREVIOUS_PWA, actualLegacyGraph: process.env.T428_LEGACY_PWA, syntheticWorkerUpdateMarker: false,
     realApp: true, realClientCrypto: true, realBrowserAdapters: true, syntheticGoogleCredentialAndHTTP: true, realProviders: false, realServerPG: false,
     executableSha256, checks, errors, images, wire, closedFixtureListeners: true }, null, 2))
 }

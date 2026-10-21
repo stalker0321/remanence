@@ -75,6 +75,7 @@ export function App({
   photos,
   music,
   atomicRegistration,
+  deploymentUnavailable = false,
 }: {
   store: SessionStore
   preferences: PreferencePort
@@ -89,8 +90,9 @@ export function App({
   note: NoteDraft
   photos: PhotoDraft
   music: MusicDraft
-  /** Isolated TEST composition only; absent/default keeps registration paused. */
+  /** Explicit configured DEV/TEST composition; absent/default keeps registration paused. */
   atomicRegistration?: AtomicPort
+  deploymentUnavailable?: boolean
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const held = useSyncExternalStore(memory.subscribe, memory.getSnapshot)
@@ -156,6 +158,7 @@ export function App({
         <p className="mark">remanence</p>
         <LanguageMenu language={view.language} onSelect={chooseLanguage} t={t} />
       </div>
+      {deploymentUnavailable ? <p role="alert" data-deployment-unavailable>{t('deploymentUnavailable')}</p> : null}
       <ShellStatus t={t} details={false} />
       {route === 'home' ? <Home t={t} /> : null}
       {route === 'history' ? <HistoryPage key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} language={view.language} /> : null}

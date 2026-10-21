@@ -1,4 +1,4 @@
-import { StrictMode, useState, useSyncExternalStore } from 'react'
+import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MemoryKeys } from './auth/memoryKeys'
 import { PresentationMemory } from './collage/memory'
@@ -13,7 +13,6 @@ import { startShell } from './pwa/shell'
 import { loadDeploymentConfig, type DeploymentConfig } from './deployment/config'
 import { deploymentPorts } from './deployment/ports'
 import { verifyDeploymentWorker } from './deployment/worker'
-import { translate } from './i18n/translate'
 import './design/tokens.css'
 
 const preferences: PreferencePort = {
@@ -45,14 +44,10 @@ if (import.meta.env.PROD) startShell(import.meta.env.BASE_URL)
 const reactRoot = createRoot(root)
 function ConfiguredApplication({ config, controller }: { config: DeploymentConfig | null; controller: ServiceWorker | null }) {
   const [unavailable, setUnavailable] = useState(config === null)
-  const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [ports] = useState(() => deploymentPorts(config,
     () => navigator.onLine !== false && (navigator.serviceWorker?.controller ?? null) === controller,
     () => setUnavailable(true), document))
-  return <>
-    {unavailable ? <p className="shell" role="alert" data-deployment-unavailable>{translate(view.language, 'deploymentUnavailable')}</p> : null}
-    <App store={store} preferences={preferences} keys={keys} memory={memory} recipient={recipient} note={note} photos={photos} music={music} {...ports} />
-  </>
+  return <App store={store} preferences={preferences} keys={keys} memory={memory} recipient={recipient} note={note} photos={photos} music={music} deploymentUnavailable={unavailable} {...ports} />
 }
 async function start() {
   let config: DeploymentConfig | null = null

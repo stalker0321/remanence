@@ -70,14 +70,17 @@ export class CreatorImageBridge {
    * failures close partial work and report `stale:false`.
    */
   async load(accepted: readonly DraftPhoto[], key: string, fence: () => CreatorImageFence): Promise<CreatorImageLoad> {
-    if (key === this.#key && this.#current !== null && this.#current.length === accepted.length) {
-      return { ok: true, photos: this.#current }
-    }
+    // A cache hit is still a new selection: retire any older decode before
+    // returning, so removing a just-added photo cannot let it publish later.
     const epoch = ++this.#epoch
     const start = fence()
     const alive = (): boolean => {
       const live = fence()
       return live.mounted === true && live.owner === start.owner && live.generation === start.generation && live.confirmed === start.confirmed
+    }
+    if (!start.mounted || !alive()) return { ok: false, stale: true }
+    if (key === this.#key && this.#current !== null && this.#current.length === accepted.length) {
+      return { ok: true, photos: this.#current }
     }
     const fresh: ImageBitmap[] = []
     const fail = (stale: boolean): CreatorImageLoad => {
@@ -90,8 +93,12 @@ export class CreatorImageBridge {
       }
       // The previously published set may reference evicted/closed handles;
       // force the next load to resolve again instead of reusing it.
-      this.#key = null
-      this.#current = null
+      // A retired completion owns only its fresh handles, not the metadata
+      // of a newer committed preview (or a newer cached selection).
+      if (epoch === this.#epoch) {
+        this.#key = null
+        this.#current = null
+      }
       return { ok: false, stale }
     }
     const images: ImageBitmap[] = []
@@ -112,7 +119,7 @@ export class CreatorImageBridge {
       try {
         image = await this.decode(photo.bytes)
       } catch {
-        return fail(false)
+        return fail(!alive() || epoch !== this.#epoch)
       }
       if (image.width !== photo.width || image.height !== photo.height) {
         try {

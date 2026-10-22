@@ -33,6 +33,9 @@ export function browserGoogleIdentity(doc: Document): GoogleIdentityPort {
     async requestIdToken(clientId, nonce, signal) {
       if (signal?.aborted) throw new AuthError('CANCELLED')
       await loadScript(doc, signal)
+      // Loading (including an already cached script) yields. Leaving during
+      // that handoff must not initialize or open a new provider prompt.
+      if (signal?.aborted) throw new AuthError('CANCELLED')
       const google = gis()
       if (!google) throw new AuthError('GOOGLE_CLIENT_UNAVAILABLE')
       return new Promise((resolve, reject) => {

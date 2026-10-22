@@ -176,7 +176,7 @@ export function App({
       </header>
       <nav className="main-nav" aria-label={t('navMain')}>
         {(['home', 'scan', 'create', 'history', 'settings'] as const).map((item) => <a key={item} href={href(item)} aria-current={route === item ? 'page' : undefined}>
-          {t(({ home: 'navHome', scan: 'navScan', create: 'navMake', history: 'historyTitle', settings: 'settingsTitle' } as const)[item])}
+          {t(({ home: 'navHome', scan: 'navScan', create: 'navMake', history: 'navHistory', settings: 'settingsTitle' } as const)[item])}
         </a>)}
       </nav>
       {deploymentUnavailable ? <p className="notice notice--warning" role="alert" data-deployment-unavailable>{t('deploymentUnavailable')}</p> : null}
@@ -226,7 +226,7 @@ export function App({
       ) : null}
       {deploymentUnavailable || notice === 'errorRegion' || (route === 'account' && atomicRegistration) ? null : <p className="notice" role="alert">{t(notice)}</p>}
       </main>
-      {route !== 'account' && route !== 'settings' ? <p className="session-status" role="status"><Icon name="key" />{t(phaseKey(view.phase))}</p> : null}
+      {view.phase !== 'signed-out' && route !== 'account' && route !== 'settings' ? <p className="session-status" role="status"><Icon name="key" />{t(phaseKey(view.phase))}</p> : null}
     </div>
     {presenting && held ? (
       <CollageStage held={held} t={t} onClose={() => navigation.closeSheet()} navigation={{

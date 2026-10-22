@@ -36,12 +36,12 @@ export function Settings({ t, language, onSelectLanguage, handle, signedIn, sess
       <div className="settings-layout">
       <section className="card settings-group">
         <h2>{t('account')}</h2>
-        <dl className="settings-facts">
+        {signedIn ? <dl className="settings-facts">
           <dt>{t('handleLabel')}</dt>
-          <dd className="settings-handle">{signedIn && handle !== null ? `@${handle}` : t('settingsSignedOut')}</dd>
+          <dd className="settings-handle">{handle !== null ? `@${handle}` : '—'}</dd>
           <dt>{t('settingsSession')}</dt>
           <dd>{sessionState}</dd>
-        </dl>
+        </dl> : <p>{t('settingsSignedOut')}</p>}
         {signedIn ? <p className="field-hint">{t('settingsAccountHint')}</p> : null}
         <div className="actions">
           <a href={href('account')}>{t('account')}</a>

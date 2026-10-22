@@ -558,14 +558,15 @@ button.quiet, a.button.quiet {
   .shell { padding-top: max(.85rem, env(safe-area-inset-top)); }
   .bar { gap: .4rem .8rem; }
   .bar .mark { font-size: 1.5rem; }
-  .account-link { order: 3; flex-basis: 100%; max-width: 100%; margin-inline-start: 0; font-size: .85rem; }
-  .bar > .language-menu { margin-inline-start: auto; }
+  .account-link { min-width: 44px; min-height: 44px; max-width: 100%; margin-inline-start: auto; justify-content: center; border-radius: .75rem; background: var(--bridge); font-size: .85rem; }
+  .account-link span { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
+  .bar > .language-menu { margin-inline-start: 0; }
   .main-nav { gap: .3rem; margin-bottom: 1.5rem; padding-bottom: .75rem; }
   .main-nav a { font-size: .85rem; padding: .5rem .6rem; flex: 1 1 auto; }
   .home-intro { margin-bottom: 1.5rem; }
   .home-actions, .scan-layout, .draft-grid, .settings-layout { grid-template-columns: minmax(0, 1fr); }
   .home-actions { gap: 1.5rem; }
-  .action-card { min-height: 15rem; border-radius: 1.6rem; }
+  .action-card { min-height: 12rem; border-radius: 1.6rem; }
   .action-card p { font-size: 1rem; margin-bottom: .75rem; }
   .action-card-footer { padding-top: 1rem; }
   .welcome-account { flex-wrap: wrap; gap: .65rem; }

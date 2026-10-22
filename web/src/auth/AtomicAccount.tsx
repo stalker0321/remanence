@@ -83,7 +83,6 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     <h1 ref={heading} tabIndex={-1}>{t(unlocked ? 'accountReadyTitle' : signedIn ? 'accountLockedTitle' : choosing ? 'accountHandleTitle' : 'authTitle')}</h1>
     {view.handle ? <p className="account-handle">@{view.handle}</p> : null}
     {!signedIn && (choosing || state.phase === 'idle' || state.phase === 'google') ? <p>{t('atomicIntro')}</p> : signedIn && !unlocked ? <p>{t('authBody')}</p> : null}
-    <aside className="key-explanation"><h2>{t('accountKeysTitle')}</h2><p>{t(unlocked ? 'accountVisitHint' : 'accountKeysBody')}</p></aside>
     </div>
     <div className="account-controls" aria-busy={busy}>
     {unlocked ? <p className="account-ready" role="status"><Icon name="check" />{t('atomicReady')}</p> : phaseMessage ? <p className="notice" role="status">{t(phaseMessage)}</p> : null}
@@ -115,6 +114,7 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     </> : null}
     {unlocked ? <div className="account-next"><h2>{t('accountNext')}</h2><div className="actions"><a className="button primary" href={href('scan')}>{t('scan')}<Icon name="arrow" /></a><a className="button" href={href('create')}>{t('make')}</a></div></div> : null}
     </div>
+    <aside className="key-explanation"><h2>{t('accountKeysTitle')}</h2><p>{t(unlocked ? 'accountVisitHint' : 'accountKeysBody')}</p></aside>
     </div>
   </section>
 }

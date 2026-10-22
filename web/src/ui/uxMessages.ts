@@ -1,6 +1,6 @@
 /** Presentation copy only; no new capabilities or persisted preferences. */
 export const uxEn = {
-  navHome: 'home', navScan: 'open', navMake: 'make', navMain: 'main navigation', navAccount: 'account and keys', skipContent: 'skip to content',
+  navHome: 'home', navScan: 'open', navMake: 'make', navHistory: 'history', navMain: 'main navigation', navAccount: 'account and keys', skipContent: 'skip to content',
   homeTitle: 'a postcard. a little more.',
   homeIntro: 'Pictures, a few words, and someone in mind.',
   homeAccountHint: 'Sign in to open your postcards or make something for someone.',
@@ -25,7 +25,7 @@ export const uxEn = {
   settingsAccountHint: 'Your public handle stays with this account.', languageHint: 'Choose the language for this browser.',
 } as const
 export const uxRu: Record<keyof typeof uxEn, string> = {
-  navHome: 'главная', navScan: 'открыть', navMake: 'создать', navMain: 'основная навигация', navAccount: 'аккаунт и ключи', skipContent: 'перейти к содержимому',
+  navHome: 'главная', navScan: 'открыть', navMake: 'создать', navHistory: 'история', navMain: 'основная навигация', navAccount: 'аккаунт и ключи', skipContent: 'перейти к содержимому',
   homeTitle: 'открытка. и кое-что ещё.', homeIntro: 'Фотографии, несколько слов и тот, о ком вы думаете.',
   homeAccountHint: 'Войдите, чтобы открыть свои открытки или собрать что-то для близкого человека.',
   accountReadyTitle: 'вы здесь', accountLockedTitle: 'с возвращением', accountHandleTitle: 'пусть вас узнают',
@@ -48,7 +48,7 @@ export const uxRu: Record<keyof typeof uxEn, string> = {
   settingsAccountHint: 'Ваше публичное имя остаётся с этим аккаунтом.', languageHint: 'Выберите язык для этого браузера.',
 }
 export const uxUk: Record<keyof typeof uxEn, string> = {
-  navHome: 'головна', navScan: 'відкрити', navMake: 'створити', navMain: 'основна навігація', navAccount: 'акаунт і ключі', skipContent: 'перейти до вмісту',
+  navHome: 'головна', navScan: 'відкрити', navMake: 'створити', navHistory: 'історія', navMain: 'основна навігація', navAccount: 'акаунт і ключі', skipContent: 'перейти до вмісту',
   homeTitle: 'листівка. і дещо більше.', homeIntro: 'Фотографії, кілька слів і той, про кого ви думаєте.',
   homeAccountHint: 'Увійдіть, щоб відкрити свої листівки або зібрати щось для близької людини.',
   accountReadyTitle: 'ви тут', accountLockedTitle: 'з поверненням', accountHandleTitle: 'нехай вас упізнають',

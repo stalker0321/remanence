@@ -37,7 +37,7 @@ async function load(stage, lang, width, scale) {
   active = `${stage}-${lang}-${width}-${scale}`
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
   await page.goto(`${host.url}?stage=${stage}&lang=${lang}&scale=${scale}`)
-  await page.waitForFunction(() => window.layoutFixture && document.querySelector('main.shell'))
+  await page.waitForFunction(() => window.layoutFixture && document.querySelector('.shell main'))
   await page.evaluate(() => document.fonts.ready)
   if (stage === 'design') { await page.evaluate(() => window.layoutFixture.pick()); await paint(); await page.getByTestId('creator-slot-1').click() }
   if (stage === 'settings') await page.waitForSelector('.send-access')

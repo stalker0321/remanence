@@ -435,8 +435,10 @@ button.quiet, a.button.quiet {
 .route-content h1 { scroll-margin-block-start: 1rem; }
 .route-content h1:focus { outline: none; }
 .route-content h1:focus-visible { outline: 2px solid var(--lilac-deep); outline-offset: 5px; }
-.skip-content { position: fixed; z-index: 20; top: .5rem; left: .5rem; transform: translateY(-180%); background: var(--paper); }
-.skip-content:focus { transform: none; }
+.skip-content { position: fixed; z-index: 20; top: .5rem; left: .5rem; background: var(--paper); transition: none; }
+/* Geometric hiding must not share chrome's animated transform: a removed
+   clicked control or a full-page capture can otherwise expose the skip link. */
+.skip-content:not(:focus) { width: 1px; height: 1px; min-height: 0; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; box-shadow: none; }
 .home-intro { margin: 1rem 0 2rem; max-width: 45rem; }
 .home-intro h1 { margin: 0 0 .6rem; font-size: clamp(2.1rem, 5vw, 3.7rem); font-weight: 400; line-height: 1.05; letter-spacing: -.045em; overflow-wrap: anywhere; }
 .home-intro p { color: var(--muted); margin: 0; max-width: 36rem; }

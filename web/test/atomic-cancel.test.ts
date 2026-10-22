@@ -8,6 +8,7 @@ import { restoreSignedInAccount } from '../src/auth/restore'
 import { SessionStore } from '../src/session/session'
 import * as identity from '../src/crypto/identity'
 import { AtomicFixture, RESERVATION } from './atomicFixture'
+import { completeAtomicSteps } from './atomicSteps'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { for (const clean of cleanups.splice(0)) clean(); vi.restoreAllMocks() })
@@ -48,7 +49,7 @@ describe('cancel terminal wire and lifecycle without regeneration', () => {
     if (mode === 'fresh-terminal-proof') c.f.reservation.state = 'EXPIRED'
     await c.controller.begin()
     if (mode === 'expires-with-live-candidate') {
-      c.f.finalMode = 'handle'; await c.controller.save('taken')
+      c.f.finalMode = 'handle'; await completeAtomicSteps(c.controller, 'taken')
       expect(c.controller.getSnapshot().phase).toBe('handle-conflict')
       expect(c.f.secrets.some((value) => value.some((byte) => byte !== 0))).toBe(true)
       c.f.reservation.state = 'EXPIRED'
@@ -80,7 +81,7 @@ describe('cancel terminal wire and lifecycle without regeneration', () => {
 
   it('ACTIVE409 after a lost finalize cannot imply cancelled account or replace the original keys', async () => {
     const c = context(), generate = vi.spyOn(identity, 'generateLocalIdentity')
-    await c.controller.begin(); c.f.finalMode = 'lost-after'; await c.controller.save('original')
+    await c.controller.begin(); c.f.finalMode = 'lost-after'; await completeAtomicSteps(c.controller, 'original')
     const saved = c.f.saved; expect(c.controller.getSnapshot().phase).toBe('unknown')
     await c.controller.cancelReservation()
     expect(c.controller.getSnapshot()).toMatchObject({ phase: 'restore-required', error: 'ALREADY_ACTIVE' })
@@ -94,7 +95,7 @@ describe('cancel terminal wire and lifecycle without regeneration', () => {
 
   it.each([200, 410])('late cancel%d after Back/leave cannot revive setup or erase a newer owner', async (status) => {
     const c = context(); await c.controller.begin()
-    c.f.finalMode = 'handle'; await c.controller.save('taken')
+    c.f.finalMode = 'handle'; await completeAtomicSteps(c.controller, 'taken')
     if (status === 410) c.f.reservation.state = 'EXPIRED'
     const hold = held(c.f), pending = c.controller.cancelReservation()
     await hold.reached; c.controller.leave()

@@ -11,6 +11,7 @@ import { unb64 } from '../../server/src/remanence/recovery/web/crypto.mjs'
 import { parseHpkePublicKeyset } from '../src/crypto/tink'
 import { arrayBuffer, utf8 } from '../src/protocol/bytes'
 import { sealTo } from './recoveryFixture'
+import { completeAtomicSteps } from './atomicSteps'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); vi.restoreAllMocks() })
@@ -28,7 +29,7 @@ function gate(f: AtomicFixture, point: string) {
   f.pause = async (current) => { if (current === point) { reached(); await held } }
   return { arrived, release }
 }
-async function saved(c = context()) { await c.controller.begin(); await c.controller.save('@Ada'); return c }
+async function saved(c = context()) { await c.controller.begin(); await completeAtomicSteps(c.controller, '@Ada'); return c }
 
 describe('atomic A document ownership / real ADR011 crypto', () => {
   it('construction has no session subscription; effect cleanup/re-attach remains usable', async () => {
@@ -73,7 +74,7 @@ describe('atomic A document ownership / real ADR011 crypto', () => {
     const c = context(); const generate = vi.spyOn(identity, 'generateLocalIdentity')
     await c.controller.begin()
     expect(generate).not.toHaveBeenCalled(); expect(c.session.getSnapshot().phase).toBe('signed-out')
-    const hold = gate(c.f, 'setup/verify:after'); const run = c.controller.save('ada')
+    const hold = gate(c.f, 'setup/verify:after'); const run = completeAtomicSteps(c.controller, 'ada')
     await hold.arrived; expect(generate).not.toHaveBeenCalled(); hold.release(); await run
     expect(generate).toHaveBeenCalledTimes(1)
     expect((await generate.mock.results[0]!.value).wiped).toBe(true)
@@ -88,6 +89,7 @@ describe('atomic A document ownership / real ADR011 crypto', () => {
   it('duplicate Enter joins one Google operation and one immutable finalize', async () => {
     const c = context(); const begin = c.controller.begin()
     expect(c.controller.begin()).toBe(begin); await begin
+    c.controller.chooseHandle('ada'); await c.controller.createPasskey()
     const run = c.controller.save('ada'); expect(c.controller.save('other')).toBe(run); await run
     expect(c.f.creates).toBe(1); expect(c.f.intents).toHaveLength(1); expect(c.f.provisions).toBe(1)
   })
@@ -154,7 +156,7 @@ describe('atomic A document ownership / real ADR011 crypto', () => {
 
   it.each(['google/provider', 'google/verify:after', 'credential/verify:after', 'passkey/get', 'setup/verify:after', 'finalize:after', 'record:after'])('Back/leave at %s fences late completion and clears only owned buffers', async (point) => {
     const c = context(); const hold = gate(c.f, point)
-    const run = point.startsWith('google/') ? c.controller.begin() : (await c.controller.begin(), c.controller.save('ada'))
+    const run = point.startsWith('google/') ? c.controller.begin() : (await c.controller.begin(), completeAtomicSteps(c.controller, 'ada'))
     await hold.arrived; c.controller.leave(); hold.release(); await run
     expect(c.controller.getSnapshot().phase).toBe('idle'); expect(c.session.getSnapshot().phase).toBe('signed-out')
     expect(c.keys.capabilities(c.session.getSnapshot())).toBeNull()
@@ -180,17 +182,17 @@ describe('atomic A document ownership / real ADR011 crypto', () => {
   it.each(['credential/verify', 'setup/verify'] as const)('lost %s ACK reconciles status before any further create', async (lost) => {
     const c = context(); let fail = true
     c.f.after = (action, result) => { if (action === lost && fail) throw new AuthErrorForTest(); return result }
-    await saved(c); fail = false; await c.controller.save('ada')
+    await saved(c); fail = false; await completeAtomicSteps(c.controller, 'ada')
     expect(c.f.creates).toBe(1); expect(c.controller.getSnapshot().phase).toBe('ready')
   })
 
   it('fresh proof takeover before old commit rejects old epoch without erasing newer candidate', async () => {
     const f = new AtomicFixture(); const a = context(f); const b = context(f)
-    await a.controller.begin(); const hold = gate(f, 'finalize:before'); const old = a.controller.save('ada')
+    await a.controller.begin(); const hold = gate(f, 'finalize:before'); const old = completeAtomicSteps(a.controller, 'ada')
     await hold.arrived; f.pause = async () => undefined; await b.controller.begin()
     hold.release(); await old
     expect(a.controller.getSnapshot().phase).toBe('reauthenticate'); expect(f.provisions).toBe(0)
-    await b.controller.save('ada'); expect(f.provisions).toBe(1); expect(f.creates).toBe(1)
+    await completeAtomicSteps(b.controller, 'ada'); expect(f.provisions).toBe(1); expect(f.creates).toBe(1)
   })
 
   it('fresh document resolves ACTIVE and decrypts ciphertext addressed to ORIGINAL keys', async () => {

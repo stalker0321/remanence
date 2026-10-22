@@ -7,6 +7,7 @@ export interface LanguageMenuProps {
   readonly language: Language
   readonly onSelect: (language: Language) => void
   readonly t: (key: MessageKey) => string
+  readonly compact?: boolean
 }
 
 /**
@@ -18,7 +19,7 @@ export interface LanguageMenuProps {
  * It persists nothing itself: `onSelect` is the caller's existing language write
  * (`writeLanguage` + `setLanguage` + `document.lang`), unchanged.
  */
-export function LanguageMenu({ language, onSelect, t }: LanguageMenuProps) {
+export function LanguageMenu({ language, onSelect, t, compact = false }: LanguageMenuProps) {
   const options = useMemo(() => languageOptions(), [])
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -89,7 +90,7 @@ export function LanguageMenu({ language, onSelect, t }: LanguageMenuProps) {
         onClick={() => setOpen((value) => !value)}
         onKeyDown={onTriggerKeyDown}
       >
-        {t('language')}
+        {compact ? language.toUpperCase() : t('language')}
       </button>
       {open ? (
         <div className="language-list" role="listbox" id={listId} aria-label={t('language')}>

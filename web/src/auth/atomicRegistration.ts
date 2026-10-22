@@ -12,7 +12,7 @@ import type { PasskeyAssertion, PasskeyPort, PublicAssertion } from './passkey'
 import { AtomicError, binary, login, object, outcome, recoveryReply, reservation, setupReply, string, success, uuid,
   type AtomicPort, type AtomicRequest, type FinalIntent, type Reservation, type SetupAction, type SetupBodies, type SetupReply } from './atomicWire'
 
-export type AtomicPhase = 'idle' | 'google' | 'handle' | 'saving' | 'unknown' | 'handle-conflict' | 'assertion-required' | 'reauthenticate' | 'terminal' | 'restore-required' | 'ready' | 'existing'
+export type AtomicPhase = 'idle' | 'google' | 'handle' | 'passkey' | 'creating' | 'credential-pending' | 'verify' | 'saving' | 'unknown' | 'handle-conflict' | 'assertion-required' | 'reauthenticate' | 'terminal' | 'restore-required' | 'ready' | 'existing'
 export interface AtomicView {
   phase: AtomicPhase; busy: boolean; error: string | null
   reservationState: Reservation['state'] | null; credentialCount: number
@@ -23,6 +23,9 @@ interface Owner {
   buffers: Set<Uint8Array>; candidate: Candidate | null; intent: FinalIntent | null
   grant: string | null; credential: string | null; login: SignInInput | null
   pending: Promise<void> | null
+  /** Only the public creation response. Retained until staging is reconciled. */
+  created: { flow: string; response: PublicAssertion } | null
+  creationUnresolved: boolean
 }
 
 /** One document, one owner, one immutable candidate. No storage; GET RESERVED
@@ -54,7 +57,7 @@ export class AtomicRegistration {
     this.#observe() // No external effects in a React render/StrictMode initializer.
     if (this.#owner) this.#release(this.#owner)
     const owner: Owner = { controller: new AbortController(), expected: this.ports.session.getSnapshot(), setup: null,
-      buffers: new Set(), candidate: null, intent: null, grant: null, credential: null, login: null, pending: null }
+      buffers: new Set(), candidate: null, intent: null, grant: null, credential: null, login: null, pending: null, created: null, creationUnresolved: false }
     this.#owner = owner
     return this.#run(owner, async () => {
       this.#show('google')
@@ -78,9 +81,32 @@ export class AtomicRegistration {
     })
   }
 
+  /** A local, reversible step. It cannot open a provider or create keys. */
+  chooseHandle(rawHandle: string): void {
+    const owner = this.#owner
+    if (!owner || owner.pending || this.#view.phase !== 'handle') return
+    try {
+      normalizeHandle(rawHandle)
+      this.#requireReserved(owner)
+      this.#show(owner.credential ? 'verify' : owner.created || owner.creationUnresolved ? 'credential-pending' : 'passkey')
+    } catch (error) { this.#show('handle', errorCode(error)) }
+  }
+
+  /** Finishes after registration. A second browser prompt needs a new action. */
+  createPasskey(): Promise<void> {
+    const owner = this.#owner
+    if (!owner || !['passkey', 'creating', 'credential-pending'].includes(this.#view.phase)) return Promise.resolve()
+    return this.#run(owner, async () => {
+      this.#show('creating')
+      await this.#stageCredential(owner)
+      this.#show('verify')
+    })
+  }
+
+  /** Explicit verification, then the unchanged finalize/readback ceremony. */
   save(rawHandle: string): Promise<void> {
     const owner = this.#owner
-    if (!owner || !['handle', 'handle-conflict', 'assertion-required'].includes(this.#view.phase)) return Promise.resolve()
+    if (!owner || !['verify', 'handle-conflict', 'assertion-required'].includes(this.#view.phase)) return Promise.resolve()
     return this.#run(owner, async () => {
       const handle = normalizeHandle(rawHandle)
       this.#requireReserved(owner)
@@ -160,7 +186,7 @@ export class AtomicRegistration {
     }
   }
 
-  async #authorize(owner: Owner): Promise<void> {
+  async #stageCredential(owner: Owner): Promise<void> {
     if (!this.ports.passkeys.canAuthenticate()) throw new AtomicError('PASSKEY_UNAVAILABLE')
     const epoch = owner.setup!.reservation.epoch
     // Status reconciles a lost credential-verify response BEFORE offering create.
@@ -171,20 +197,44 @@ export class AtomicRegistration {
     this.#sameReservation(owner, current)
     owner.setup = { ...owner.setup!, reservation: current }
     this.#requireReserved(owner)
-    owner.credential ??= current.credential_ids[0] ?? null
-    if (!owner.credential) {
+    // Several staged IDs may exist. A retained creation owns its exact ID,
+    // irrespective of server sorting or an unrelated older credential.
+    owner.credential ??= owner.created
+      ? current.credential_ids.includes(owner.created.response.id) ? owner.created.response.id : null
+      : owner.creationUnresolved ? null : current.credential_ids[0] ?? null
+    if (owner.credential) {
+      if (owner.created && owner.created.response.id !== owner.credential) throw new AtomicError('WRONG_CREDENTIAL')
+      owner.created = null
+      owner.creationUnresolved = false
+      return
+    }
+    if (!owner.created) {
+      if (owner.creationUnresolved) throw new AtomicError('SETUP_REJECTED')
       const begin = await this.#post(owner, 'credential/options', { epoch })
       const flow = uuid(begin.flow)
       if (object(object(begin.options).user).id !== b64(uuidToBytes(owner.setup!.reservation.account_id))) throw new AtomicError('WRONG_ACCOUNT')
       const created = await this.ports.passkeys.create(begin.options, owner.controller.signal)
       try {
         this.#check(owner)
-        const response = this.#publicAssertion(created)
-        const verified = await this.#post(owner, 'credential/verify', { epoch, flow, response })
-        if (verified.registered !== true || verified.recoverable !== false || binary(verified.credential_id, 2048) !== created.id) throw new AtomicError('SETUP_REJECTED')
-        owner.credential = created.id
+        owner.creationUnresolved = true
+        // Store before any network write. A lost response must never offer
+        // creation again just because a status read still says RESERVED.
+        owner.created = { flow, response: this.#publicAssertion(created) }
       } finally { created.prf?.fill(0) }
     }
+    const pending = owner.created!
+    const verified = await this.#post(owner, 'credential/verify', { epoch, flow: pending.flow, response: pending.response })
+    if (verified.registered !== true || verified.recoverable !== false || binary(verified.credential_id, 2048) !== pending.response.id) throw new AtomicError('SETUP_REJECTED')
+    owner.credential = pending.response.id
+    owner.created = null
+    owner.creationUnresolved = false
+  }
+
+  async #authorize(owner: Owner): Promise<void> {
+    if (!this.ports.passkeys.canAuthenticate()) throw new AtomicError('PASSKEY_UNAVAILABLE')
+    this.#requireReserved(owner)
+    if (!owner.credential || owner.created) throw new AtomicError('WRONG_CREDENTIAL')
+    const epoch = owner.setup!.reservation.epoch
     const begin = await this.#post(owner, 'setup/options', { epoch, credential_id: owner.credential! })
     const flow = uuid(begin.flow)
     const allowed = object(begin.options).allowCredentials
@@ -369,7 +419,9 @@ export class AtomicRegistration {
       if (['SETUP_AUTH_INVALID', 'SETUP_REAUTH_REQUIRED', 'STALE_SETUP'].includes(code)) { this.#wipe(owner); this.#show('reauthenticate', code) }
       else if (code === 'ALREADY_ACTIVE') { this.#wipe(owner); this.#show('restore-required', code) }
       else if (code === 'RESERVATION_TERMINAL') { this.#wipe(owner); this.#show('reauthenticate', code) }
-      else this.#show(this.#view.phase === 'saving' ? 'handle' : this.#view.phase === 'google' ? 'idle' : this.#view.phase, code)
+      else this.#show(this.#view.phase === 'saving' ? 'verify'
+        : this.#view.phase === 'creating' ? owner.created || owner.creationUnresolved ? 'credential-pending' : 'passkey'
+        : this.#view.phase === 'google' ? 'idle' : this.#view.phase, code)
     }).finally(() => {
       if (this.#owner === owner && owner.pending === promise) { owner.pending = null; this.#patch({ busy: false }) }
     })
@@ -378,7 +430,7 @@ export class AtomicRegistration {
   }
   #wipe(owner: Owner): void {
     for (const bytes of owner.buffers) bytes.fill(0)
-    owner.buffers.clear(); owner.candidate = null; owner.intent = null; owner.grant = null; owner.login = null
+    owner.buffers.clear(); owner.candidate = null; owner.intent = null; owner.grant = null; owner.login = null; owner.created = null; owner.creationUnresolved = false
   }
   #release(owner: Owner): void {
     owner.controller.abort(); this.#wipe(owner); owner.setup = null; owner.credential = null

@@ -106,9 +106,12 @@ export function App({
   const t = (key: MessageKey) => translate(view.language, key)
   const content = useRef<HTMLElement>(null)
   const previousRoute = useRef(route)
+  const [accountReturn, setAccountReturn] = useState<RouteName | null>(null)
 
   useEffect(() => {
     if (previousRoute.current === route) return
+    if (route === 'account' && ['scan', 'create', 'history'].includes(previousRoute.current)) setAccountReturn(previousRoute.current)
+    else if (route !== 'account') setAccountReturn(null)
     previousRoute.current = route
     const heading = content.current?.querySelector('h1')
     if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }) }
@@ -168,17 +171,19 @@ export function App({
     <div className="shell" inert={presenting} tabIndex={-1}>
       <button className="skip-content" onClick={() => content.current?.focus()}>{t('skipContent')}</button>
       <header className="bar">
-        <a className="mark" href={href('home')}>remanence<span className="mark-dot" aria-hidden="true">.</span></a>
+        <a className="mark" href={href('home')} aria-label={`remanence · ${t('navHome')}`} aria-current={route === 'home' ? 'page' : undefined}>remanence<span className="mark-dot" aria-hidden="true">.</span></a>
+        <nav className="main-nav" aria-label={t('navMain')}>
+          {(['scan', 'create', 'history', 'settings'] as const).map((item) => <a key={item} href={href(item)} aria-current={route === item ? 'page' : undefined}>
+            {t(({ scan: 'navScan', create: 'navMake', history: 'navHistory', settings: 'settingsTitle' } as const)[item])}
+          </a>)}
+        </nav>
+        <div className="header-tools">
         <a className="account-link" href={href('account')} aria-label={t('navAccount')} aria-current={route === 'account' ? 'page' : undefined}>
           <Icon name="key" /><span>{view.handle ? `@${view.handle}` : t('account')}</span>
         </a>
-        <LanguageMenu language={view.language} onSelect={chooseLanguage} t={t} />
+        <LanguageMenu language={view.language} onSelect={chooseLanguage} t={t} compact />
+        </div>
       </header>
-      <nav className="main-nav" aria-label={t('navMain')}>
-        {(['home', 'scan', 'create', 'history', 'settings'] as const).map((item) => <a key={item} href={href(item)} aria-current={route === item ? 'page' : undefined}>
-          {t(({ home: 'navHome', scan: 'navScan', create: 'navMake', history: 'navHistory', settings: 'settingsTitle' } as const)[item])}
-        </a>)}
-      </nav>
       {deploymentUnavailable ? <p className="notice notice--warning" role="alert" data-deployment-unavailable>{t('deploymentUnavailable')}</p> : null}
       <ShellStatus t={t} details={false} />
       <main className={`route-content route-${route}`} id="route-content" ref={content} tabIndex={-1}>
@@ -211,7 +216,7 @@ export function App({
             ? <SendAccessSection key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} /> : null}
         />
       ) : null}
-      {route === 'account' && atomicRegistration ? <AtomicAccount store={store} keys={keys} transport={transport} setup={atomicRegistration} google={google} passkeys={passkeys} t={t} /> : null}
+      {route === 'account' && atomicRegistration ? <AtomicAccount store={store} keys={keys} transport={transport} setup={atomicRegistration} google={google} passkeys={passkeys} t={t} returnTo={accountReturn} /> : null}
       {route === 'account' && !atomicRegistration ? (
         <Account
           store={store}
@@ -221,12 +226,14 @@ export function App({
           passkeys={passkeys}
           draft={draft.current}
           t={t}
+          returnTo={accountReturn}
           onNotice={setNotice}
         />
       ) : null}
       {deploymentUnavailable || notice === 'errorRegion' || (route === 'account' && atomicRegistration) ? null : <p className="notice" role="alert">{t(notice)}</p>}
       </main>
       {view.phase !== 'signed-out' && route !== 'account' && route !== 'settings' ? <p className="session-status" role="status"><Icon name="key" />{t(phaseKey(view.phase))}</p> : null}
+      <footer className="site-footer"><span>remanence<span aria-hidden="true">.</span></span><p>{t('homePrivate')}</p></footer>
     </div>
     {presenting && held ? (
       <CollageStage held={held} t={t} onClose={() => navigation.closeSheet()} navigation={{
@@ -243,7 +250,7 @@ export function App({
 function Home({ t, signedIn }: { t: (key: MessageKey) => string; signedIn: boolean }) {
   return (
     <>
-      <header className="home-intro"><h1>{t('homeTitle')}</h1><p>{t('homeIntro')}</p></header>
+      <header className="home-intro"><h1>{t('homeTitle')}</h1></header>
       <div className="home-actions">
       <a className="action-card action-card--receive" href={href('scan')} aria-label={t('scan')}>
         <h2>{t('homeOpenTitle')}</h2>
@@ -256,7 +263,7 @@ function Home({ t, signedIn }: { t: (key: MessageKey) => string; signedIn: boole
         <span className="action-card-footer"><span>{t('make')}</span><span className="arrow-tile"><Icon name="arrow" /></span></span>
       </a>
       </div>
-      {!signedIn ? <aside className="welcome-account"><Icon name="key" /><p>{t('homeAccountHint')}</p><a className="button quiet" href={href('account')}>{t('account')}<Icon name="arrow" /></a></aside> : null}
+      <details className="home-about"><summary>{t('homeHow')}</summary><p>{t('homeExplanation')}</p>{!signedIn ? <p>{t('homeAccountHint')}</p> : null}</details>
     </>
   )
 }
@@ -488,8 +495,8 @@ export function Scan({
       <div className="actions">
         {live ? (
           <>
-            <button type="button" className="primary" aria-disabled={working} onClick={() => { void take() }}>{t('takePicture')}</button>
-            {held ? <button type="button" aria-disabled={working} onClick={() => { void match() }}>{t('matchPicture')}</button> : null}
+            <button type="button" className={held ? undefined : 'primary'} aria-disabled={working} onClick={() => { void take() }}>{t('takePicture')}</button>
+            {held ? <button type="button" className="primary" aria-disabled={working} onClick={() => { void match() }}>{t('matchPicture')}</button> : null}
             <button type="button" onClick={close}>{t('closeCamera')}</button>
           </>
         ) : (
@@ -497,7 +504,7 @@ export function Scan({
         )}
         <a href={href('home')} onClick={close}>{t('back')}</a>
       </div>
-      {store.getSnapshot().phase === 'signed-out' || store.getSnapshot().phase === 'authenticated' ? <aside className="scan-account"><p>{t('scanAccountHint')}</p><div className="actions"><a href={href('account')} onClick={close}>{t('account')}</a></div></aside> : null}
+      {store.getSnapshot().phase === 'signed-out' || store.getSnapshot().phase === 'authenticated' ? <aside className="scan-account"><p>{t('scanAccountHint')}</p><div className="actions"><a className="button" href={href('account')} onClick={close}>{t(store.getSnapshot().phase === 'signed-out' ? 'signInToOpen' : 'unlockToOpen')}<Icon name="arrow" /></a></div></aside> : null}
       </div>
       </div>
     </section>
@@ -553,6 +560,7 @@ export function Create({
   const [stamp, setStamp] = useState(0)
   const [live, setLive] = useState(false)
   const [pictured, setPictured] = useState(false)
+  const [createStep, setCreateStep] = useState<'content' | 'composition' | 'postcard'>('content')
   const abort = useRef<AbortController | null>(null)
   const musicAbort = useRef<AbortController | null>(null)
   const musicTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -850,8 +858,18 @@ export function Create({
     closeCamera()
     stopMusicSearch()
     recipient.restart()
+    setCreateStep('content')
     setStamp((value) => value + 1)
     onNotice('errorRegion')
+  }
+
+  function showCreateStep(step: 'content' | 'composition' | 'postcard') {
+    if (sendPhase !== 'idle' || busy) return
+    // A hidden camera must not keep recording. Returning to preparation asks
+    // for a fresh photograph; the identity/content/crop ownership stays intact.
+    if (createStep === 'postcard' && step !== 'postcard') closeCamera()
+    setCreateStep(step)
+    requestAnimationFrame(() => { recipientHeading.current?.focus(); window.scrollTo({ top: 0, behavior: 'instant' }) })
   }
 
   async function openCamera() {
@@ -1121,7 +1139,7 @@ export function Create({
         <header className="page-heading"><h1>{t('homeMakeTitle')}</h1><p className="page-lead">{t('homeMakeBody')}</p></header>
         <div className="empty-state"><Icon name="key" /><p>{t('createLocked')}</p>
         <div className="actions">
-          <a className="button primary" href={href('account')}>{t('account')}<Icon name="arrow" /></a>
+          <a className="button primary" href={href('account')}>{t(view.phase === 'signed-out' ? 'signInToMake' : 'unlockToMake')}<Icon name="arrow" /></a>
           <a href={href('home')}>{t('back')}</a>
         </div>
         </div>
@@ -1131,8 +1149,12 @@ export function Create({
 
   return (
     <section className={`card create-page${confirmed ? '' : ' recipient-picker'}`}>
-      <StepTrail labels={['stepRecipient', 'stepCompose', 'stepPostcard']} current={confirmed ? frozenRef.current ? 2 : 1 : 0} t={t} />
-      <header className="page-heading"><h1 ref={recipientHeading} tabIndex={-1}>{t(confirmed ? 'createDetailsTitle' : pending ? 'recipientConfirmTitle' : 'recipientTitle')}</h1>
+      {!confirmed ? <StepTrail labels={['stepRecipient', 'stepCompose', 'stepPostcard']} current={0} t={t} /> : <nav className="workspace-nav" aria-label={t('createSteps')}>
+        {(['content', 'composition', 'postcard'] as const).map((step, index) => <button key={step} type="button" aria-current={createStep === step ? 'step' : undefined}
+          disabled={sendPhase !== 'idle' || busy || (step === 'composition' && (accepted === null || !noteFits || photoIntakePending || creatorImages === null)) || (step === 'postcard' && frozenRef.current === null)}
+          onClick={() => showCreateStep(step)}><span aria-hidden="true">{index + 1}</span>{t(step === 'content' ? 'createContent' : step === 'composition' ? 'createComposition' : 'stepPostcard')}</button>)}
+      </nav>}
+      <header className="page-heading"><h1 ref={recipientHeading} tabIndex={-1}>{t(confirmed ? createStep === 'composition' ? 'createCompositionTitle' : createStep === 'postcard' ? 'createPostcardTitle' : 'createDetailsTitle' : pending ? 'recipientConfirmTitle' : 'recipientTitle')}</h1>
       <p className="page-lead">{t(confirmed ? 'createDraftHint' : pending ? 'recipientOnly' : 'recipientBody')}</p></header>
       {confirmed ? <div className="draft-recipient"><RecipientLine t={t} snapshot={confirmed} held={sendPhase === 'idle' && !pictured} /><button type="button" disabled={busy || sendPhase === 'working'} onClick={changeRecipient}>{t('recipientChange')}</button></div> : null}
       {!confirmed && !pending ? (
@@ -1198,6 +1220,7 @@ export function Create({
       ) : null}
       {confirmed ? (
         <>
+          <div hidden={createStep !== 'content'} className="content-workspace">
           <div className="draft-grid">
           <section className="draft-section">
           <label className="handle-form">
@@ -1250,6 +1273,9 @@ export function Create({
             {sendPhase === 'idle' ? <p>{t('photoCount')}</p> : null}
           </div>
           </div>
+          <div className="workspace-next"><p className="field-hint">{t('createContentHint')}</p><button type="button" className="primary" disabled={accepted === null || !noteFits || photoIntakePending || creatorImages === null || sendPhase !== 'idle'} onClick={() => showCreateStep('composition')}>{t('createChooseComposition')}<Icon name="arrow" /></button></div>
+          </div>
+          <div hidden={createStep !== 'composition'} className="composition-workspace">
           {accepted !== null && noteFits ? (
             creatorImageState === 'loading' ? (
               <p>{t('photoLoading')}</p>
@@ -1279,7 +1305,10 @@ export function Create({
               </div>
             ) : null
           ) : null}
-          <div className="music-draft">
+          <div className="workspace-next"><button type="button" className="quiet" onClick={() => showCreateStep('content')}>{t('createEditContent')}</button><button type="button" className="primary" disabled={frozenRef.current === null || sendPhase !== 'idle'} onClick={() => showCreateStep('postcard')}>{t('createContinuePostcard')}<Icon name="arrow" /></button></div>
+          </div>
+          <details className="music-draft" hidden={createStep !== 'content'}>
+            <summary>{t('musicLabel')}</summary>
             <label className="handle-form">
               {t('musicLabel')}
               <input
@@ -1317,7 +1346,8 @@ export function Create({
               ))}
             </ul>
               {sendPhase === 'idle' ? <p>{t('musicNotSent')}</p> : null}
-            </div>
+            </details>
+          <div hidden={createStep !== 'postcard'} className="postcard-workspace">
           <section className="front-section">
             <h2>{t('createFrontTitle')}</h2><p>{t('createFrontHint')}</p>
             <div ref={host} />
@@ -1359,6 +1389,8 @@ export function Create({
                 </>
               ) : null}
             </div>
+          <div className="actions"><button type="button" className="quiet" disabled={sendPhase !== 'idle' || busy} onClick={() => showCreateStep('composition')}>{t('createBackComposition')}</button></div>
+          </div>
           <div className="actions">
             <a href={href('home')}>{t('back')}</a>
           </div>
@@ -1399,6 +1431,7 @@ function Account({
   draft,
   t,
   onNotice,
+  returnTo,
 }: {
   store: SessionStore
   keys: MemoryKeys
@@ -1408,6 +1441,7 @@ function Account({
   draft: RegistrationDraft
   t: (key: MessageKey) => string
   onNotice: (notice: MessageKey) => void
+  returnTo?: RouteName | null
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [busy, setBusy] = useState(false)
@@ -1481,6 +1515,7 @@ function Account({
       {!signedIn ? <p>{t('accountExistingOnly')}</p> : null}
       {view.handle ? <p className="account-handle">@{view.handle}</p> : null}
       <p role="status">{t(phaseKey(view.phase))}</p>
+      {signedIn && (unlocked || returnTo === 'history') && returnTo ? <div className="actions"><a className="button primary" href={href(returnTo)}>{t(returnTo === 'create' ? 'returnMake' : returnTo === 'scan' ? 'returnOpen' : 'returnHistory')}<Icon name="arrow" /></a></div> : null}
       <div className="actions">
         {signedIn ? null : (
           <button

@@ -85,12 +85,8 @@ export function HistoryPage({ store, transport, t, language }: {
   return <section className="card history" data-testid="history-page">
     <header className="page-heading"><h1 ref={heading} tabIndex={-1}>{t('historyTitle')}</h1>
     <p className="page-lead">{t('historyBody')}</p></header>
-    <div className="actions">
-      <a href={href('home')}>{t('back')}</a>
-      {signedIn ? <button type="button" disabled={loading || cancelling} onClick={() => { setNotice(null); void load(null) }}>{t('historyRefresh')}</button>
-        : <a href={href('account')}>{t('account')}</a>}
-    </div>
-    {!signedIn ? <div className="empty-state"><Icon name="postcard" /><p>{t('historyAuth')}</p></div> : <>
+    {signedIn ? <div className="history-toolbar"><button type="button" disabled={loading || cancelling} onClick={() => { setNotice(null); void load(null) }}>{t('historyRefresh')}</button><a href={href('create')}>{t('make')}<Icon name="arrow" /></a></div> : null}
+    {!signedIn ? <div className="empty-state"><Icon name="postcard" /><p>{t('historyAuth')}</p><div className="actions"><a className="button primary" href={href('account')}>{t('signInToHistory')}<Icon name="arrow" /></a></div></div> : <>
       {notice ? <p role="status" data-testid="history-result">{t(notice)}</p> : null}
       {loading ? <p role="status">{t('historyLoading')}</p> : null}
       {failed ? <div role="alert"><p>{t('historyUnavailable')}</p><button type="button" disabled={loading || cancelling} onClick={() => { void load(cursor) }}>{t('historyRetry')}</button></div> : null}
@@ -124,7 +120,6 @@ function HistoryRow({ row, t, language, disabled, alive, onCancel }: {
     <details onToggle={(event) => { if (!event.currentTarget.open) { setConfirm(false); setCopy(null) } }}>
       <summary><span>{row.recipient.is_self ? t('historySelf') : row.recipient.handle ? `@${row.recipient.handle}` : row.recipient.hint ?? t('historyRecipient')}</span>
         <span className="history-state">{t(statuses[row.status])}</span><span>{date(row.created_at)}</span></summary>
-      <dl>{dates.map(([label, value]) => value ? <div key={label}><dt>{t(label)}</dt><dd>{date(value)}</dd></div> : null)}</dl>
       {code ? <div className="history-code"><p>{t('historyCode')}: <code>{code}</code></p>
         <button type="button" disabled={disabled} onClick={async () => {
           if (!alive() || disabled) return
@@ -143,6 +138,7 @@ function HistoryRow({ row, t, language, disabled, alive, onCancel }: {
             <button type="button" onClick={onCancel}>{t('historyConfirmCancel')}</button>
           </div></fieldset>}
       </> : null}
+      <details className="history-dates"><summary>{t('historyDates')}</summary><dl>{dates.map(([label, value]) => value ? <div key={label}><dt>{t(label)}</dt><dd>{date(value)}</dd></div> : null)}</dl></details>
     </details>
   </li>
 }

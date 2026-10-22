@@ -10,6 +10,7 @@ import { MemoryKeys } from '../src/auth/memoryKeys'
 import { SessionStore } from '../src/session/session'
 import { unlockAccount } from '../src/crypto/keyOwner'
 import { AtomicFixture, RESERVATION } from './atomicFixture'
+import { completeAtomicSteps } from './atomicSteps'
 
 const target = { version: 1, atomicRegistration: true, environment: 'TEST', appOrigin: 'https://app.example.invalid', apiOrigin: 'https://api.example.invalid', rpId: 'example.invalid' }
 const cleanups: (() => void)[] = []
@@ -39,7 +40,7 @@ function context() {
   return { fixture, session, keys, state, fetcher, requests, report, controller }
 }
 async function ready(c = context()) {
-  await c.controller.begin(); await c.controller.save('synthetic_owner')
+  await c.controller.begin(); await completeAtomicSteps(c.controller, 'synthetic_owner')
   expect(c.controller.getSnapshot().phase).toBe('ready')
   expect(c.session.getSnapshot().phase).toBe('keys-unlocked')
   expect(c.keys.capabilities(c.session.getSnapshot())).not.toBeNull()
@@ -127,7 +128,7 @@ describe('local retirement survives guarded normal-PWA network admission', () =>
     expect(c.requests).toHaveLength(before)
   })
   it.each(['passkey/get', 'record:after'])('offline leave during %s fences late work and wipes only the retired candidate', async point => {
-    const c = context(); await c.controller.begin(); const gate = hold(c, point), pending = c.controller.save('synthetic_owner')
+    const c = context(); await c.controller.begin(); const gate = hold(c, point), pending = completeAtomicSteps(c.controller, 'synthetic_owner')
     await gate.reached; const before = c.requests.length, old = c.session.getSnapshot(); c.state.online = false
     expect(() => c.controller.leave()).not.toThrow(); gate.release(); await pending
     signedOut(c, old); expect(c.requests).toHaveLength(before)

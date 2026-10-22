@@ -637,7 +637,7 @@ export function Create({
     if (frontFp.current.current() === null) return false
     if (selectedMusic !== null) return false
     if (photos.photos().length < 3 || photos.photos().length > PHOTO_COUNT_MAX) return false
-    if (note.accepted() === null) return false
+    if (!note.accepted()?.trim()) return false
     return true
   })()
   /** One synchronous owner: any in-visit draft/attempt invalidation aborts
@@ -883,6 +883,10 @@ export function Create({
     if (pendingPhotoIntakes() > 0) return
     const controller = sendControllerRef.current
     if (!controller || !sendReady || sendPhase !== 'idle') return
+    // Match the existing send preflight before consuming this visit's attempt,
+    // including an edit that has not committed a new React render yet.
+    const acceptedNote = note.accepted()
+    if (!acceptedNote?.trim()) return
     const freeze = frozenRef.current
     const still = front.current.still()
     const fingerprint = frontFp.current.current()
@@ -899,7 +903,7 @@ export function Create({
       recipient: rec,
       // Snapshot identity values; never alias the live PhotoDraft array.
       photos: photos.photos().slice(),
-      noteText: note.accepted() ?? '',
+      noteText: acceptedNote,
       musicSelected: selectedMusic !== null,
       freeze,
       still,

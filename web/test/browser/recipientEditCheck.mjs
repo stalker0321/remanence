@@ -40,7 +40,7 @@ try {
     assert.equal((await state(page)).pending, 'alice_qa')
     // The confirmation is deliberately a separate screen. Return through the
     // real Change action before editing; no direct controller reset in a test.
-    await page.getByRole('button', { name: 'change recipient', exact: true }).click()
+    await page.getByRole('button', { name: 'choose someone else', exact: true }).click()
     assert.equal((await state(page)).pending, null)
     await input(page).fill('bob_qa')
     assert.equal((await state(page)).pending, null)
@@ -69,7 +69,7 @@ try {
     await page.getByRole('button', { name: 'for myself', exact: true }).click()
     await result(page, 0)
     assert.equal((await state(page)).pending, 'self_qa')
-    await page.getByRole('button', { name: 'change recipient', exact: true }).click()
+    await page.getByRole('button', { name: 'choose someone else', exact: true }).click()
     await input(page).fill('bob_qa')
     assert.equal((await state(page)).pending, null)
   })

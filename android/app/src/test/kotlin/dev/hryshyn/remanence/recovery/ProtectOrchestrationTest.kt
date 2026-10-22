@@ -282,6 +282,32 @@ class ProtectOrchestrationTest {
         assertTrue(ceremony.uncertain); assertNotNull(ceremony.proof); assertTrue(f.verified.isEmpty())
     }
 
+    @Test fun acknowledgedCredentialCannotSwitchToDifferentPendingId() = runTest {
+        val f = fixture(); val ceremony = ProtectCeremony()
+        val credentials = FakeCredentials(created = credentialJson(credId1, prfB64))
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("expected explicit verify") }
+        catch (_: RecoveryVerificationPending) { }
+        assertEquals(credId1, ceremony.credentialId); assertNull(ceremony.proof)
+        f.registeredId = credId2
+        try { protectWith(f.env(), credentials, ceremony = ceremony, verify = true); fail("must retain saved ID") }
+        catch (_: IllegalStateException) { }
+        assertEquals(1, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
+        assertTrue(f.verified.isEmpty()); assertNull(f.uploaded)
+    }
+
+    @Test fun acknowledgedCredentialCannotRecreateWhenStatusLosesItsStage() = runTest {
+        val f = fixture(); val ceremony = ProtectCeremony()
+        val credentials = FakeCredentials(created = credentialJson(credId1, prfB64))
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("expected explicit verify") }
+        catch (_: RecoveryVerificationPending) { }
+        f.registeredId = null
+        f.status = buildJsonObject { put("state", "NOT_STARTED") }
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("must not create again") }
+        catch (_: RecoveryCreationUncertain) { }
+        assertEquals(1, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
+        assertEquals(credId1, ceremony.credentialId); assertTrue(f.verified.isEmpty())
+    }
+
     @Test
     fun corruptDurableReadbackReturnsNoCodeOrReadiness() = runTest {
         val f = fixture()

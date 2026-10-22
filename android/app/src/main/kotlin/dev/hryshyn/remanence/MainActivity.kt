@@ -257,9 +257,11 @@ private fun RootSurface(
     var showLegacyAuth by rememberSaveable { mutableStateOf(!BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) }
     var logoutRequested by remember { mutableStateOf(false) }
     var atomicExitRequested by remember { mutableStateOf(false) }
+    var atomicExistingAccount by rememberSaveable { mutableStateOf(false) }
     val atomicBack: () -> Unit = {
         if (!atomicState.busy && !recoveryBusy) {
-            if (!atomicViewModel.backToHandle()) {
+            if (atomicExistingAccount) atomicExistingAccount = false
+            else if (!atomicViewModel.backToHandle()) {
                 if (atomicState.phase != dev.hryshyn.remanence.auth.AtomicPhase.IDLE) atomicExitRequested = true
                 else { atomicViewModel.leave(); rootViewModel.cancelHomeIntent() }
             }
@@ -316,7 +318,8 @@ private fun RootSurface(
                 AccessPage(onBack = atomicBack,
                     backEnabled = !recoveryBusy && !atomicState.busy,
                     footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) }) {
-                    dev.hryshyn.remanence.auth.AtomicRegistrationPanel(atomicViewModel, atomicState, recoveryBusy) { enabled, beforeSignIn ->
+                    dev.hryshyn.remanence.auth.AtomicRegistrationPanel(atomicViewModel, atomicState, recoveryBusy,
+                        atomicExistingAccount, { atomicExistingAccount = it }) { enabled, beforeSignIn ->
                         dev.hryshyn.remanence.recovery.RecoveryActions(container, hasIdentity = false, recoveryRequired = false,
                             onRecovered = rootViewModel::onSessionEstablished, onBusyChange = { recoveryBusy = it },
                             enabled = enabled, onBeforeSignIn = beforeSignIn)

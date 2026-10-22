@@ -349,7 +349,7 @@ class AtomicRegistrationControllerTest {
             override suspend fun create(options: JsonObject): JsonObject = throw IOException("unknown create")
         })
         assertEquals(AtomicPhase.CREDENTIAL_UNKNOWN, c.state.value.phase)
-        f.reservationState = "EXPIRED"; c.resolve(); c.restart()
+        f.reservationState = "EXPIRED"; f.freshTerminal = true; c.resolve(); c.restart()
         assertEquals("", c.state.value.handle); assertEquals(AtomicPhase.HANDLE, c.state.value.phase)
         c.chooseHandle("fresh"); c.begin(f.google)
         assertEquals("", c.state.value.handle); assertEquals(AtomicPhase.HANDLE, c.state.value.phase)

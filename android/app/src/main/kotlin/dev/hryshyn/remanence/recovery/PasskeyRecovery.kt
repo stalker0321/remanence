@@ -26,21 +26,14 @@ private val RecoveryJson = Json { ignoreUnknownKeys = false; isLenient = false }
 interface RecoveryCredentialPort {
     suspend fun create(options: JsonObject): JsonObject
     suspend fun get(options: JsonObject): JsonObject
-    /**
-     * Immediate-only get variant for the single fresh-create verification
-     * get. The default keeps source compatibility by delegating to normal
-     * discovery; only the real Android adapter overrides it. Test fakes
-     * override it to record the exact request mode.
-     */
+    /** Legacy adapter seam. Product ceremonies use explicit, ordinary get only. */
     suspend fun getImmediate(options: JsonObject): JsonObject = get(options)
 }
 
 /**
  * Real request builder seam (pinned credentials 1.6.0). Ordinary
- * discovery is the default; `immediate = true` sets
- * preferImmediatelyAvailableCredentials for the single fresh-create
- * verification get only. Never used for PENDING retries, STORED checks,
- * sign-in, or restore. No allow-list guessing here.
+ * discovery is the product path. The legacy immediate variant remains testable,
+ * but is not used by creation, verification, sign-in or restore.
  */
 internal fun getCredentialRequest(optionsJson: String, immediate: Boolean): GetCredentialRequest =
     GetCredentialRequest(
@@ -74,7 +67,7 @@ internal fun publicCredential(c: JsonObject): JsonObject = buildJsonObject {
 
 class PasskeyRecovery(private val container: AppContainer) {
     private val api = container.apiStack.recoveryRepository
-    private val ceremony = ProtectCeremony()
+    private val ceremony = container.recoveryProtectCeremony
     val hasUnconfirmedCreation: Boolean get() = ceremony.uncertain
     private fun enabled() = check(BuildConfig.REMANENCE_RECOVERY_ENABLED)
 
@@ -166,10 +159,9 @@ class PasskeyRecovery(private val container: AppContainer) {
 class RecoveryCapabilityUnavailable : Exception("PRF unavailable")
 
 /**
- * Fresh-created credential was saved and server-registered, but the
- * immediate verification get found nothing discoverable yet: the user
- * retries explicitly and the retry continues the SAME credential
- * (normal discovery, same status id). Never auto-retried, never a
+ * Credential was saved and server-registered. No GET has been started:
+ * the user explicitly verifies the SAME credential with normal discovery.
+ * Never auto-retried, never a
  * readiness mark, never another manager, never a new key. The id is
  * exposed for tests/orchestration only — UI copy carries no internals.
  */
@@ -222,6 +214,7 @@ internal class ProtectCeremony {
     var owner: String? = null
     var proof: JsonObject? = null
     var uncertain = false
+    var credentialId: String? = null
 }
 
 internal class RecoveryCreationUncertain : IllegalStateException("creation confirmation incomplete")
@@ -236,7 +229,9 @@ internal suspend fun protectWith(
     val lease = env.captureLease() ?: error("no session")
     val account = withContext(Dispatchers.IO) { env.loadAccount() } ?: error("no account")
     val owner = account.userId + ":" + account.activeKeyBundleId
-    if (ceremony.owner != owner) { ceremony.owner = owner; ceremony.proof = null; ceremony.uncertain = false }
+    if (ceremony.owner != owner) {
+        ceremony.owner = owner; ceremony.proof = null; ceremony.uncertain = false; ceremony.credentialId = null
+    }
     env.stores.claimLegacyIfMatching(account.userId, account.activeKeyBundleId)
     val identity = withContext(Dispatchers.IO) {
         env.stores.resolve(account.userId, account.activeKeyBundleId)
@@ -246,7 +241,7 @@ internal suspend fun protectWith(
     val stored = freshState == "STORED"
     check(!chooseAnotherManager) { "replacement enrollment requires a separate decision" }
     val id = if (freshState == "NOT_STARTED") {
-        if (verify) throw RecoveryCreationUncertain()
+        if (verify || ceremony.credentialId != null) throw RecoveryCreationUncertain()
         if (ceremony.proof == null) {
             if (ceremony.uncertain) throw RecoveryCreationUncertain()
             val start = env.requestAuthenticated(lease, "register/options", JsonObject(emptyMap()))
@@ -262,12 +257,14 @@ internal suspend fun protectWith(
         val proof = checkNotNull(ceremony.proof)
         val result = env.requestAuthenticated(lease, "register/verify", proof).text("credential_id")
         check(result == proof.getValue("response").jsonObject.text("id"))
-        ceremony.proof = null; ceremony.uncertain = false
+        ceremony.credentialId = result; ceremony.proof = null; ceremony.uncertain = false
         throw RecoveryVerificationPending(result)
     } else status.text("credential_id").also { staged ->
+        check(freshState == "PENDING" || stored)
         ceremony.proof?.getValue("response")?.jsonObject?.let { check(it.text("id") == staged) }
+        ceremony.credentialId?.let { check(it == staged) }
     }
-    ceremony.proof = null; ceremony.uncertain = false
+    ceremony.credentialId = id; ceremony.proof = null; ceremony.uncertain = false
     if (!stored && !verify) throw RecoveryVerificationPending(id)
     val begin = env.requestAuthenticated(lease, "setup/options", buildJsonObject { put("credential_id", id) })
     val options = begin.getValue("options").jsonObject

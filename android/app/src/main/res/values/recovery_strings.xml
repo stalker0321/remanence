@@ -2,7 +2,7 @@
     <string name="recovery_title">Save access to your memories</string>
     <string name="recovery_test_title">Recovery · experimental test build</string>
     <string name="recovery_setup_hint">Choose where to save your passkey in the system dialog. It can be different from the account you used to sign in. No recovery phrase is required.</string>
-    <string name="recovery_prf_missing">This passkey manager cannot restore encrypted memories. Your account is saved, but setup is not complete. Try a supported manager.</string>
+    <string name="recovery_prf_missing">The passkey was saved, but its provider did not supply the protection your memories need. Setup is not complete. Repeating verification may not help. Your existing key has not been replaced.</string>
     <string name="recovery_failed">Recovery did not complete. Existing keys were not replaced. Check the connection and recovery method.</string>
     <string name="recovery_old_android">Passkey recovery requires Android 9 or newer. This device cannot complete passkey setup.</string>
     <string name="recovery_verified">Access saved and recovery verified. An additional recovery code is optional.</string>

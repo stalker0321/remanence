@@ -8,6 +8,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -32,18 +33,20 @@ internal fun atomicRegistrationErrorMessage(reason: String): Int = when (reason)
 /** Public handle only; setup capabilities and private identity remain in the controller. */
 @Composable
 internal fun AtomicRegistrationPanel(model: AtomicRegistrationViewModel, view: AtomicView, recoveryBusy: Boolean,
+    existingAccount: Boolean, onExistingAccount: (Boolean) -> Unit,
     recoveryContent: @Composable (enabled: Boolean, beforeSignIn: () -> Unit) -> Unit) {
     val activity = LocalContext.current as Activity
     val google = remember(activity) { AndroidGoogleCredentials(activity) }
     val passkeys = remember(activity) { AndroidRecoveryCredentials(activity) }
-    var handle by remember { mutableStateOf(view.handle) }
+    var handle by rememberSaveable { mutableStateOf(view.handle) }
     LaunchedEffect(view.phase) { if (view.phase == AtomicPhase.GOOGLE) handle = "" }
-    DisposableEffect(model) { onDispose { model.leave() } }
+    // Rotation keeps the ViewModel ceremony. Explicit exits and onCleared retire its owner.
     AtomicRegistrationContent(view, handle, { if (it.length <= 31) handle = it },
         { model.begin(google) }, { model.save(view.handle, passkeys) }, model::restart, model::resolve,
         model::retry, model::cancelReservation, model::leave, recoveryBusy,
         onChooseHandle = { model.chooseHandle(handle) },
         onVerify = { model.verify(view.handle.ifEmpty { handle }, passkeys) },
+        existingAccount = existingAccount, onExistingAccount = onExistingAccount,
         recoveryContent = recoveryContent)
 }
 
@@ -53,12 +56,15 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
     onBegin: () -> Unit, onSave: () -> Unit, onRestart: () -> Unit, onResolve: () -> Unit,
     onRetry: () -> Unit, onCancel: () -> Unit, onLeave: () -> Unit, recoveryBusy: Boolean,
     onChooseHandle: () -> Unit = {}, onVerify: () -> Unit = {},
+    existingAccount: Boolean? = null, onExistingAccount: ((Boolean) -> Unit)? = null,
     recoveryContent: @Composable (enabled: Boolean, beforeSignIn: () -> Unit) -> Unit) {
     val enabled = !view.busy && !recoveryBusy
-    var existing by remember { mutableStateOf(false) }
+    var localExisting by remember { mutableStateOf(false) }
+    val existing = existingAccount ?: localExisting
+    fun showExisting(value: Boolean) { if (onExistingAccount != null) onExistingAccount(value) else localExisting = value }
     val restore = existing || view.phase == AtomicPhase.RESTORE_REQUIRED
     val keyboard = LocalSoftwareKeyboardController.current
-    BackHandler(existing && !recoveryBusy) { existing = false }
+    BackHandler(existing && !recoveryBusy) { showExisting(false) }
     val step = when (view.phase) {
         AtomicPhase.HANDLE, AtomicPhase.HANDLE_CONFLICT -> 2
         AtomicPhase.CREATE_REQUIRED, AtomicPhase.CREATING, AtomicPhase.CREDENTIAL_UNKNOWN -> 3
@@ -98,7 +104,7 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
         if (restore) {
             // Stable composition site for the lifetime of the sign-in operation.
             recoveryContent(!view.busy, onLeave)
-            if (existing) HoldTextButton(enabled = enabled, onClick = { existing = false },
+            if (existing) HoldTextButton(enabled = enabled, onClick = { showExisting(false) },
                 modifier = Modifier.testTag("atomic_new_account")) { Text(stringResource(R.string.rework_new_account)) }
         } else {
             if (view.error != null) Text(stringResource(atomicRegistrationErrorMessage(view.error)),
@@ -146,7 +152,7 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
                 else -> {
                     if (view.phase == AtomicPhase.REAUTHENTICATE) Text(stringResource(R.string.atomic_registration_reauthenticate))
                     Box(Modifier.testTag("atomic_google")) { GoogleSignInButton(onClick = onBegin, enabled = enabled, busy = view.busy) }
-                    HoldTextButton(enabled = enabled, onClick = { onLeave(); existing = true },
+                    HoldTextButton(enabled = enabled, onClick = { onLeave(); showExisting(true) },
                         modifier = Modifier.fillMaxWidth().testTag("atomic_existing")) { Text(stringResource(R.string.rework_existing_account)) }
                 }
             }

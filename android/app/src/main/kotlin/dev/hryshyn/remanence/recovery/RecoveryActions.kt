@@ -4,6 +4,7 @@ import android.app.Activity
 import android.view.WindowManager
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import dev.hryshyn.remanence.AppContainer
 import dev.hryshyn.remanence.BuildConfig
@@ -30,8 +31,8 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
     var verified by remember { mutableStateOf(false) }
     var showCode by remember { mutableStateOf(false) }
     var offerAnotherManager by remember { mutableStateOf(false) }
-    var awaitingVerification by remember { mutableStateOf(false) }
-    var creationUncertain by remember { mutableStateOf(false) }
+    var awaitingVerification by rememberSaveable { mutableStateOf(false) }
+    var creationUncertain by rememberSaveable { mutableStateOf(false) }
     var codeInput by remember { mutableStateOf("") }
     DisposableEffect(code) {
         val shown = code
@@ -53,12 +54,8 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
                 message = R.string.recovery_prf_missing
             }
             catch (pending: RecoveryVerificationPending) {
-                // Saved but not yet verifiable: explicit retry runs the
-                // existing save action below (verified stays false, so no
-                // Continue/code), which re-reads PENDING status and uses
-                // normal discovery for the same enrollment. Never offer
-                // another manager merely because this continuation
-                // occurred.
+                // Saved is not ready. Only the next explicit Verify action
+                // may open normal discovery for this same enrollment.
                 val presentation = presentRecoveryPending()
                 verified = presentation.verified
                 offerAnotherManager = presentation.offerAnotherManager
@@ -114,13 +111,9 @@ internal fun recoveryFailureMessage(failure: Exception, protecting: Boolean): In
 }
 
 /**
- * Presentation for the typed saved-but-pending continuation, shared by
- * the save and another-manager actions above. Pending is NOT verified
- * (no Continue, no code) and never offers another manager merely
- * because the continuation occurred. Same-enrollment retry routing is
- * NOT a flag here: it is established by the existing save action
- * (`protect()` with default `chooseAnotherManager=false`, which
- * re-reads PENDING status) plus the connected orchestration test.
+ * Saved-but-pending is NOT verified (no Continue, no code) and never offers
+ * another manager. The ceremony retains its exact ID; explicit Verify rechecks
+ * server status and uses normal discovery without creating another credential.
  */
 internal data class RecoveryPendingPresentation(
     val verified: Boolean,

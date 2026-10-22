@@ -14,6 +14,13 @@ export interface StagePorts {
 
 type PaintState = 'loading' | 'ready' | 'failed'
 
+/** Shell DOM focus only; independent of sheet admission, data and rendering.
+ * The shell can contain a semantic main rather than itself being that main. */
+export function stageFocusFallback(root: Document): HTMLElement | null {
+  return root.querySelector<HTMLElement>('.shell .card button:not(:disabled), .shell .card a')
+    ?? root.querySelector<HTMLElement>('.shell')
+}
+
 /**
  * The admitted sheet. The bitmap is the 360×640 composition.
  * Export saves that bitmap, and the photo viewer pages the original frames.
@@ -137,8 +144,7 @@ export function CollageStage({
         if (trigger?.isConnected && !trigger.closest('[inert]') && !trigger.matches(':disabled') && trigger.getClientRects().length > 0) {
           trigger.focus({ preventScroll: true })
         } else {
-          const fallback = document.querySelector<HTMLElement>('main.shell .card button:not(:disabled), main.shell .card a')
-            ?? document.querySelector<HTMLElement>('main.shell')
+          const fallback = stageFocusFallback(document)
           fallback?.focus({ preventScroll: true })
         }
       })

@@ -448,9 +448,9 @@ button.quiet, a.button.quiet {
 .action-card--create { background: var(--sand); box-shadow: 0 7px 0 var(--sand-edge); }
 .action-card h2 { font-size: clamp(2rem, 3.4vw, 2.8rem); font-weight: 400; line-height: 1.12; letter-spacing: -.04em; margin: 0 0 1rem; overflow-wrap: anywhere; }
 .action-card p { margin: 0 0 2rem; max-width: 26ch; font-size: 1.12rem; }
-.action-card-footer { display: flex; gap: 1rem; align-items: center; justify-content: space-between; width: 100%; margin-top: auto; padding-top: 1.5rem; }
-.action-card-footer > span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.arrow-tile { display: flex; align-items: center; justify-content: center; min-width: 3rem; min-height: 3rem; border-radius: 1rem; background: var(--paper); }
+.action-card-footer { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: space-between; width: 100%; margin-top: auto; padding-top: 1.5rem; }
+.action-card-footer > span:first-child { flex: 1 1 12ch; min-inline-size: min(100%, 12ch); overflow-wrap: anywhere; }
+.arrow-tile { display: flex; align-items: center; justify-content: center; min-width: 3rem; min-height: 3rem; margin-inline-start: auto; border-radius: 1rem; background: var(--paper); }
 .action-card--receive .arrow-tile { background: var(--lilac-deep); color: var(--paper); }
 .action-card:active { transform: translateY(5px); box-shadow: 0 2px 0 var(--lilac-edge); }
 .welcome-account { display: flex; align-items: center; gap: 1rem; margin: 2rem 0 0; padding: 1rem 0; }
@@ -558,6 +558,9 @@ button.quiet, a.button.quiet {
 .viewer-panel { border: 1px solid #f4f2ec30; }
 @media (max-width: 700px) {
   .shell { padding-top: max(.85rem, env(safe-area-inset-top)); }
+  /* At enlarged root text, reserve width for words rather than doubling the
+     decorative gutters. Safe areas and actual text sizes remain respected. */
+  .shell { padding-inline: max(18px, env(safe-area-inset-left)) max(18px, env(safe-area-inset-right)); }
   .bar { gap: .4rem .8rem; }
   .bar .mark { font-size: 1.5rem; }
   .account-link { min-width: 44px; min-height: 44px; max-width: 100%; margin-inline-start: auto; justify-content: center; border-radius: .75rem; background: var(--bridge); font-size: .85rem; }
@@ -568,7 +571,7 @@ button.quiet, a.button.quiet {
   .home-intro { margin-bottom: 1.5rem; }
   .home-actions, .scan-layout, .draft-grid, .settings-layout { grid-template-columns: minmax(0, 1fr); }
   .home-actions { gap: 1.5rem; }
-  .action-card { min-height: 12rem; border-radius: 1.6rem; }
+  .action-card { min-height: 12rem; padding: clamp(20px, 5vw, 28px); border-radius: 1.6rem; }
   .action-card p { font-size: 1rem; margin-bottom: .75rem; }
   .action-card-footer { padding-top: 1rem; }
   .welcome-account { flex-wrap: wrap; gap: .65rem; }

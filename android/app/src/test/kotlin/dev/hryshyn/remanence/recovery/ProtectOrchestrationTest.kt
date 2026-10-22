@@ -60,6 +60,7 @@ class ProtectOrchestrationTest {
         var registerOptions: JsonObject =
             buildJsonObject { put("flow", "reg-flow"); put("options", buildJsonObject {}) }
         var registerVerifyId: String = credId1
+        var loseRegisterBeforeStage = false
         /** Set by register/verify: the fake server remembers the enrollment,
          * so a later status read in the SAME fixture reports PENDING. */
         var registeredId: String? = null
@@ -102,6 +103,7 @@ class ProtectOrchestrationTest {
                     } ?: status
                     "register/options" -> registerOptions
                     "register/verify" -> {
+                        if (loseRegisterBeforeStage) { loseRegisterBeforeStage = false; throw java.io.IOException("lost before stage") }
                         registeredId = registerVerifyId
                         buildJsonObject { put("credential_id", registerVerifyId) }
                     }
@@ -265,6 +267,19 @@ class ProtectOrchestrationTest {
         catch (_: RecoveryCreationUncertain) { }
         assertEquals(0, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
         assertEquals(listOf("status"), f.apiCalls)
+    }
+
+    @Test fun pendingStatusForDifferentCredentialCannotReplaceRetainedCreationProof() = runTest {
+        val f = fixture(); f.loseRegisterBeforeStage = true
+        val ceremony = ProtectCeremony()
+        val credentials = FakeCredentials(created = credentialJson(credId1, prfB64))
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("expected lost acknowledgement") }
+        catch (_: java.io.IOException) { }
+        f.status = buildJsonObject { put("state", "PENDING"); put("credential_id", credId2) }
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("must refuse different staged ID") }
+        catch (_: IllegalStateException) { }
+        assertEquals(1, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
+        assertTrue(ceremony.uncertain); assertNotNull(ceremony.proof); assertTrue(f.verified.isEmpty())
     }
 
     @Test

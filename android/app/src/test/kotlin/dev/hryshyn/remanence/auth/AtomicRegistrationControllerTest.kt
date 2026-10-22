@@ -323,14 +323,42 @@ class AtomicRegistrationControllerTest {
         c.begin(f.google); c.save("valid", f)
         assertEquals(AtomicPhase.CREDENTIAL_UNKNOWN, c.state.value.phase)
         c.save("valid", f); assertEquals(1, f.creates)
+        f.statusIds = listOf("b3RoZXI") // Another staged ID cannot stand in for our retained attestation.
         c.resolve()
         assertEquals(AtomicPhase.VERIFY_REQUIRED, c.state.value.phase)
         assertEquals(1, f.creates); assertEquals(0, f.discoveryGets)
+        assertTrue(f.registered) // The exact retained proof was replayed, not skipped for the other ID.
+    }
+
+    @Test fun lostAckWithSeveralStagedIdsVerifiesTheCreatedIdNotTheFirst(): Unit = runBlocking {
+        val f = Fixture(); val c = f.controller(); f.loseCredentialAck = true
+        c.begin(f.google); c.save("valid", f)
+        f.statusIds = listOf("b3RoZXI", Fixture.CREDENTIAL)
+        c.resolve(); c.verify("valid", f)
+        assertEquals(AtomicPhase.READY, c.state.value.phase)
+        assertEquals(1, f.creates); assertEquals(1, f.discoveryGets)
+        assertTrue(f.requests.filter { it.first == AtomicAction.SETUP_OPTIONS }.all {
+            it.second?.get("credential_id") == JsonPrimitive(Fixture.CREDENTIAL)
+        })
+    }
+
+    @Test fun newOwnerAndRestartDropPriorHandleAndCreationUncertainty(): Unit = runBlocking {
+        val f = Fixture(); val c = f.controller()
+        c.begin(f.google); c.chooseHandle("previous")
+        c.save("previous", object : RecoveryCredentialPort by f {
+            override suspend fun create(options: JsonObject): JsonObject = throw IOException("unknown create")
+        })
+        assertEquals(AtomicPhase.CREDENTIAL_UNKNOWN, c.state.value.phase)
+        f.reservationState = "EXPIRED"; c.resolve(); c.restart()
+        assertEquals("", c.state.value.handle); assertEquals(AtomicPhase.HANDLE, c.state.value.phase)
+        c.chooseHandle("fresh"); c.begin(f.google)
+        assertEquals("", c.state.value.handle); assertEquals(AtomicPhase.HANDLE, c.state.value.phase)
     }
 
     internal class Fixture : AtomicRegistrationPort, RecoveryCredentialPort {
         var epoch = 0L; var account = ACCOUNT; var reservation = RESERVATION; var reservationState = "RESERVED"
         var registered = false; var freshTerminal = false; var restarts = 0; var restartReplay = false
+        var statusIds: List<String>? = null
         var generations = 0; var creates = 0; var assertions = 0; var immediateGets = 0; var discoveryGets = 0
         var finalMode = "ok"; var providerMode = "ok"; var readMode = "ok"; var loseCredentialAck = false; var retireOnRead = false
         var prf = ByteArray(32) { 7 }
@@ -446,7 +474,9 @@ class AtomicRegistrationControllerTest {
         }
         private fun reservationJson() = buildJsonObject {
             put("id", reservation); put("account_id", account); put("epoch", 1); put("state", reservationState)
-            put("expires_at", "2026-10-22T10:00:00Z"); put("credential_ids", buildJsonArray { if (registered) add(CREDENTIAL) })
+            put("expires_at", "2026-10-22T10:00:00Z"); put("credential_ids", buildJsonArray {
+                if (statusIds != null) statusIds!!.forEach { add(it) } else if (registered) add(CREDENTIAL)
+            })
             put("outcome", if (saved == null) JsonNull else outcome()); put("restarted_into", JsonNull)
         }
         private fun outcome() = buildJsonObject {

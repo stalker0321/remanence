@@ -53,7 +53,7 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         val buffers = mutableSetOf<ByteArray>()
         fun wipe() {
             buffers.forEach { it.fill(0) }; buffers.clear(); candidate?.wipe()
-            candidate = null; intent = null; grant = null; creation = null
+            candidate = null; intent = null; grant = null; creation = null; creationUncertain = false
         }
     }
     private val ownerFence = Any()
@@ -65,6 +65,7 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         if (state.value.busy) return
         owner?.wipe()
         val next = Owner(env.capture()); owner = next
+        mutable.value = AtomicView()
         run(next) {
             show(AtomicPhase.GOOGLE)
             val options = env.api.request(AtomicAction.GOOGLE_OPTIONS, null, null, JsonObject(emptyMap()))
@@ -197,7 +198,8 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
                 val setup = AtomicWire.setup(reply)
                 require(setup.reservation.id != old.id && setup.reservation.accountId != old.accountId)
                 require(setup.reservation.state == AtomicReservationState.RESERVED && setup.reservation.credentialIds.isEmpty())
-                current.wipe(); current.setup = setup; current.credential = null; show(AtomicPhase.HANDLE)
+                current.wipe(); current.setup = setup; current.credential = null
+                mutable.value = AtomicView(AtomicPhase.HANDLE, busy = true)
             }
         }
     }

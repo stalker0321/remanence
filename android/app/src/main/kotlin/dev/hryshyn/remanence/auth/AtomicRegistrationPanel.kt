@@ -37,6 +37,7 @@ internal fun AtomicRegistrationPanel(model: AtomicRegistrationViewModel, view: A
     val google = remember(activity) { AndroidGoogleCredentials(activity) }
     val passkeys = remember(activity) { AndroidRecoveryCredentials(activity) }
     var handle by remember { mutableStateOf(view.handle) }
+    LaunchedEffect(view.phase) { if (view.phase == AtomicPhase.GOOGLE) handle = "" }
     DisposableEffect(model) { onDispose { model.leave() } }
     AtomicRegistrationContent(view, handle, { if (it.length <= 31) handle = it },
         { model.begin(google) }, { model.save(view.handle, passkeys) }, model::restart, model::resolve,

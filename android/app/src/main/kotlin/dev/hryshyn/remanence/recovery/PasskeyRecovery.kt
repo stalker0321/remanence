@@ -74,12 +74,13 @@ internal fun publicCredential(c: JsonObject): JsonObject = buildJsonObject {
 
 class PasskeyRecovery(private val container: AppContainer) {
     private val api = container.apiStack.recoveryRepository
+    private val ceremony = ProtectCeremony()
     private fun enabled() = check(BuildConfig.REMANENCE_RECOVERY_ENABLED)
 
     /** Returns the code only after a verified complete upload. UI owns its short lifetime. */
-    suspend fun protect(credentials: RecoveryCredentialPort, chooseAnotherManager: Boolean = false): ByteArray? {
+    suspend fun protect(credentials: RecoveryCredentialPort, chooseAnotherManager: Boolean = false, verify: Boolean = false): ByteArray? {
         enabled()
-        return protectWith(ProtectEnvironment(container), credentials, chooseAnotherManager)
+        return protectWith(ProtectEnvironment(container), credentials, chooseAnotherManager, ceremony, verify)
     }
 
     suspend fun signIn(credentials: RecoveryCredentialPort) {
@@ -225,13 +226,26 @@ private fun restore(out: JsonObject, secret: ByteArray, code: Boolean, account: 
  * the typed same-key continuation — never an automatic retry, new
  * key, readiness mark, or manager switch.
  */
+/** Public proof retained across acknowledgement loss; never contains PRF or private key material. */
+internal class ProtectCeremony {
+    var owner: String? = null
+    var proof: JsonObject? = null
+    var uncertain = false
+}
+
+internal class RecoveryCreationUncertain : IllegalStateException("creation confirmation incomplete")
+
 internal suspend fun protectWith(
     env: ProtectEnvironment,
     credentials: RecoveryCredentialPort,
     chooseAnotherManager: Boolean = false,
+    ceremony: ProtectCeremony = ProtectCeremony(),
+    verify: Boolean = false,
 ): ByteArray? {
     val lease = env.captureLease() ?: error("no session")
     val account = withContext(Dispatchers.IO) { env.loadAccount() } ?: error("no account")
+    val owner = account.userId + ":" + account.activeKeyBundleId
+    if (ceremony.owner != owner) { ceremony.owner = owner; ceremony.proof = null; ceremony.uncertain = false }
     env.stores.claimLegacyIfMatching(account.userId, account.activeKeyBundleId)
     val identity = withContext(Dispatchers.IO) {
         env.stores.resolve(account.userId, account.activeKeyBundleId)
@@ -239,23 +253,34 @@ internal suspend fun protectWith(
     val status = env.requestAuthenticated(lease, "status", null)
     val freshState = status.text("state")
     val stored = freshState == "STORED"
-    check(!chooseAnotherManager || !stored) { "existing recovery is immutable" }
-    // Fresh-create is proven by THIS invocation's register round trip,
-    // never inferred from PENDING alone (that retry keeps discovery).
-    val freshCreated = freshState == "NOT_STARTED" || chooseAnotherManager
-    val id = if (freshCreated) {
-        val start = env.requestAuthenticated(lease, "register/options", JsonObject(emptyMap()))
-        val created = credentials.create(start.getValue("options").jsonObject)
-        env.requestAuthenticated(lease, "register/verify", verifyBody(start.text("flow"), created)).text("credential_id")
+    check(!chooseAnotherManager) { "replacement enrollment requires a separate decision" }
+    val id = if (freshState == "NOT_STARTED") {
+        if (verify) throw RecoveryCreationUncertain()
+        if (ceremony.proof == null) {
+            if (ceremony.uncertain) throw RecoveryCreationUncertain()
+            val start = env.requestAuthenticated(lease, "register/options", JsonObject(emptyMap()))
+            ceremony.uncertain = true
+            val created = try { credentials.create(start.getValue("options").jsonObject) }
+            catch (failure: Exception) {
+                if (dev.hryshyn.remanence.ui.auth.isCredentialUserCancellation(failure)) ceremony.uncertain = false
+                throw failure
+            }
+            check(env.isLeaseLive(lease))
+            ceremony.proof = verifyBody(start.text("flow"), created)
+        }
+        val proof = checkNotNull(ceremony.proof)
+        val result = env.requestAuthenticated(lease, "register/verify", proof).text("credential_id")
+        check(result == proof.getValue("response").jsonObject.text("id"))
+        ceremony.proof = null; ceremony.uncertain = false
+        throw RecoveryVerificationPending(result)
     } else status.text("credential_id")
+    ceremony.proof = null; ceremony.uncertain = false
+    if (!stored && !verify) throw RecoveryVerificationPending(id)
     val begin = env.requestAuthenticated(lease, "setup/options", buildJsonObject { put("credential_id", id) })
-    val got = try {
-        val options = begin.getValue("options").jsonObject
-        if (freshCreated) credentials.getImmediate(options) else credentials.get(options)
-    } catch (missing: NoCredentialException) {
-        if (!freshCreated) throw missing
-        throw RecoveryVerificationPending(id)
-    }
+    val options = begin.getValue("options").jsonObject
+    val allowed = options.getValue("allowCredentials").jsonArray
+    check(allowed.size == 1 && allowed.single().jsonObject.text("id") == id)
+    val got = credentials.get(options)
     val secret = prf(got)
     var prepared: Crypto.Prepared? = null
     try {

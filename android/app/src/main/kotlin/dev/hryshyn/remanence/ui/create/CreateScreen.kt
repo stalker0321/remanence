@@ -419,21 +419,22 @@ private fun RecipientLookupContent(viewModel: CreateViewModel, recentRecipientsC
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.testTag("create_handle_rule"))
             }
+            Spacer(Modifier.height(16.dp))
+            ForwardAction(
+                stringResource(if (state is RecipientLookupUiState.LookingUp) R.string.hold_looking_up else R.string.hold_find),
+                "create_lookup_button", viewModel::lookupRecipient, enabled = viewModel.pickerVm.canLookup,
+            )
             selfAccount?.let { account ->
                 Text(stringResource(R.string.recipient_design_or),
                     color = HoldColors.Muted, style = MaterialTheme.typography.bodySmall,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
                         .testTag("create_recipient_or"))
-                HoldActionObject(
-                    title = stringResource(R.string.recipient_design_self_title),
-                    detail = "\u2068@" + account.handle + "\u2069",
-                    action = stringResource(R.string.recipient_design_self_action),
-                    onClick = viewModel::lookupPostcardForMyself,
-                    modifier = Modifier.fillMaxWidth().testTag("create_self_recipient"),
+                dev.hryshyn.remanence.ui.hold.HoldTextButton(onClick = viewModel::lookupPostcardForMyself,
                     enabled = state !is RecipientLookupUiState.LookingUp,
-                    compact = true,
-                )
+                    modifier = Modifier.fillMaxWidth().testTag("create_self_recipient")) {
+                    Text(stringResource(R.string.recipient_design_self_action), style = MaterialTheme.typography.bodyMedium)
+                }
             }
             Spacer(Modifier.height(8.dp))
             recentRecipientsContent()
@@ -447,10 +448,6 @@ private fun RecipientLookupContent(viewModel: CreateViewModel, recentRecipientsC
             }
         }
         Spacer(Modifier.height(16.dp))
-        ForwardAction(
-            stringResource(if (state is RecipientLookupUiState.LookingUp) R.string.hold_looking_up else R.string.hold_find),
-            "create_lookup_button", viewModel::lookupRecipient, enabled = viewModel.pickerVm.canLookup,
-        )
         // T186 M12: secondary pending sender entry (isolated EMAIL/PHONE
         // → R1 freeze → R3/R4/R5 → handwritten code). Renders nothing
         // unless the pending build flag is ON; the handle flow above is

@@ -452,6 +452,8 @@ private fun RootSurface(
                 historyViewModel.bind(owner)
                 historyViewModel.refresh()
             }
+            dev.hryshyn.remanence.ui.hold.ProductFrame(dev.hryshyn.remanence.ui.hold.ProductSection.SENT,
+                rootViewModel::returnToHome, {}, rootViewModel::openSettings) {
             dev.hryshyn.remanence.ui.history.HistoryScreen(
                 state = if (state.owner == owner) state else dev.hryshyn.remanence.ui.history.HistoryUiState(),
                 onBack = {
@@ -464,11 +466,16 @@ private fun RootSurface(
                 canCancel = historyViewModel::canCancel, onRequestCancel = historyViewModel::requestCancel,
                 onDismissCancel = historyViewModel::dismissCancel, onConfirmCancel = historyViewModel::confirmCancel,
                 copyCode = historyViewModel::codeForCopy,
+                onCreate = { rootViewModel.requestHomeIntent(HomeIntent.MAKE) },
+                showHeader = false,
             )
+            }
         },
         settingsContent = {
             val signedIn = authState as? AuthUiState.Authenticated
-            if (signedIn != null) dev.hryshyn.remanence.ui.settings.SettingsScreen(signedIn.handle, appLocale,
+            if (signedIn != null) dev.hryshyn.remanence.ui.hold.ProductFrame(dev.hryshyn.remanence.ui.hold.ProductSection.SETTINGS,
+                rootViewModel::returnToHome, rootViewModel::openHistory, {}) {
+            dev.hryshyn.remanence.ui.settings.SettingsScreen(signedIn.handle, appLocale,
                 onLocaleSelected, signedIn.activeKeyBundleId?.let { container.recoveryReadiness.isReady(signedIn.userId, it) } == true,
                 rootViewModel::returnToHome, rootViewModel::logout,
                 telemetryContent = { dev.hryshyn.remanence.ui.settings.TelemetryPreferences(container.telemetry) },
@@ -480,7 +487,8 @@ private fun RootSurface(
                     dev.hryshyn.remanence.ui.settings.SendAccessSettings(
                         signedIn.userId, container.apiStack.captureSessionRequestLease(),
                         sendAccessViewModel, rootViewModel::returnToHome)
-                })
+                }, showHeader = false)
+            }
         },
         createContent = {
             val createViewModel: CreateViewModel = viewModel(factory = factory)

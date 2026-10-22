@@ -111,9 +111,8 @@ class SettingsScreenTest {
         val after = status.fetchSemanticsNode().config[SemanticsProperties.Text].single().text
         assertNotEquals(before, after)
         status.assert(hasClickAction().not())
-        if (BuildConfig.REMANENCE_RECOVERY_ENABLED) {
-            compose.onNodeWithTag("settings_handle_permanent").assertExists()
-        } else compose.onNodeWithTag("settings_handle_permanent").assertDoesNotExist()
+        compose.onNodeWithTag("settings_handle_permanent").assertDoesNotExist()
+        compose.onNodeWithTag("settings_handle").assertExists()
     }
 
     @Test fun cancellingLogoutLeavesSessionAndSettingsOpen() {

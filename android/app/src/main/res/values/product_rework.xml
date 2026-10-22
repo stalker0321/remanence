@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="rework_setup_step">Step %1$d of %2$d</string>
+    <string name="rework_welcome_title">A place for your memories</string>
+    <string name="rework_welcome_detail">Start with your Google account. Next, choose your name and save a passkey to keep your memories private.</string>
+    <string name="rework_existing_account">Already here? Sign in with a passkey</string>
+    <string name="rework_new_account">Create an account</string>
+    <string name="rework_signin_title">Welcome back</string>
+    <string name="rework_signin_detail">Choose your existing Remanence passkey to open your account and restore access to your memories.</string>
+    <string name="rework_handle_detail">This is how people find you on Remanence. Your name becomes permanent when setup is complete.</string>
+    <string name="rework_create_key_title">Keep your memories yours</string>
+    <string name="rework_create_key_detail">Save a passkey in your password manager. When its dialog closes, come back here to verify the key.</string>
+    <string name="rework_key_create_note">You will need a passkey provider that supports encrypted account recovery. Saving the key is the first step; verification checks that it can protect your memories.</string>
+    <string name="rework_create_key">Create passkey</string>
+    <string name="rework_verify_title">Your passkey is saved</string>
+    <string name="rework_verify_detail">One more step: select the same key to check access and finish setting up your account.</string>
+    <string name="rework_key_saved">Saved in your passkey provider. Verification is still needed before your memories are ready.</string>
+    <string name="rework_verify_key">Verify passkey</string>
+    <string name="rework_verify_retry">Cancelled or cannot find the key? You can try verification again here. This does not create another passkey.</string>
+    <string name="rework_creation_unknown_title">Let’s check what was saved</string>
+    <string name="rework_creation_unknown_detail">The passkey provider may have saved your key, but confirmation did not finish. Check setup before continuing; do not create another key.</string>
+    <string name="rework_finishing_title">Finishing your account</string>
+    <string name="rework_nav_home">home</string>
+    <string name="rework_nav_sent">sent</string>
+    <string name="rework_history_empty_title">Your next postcard starts here</string>
+    <string name="rework_history_empty_detail">Once you send a postcard, its delivery and opening details will appear here.</string>
+    <string name="rework_history_make">Make a postcard</string>
+    <string name="rework_settings_detail">Your account, your preferences.</string>
+    <string name="rework_preferences">preferences</string>
+    <string name="rework_optional_feedback">Optional feedback</string>
+    <string name="rework_optional_feedback_detail">Choose what you share to improve Remanence</string>
+</resources>

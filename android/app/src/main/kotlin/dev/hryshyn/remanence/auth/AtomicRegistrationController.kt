@@ -6,10 +6,9 @@ import dev.hryshyn.remanence.core.data.network.*
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.recovery.RecoveryCredentialPort
 import dev.hryshyn.remanence.recovery.RecoveryCapabilityUnavailable
-import dev.hryshyn.remanence.recovery.RecoveryVerificationPending
 import dev.hryshyn.remanence.recovery.publicCredential
 import dev.hryshyn.remanence.ui.auth.credentialFailure
-import androidx.credentials.exceptions.NoCredentialException
+import dev.hryshyn.remanence.ui.auth.isCredentialUserCancellation
 import java.nio.ByteBuffer
 import java.util.UUID
 import kotlinx.coroutines.*
@@ -17,10 +16,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.*
 
-internal enum class AtomicPhase { IDLE, GOOGLE, HANDLE, SAVING, HANDLE_CONFLICT, ASSERTION_REQUIRED,
+internal enum class AtomicPhase { IDLE, GOOGLE, HANDLE, CREATE_REQUIRED, CREATING, VERIFY_REQUIRED, VERIFYING,
+    CREDENTIAL_UNKNOWN, SAVING, HANDLE_CONFLICT, ASSERTION_REQUIRED,
     UNKNOWN, REAUTHENTICATE, TERMINAL, RESTORE_REQUIRED, READY, EXISTING }
 internal data class AtomicView(val phase: AtomicPhase = AtomicPhase.IDLE, val busy: Boolean = false,
-    val error: String? = null, val sessionEstablished: Boolean = false)
+    val error: String? = null, val sessionEstablished: Boolean = false, val handle: String = "")
 
 /** No suspension inside local key installation; serialized with this controller's leave. */
 internal class AtomicPublication(val isCurrent: () -> Boolean, val install: (() -> Unit) -> Unit)
@@ -43,6 +43,9 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
     private class Owner(val lease: Long) {
         var setup: AtomicSetup? = null
         var credential: String? = null
+        // Public attestation only. Retained until the server acknowledges this exact creation.
+        var creation: JsonObject? = null
+        var creationUncertain = false
         var candidate: AtomicCandidate? = null
         var grant: String? = null
         var intent: JsonObject? = null
@@ -50,7 +53,7 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         val buffers = mutableSetOf<ByteArray>()
         fun wipe() {
             buffers.forEach { it.fill(0) }; buffers.clear(); candidate?.wipe()
-            candidate = null; intent = null; grant = null
+            candidate = null; intent = null; grant = null; creation = null
         }
     }
     private val ownerFence = Any()
@@ -86,13 +89,52 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         }
     }
 
-    suspend fun save(rawHandle: String, credentials: RecoveryCredentialPort) {
+    fun chooseHandle(rawHandle: String) {
         val current = owner ?: return
-        if (state.value.phase !in setOf(AtomicPhase.HANDLE, AtomicPhase.HANDLE_CONFLICT, AtomicPhase.ASSERTION_REQUIRED)) return
+        if (state.value.busy || state.value.phase !in setOf(AtomicPhase.HANDLE, AtomicPhase.HANDLE_CONFLICT)) return
+        val handle = try { NormalizedHandle.parse(rawHandle).value }
+        catch (_: IllegalArgumentException) { show(state.value.phase, "HANDLE_INVALID"); return }
+        mutable.value = state.value.copy(handle = handle, error = null)
+        show(if (current.credential != null || current.creation != null) AtomicPhase.VERIFY_REQUIRED else AtomicPhase.CREATE_REQUIRED)
+    }
+
+    /** One provider CREATE only. A successful return always stops at an explicit Verify action. */
+    suspend fun save(rawHandle: String, credentials: RecoveryCredentialPort) {
+        if (state.value.phase == AtomicPhase.HANDLE) chooseHandle(rawHandle)
+        val current = owner ?: return
+        if (state.value.phase != AtomicPhase.CREATE_REQUIRED) return
+        run(current) {
+            requireReserved(current); show(AtomicPhase.CREATING)
+            reconcileCredential(current)
+            if (current.credential == null) {
+                check(!current.creationUncertain && current.creation == null)
+                val options = post(current, AtomicAction.CREDENTIAL_OPTIONS, epoch(current))
+                val publicOptions = options.getValue("options").jsonObject
+                val id = UUID.fromString(current.setup!!.reservation.accountId)
+                val expected = Crypto.encode(ByteBuffer.allocate(16).putLong(id.mostSignificantBits).putLong(id.leastSignificantBits).array())
+                require(AtomicWire.text(publicOptions.getValue("user").jsonObject, "id", 24) == expected)
+                current.creationUncertain = true
+                val created = try { credentials.create(publicOptions) }
+                catch (failure: Exception) {
+                    if (isCredentialUserCancellation(failure)) current.creationUncertain = false
+                    throw failure
+                }
+                checkOwner(current)
+                current.creation = verifyBody(current, options, checkedCredential(created))
+                acknowledgeCreation(current)
+            }
+            show(AtomicPhase.VERIFY_REQUIRED)
+        }
+    }
+
+    /** User initiated normal GET, bound to the saved credential. Never creates a credential. */
+    suspend fun verify(rawHandle: String, credentials: RecoveryCredentialPort) {
+        val current = owner ?: return
+        if (state.value.phase !in setOf(AtomicPhase.VERIFY_REQUIRED, AtomicPhase.HANDLE_CONFLICT, AtomicPhase.ASSERTION_REQUIRED)) return
         run(current) {
             val handle = try { NormalizedHandle.parse(rawHandle).value }
             catch (_: IllegalArgumentException) { throw AtomicRegistrationRejected(0, "HANDLE_INVALID") }
-            requireReserved(current); show(AtomicPhase.SAVING)
+            requireReserved(current); show(AtomicPhase.VERIFYING)
             if (current.grant == null) authorize(current, credentials)
             checkOwner(current)
             val candidate = checkNotNull(current.candidate)
@@ -117,7 +159,12 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
             val reply = env.api.request(AtomicAction.STATUS, setup.reservation.id, setup.token, null)
             checkOwner(current)
             updateReservation(current, AtomicWire.reservation(reply.getValue("reservation").jsonObject))
+            current.credential = current.credential ?: current.setup!!.reservation.credentialIds.firstOrNull()
             if (current.setup!!.reservation.state == AtomicReservationState.RESERVED && current.intent != null) show(AtomicPhase.UNKNOWN)
+            else if (current.setup!!.reservation.state == AtomicReservationState.RESERVED && current.creation != null) {
+                if (current.credential == null) acknowledgeCreation(current)
+                show(AtomicPhase.VERIFY_REQUIRED)
+            }
             else displayReservation(current)
         }
     }
@@ -156,39 +203,34 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         previous?.setup.also { previous?.setup = null; previous?.credential = null }
     }
 
-    private suspend fun authorize(current: Owner, credentials: RecoveryCredentialPort) {
+    private suspend fun reconcileCredential(current: Owner) {
         val setup = current.setup!!
         val status = env.api.request(AtomicAction.STATUS, setup.reservation.id, setup.token, null)
         checkOwner(current)
         updateReservation(current, AtomicWire.reservation(status.getValue("reservation").jsonObject))
         requireReserved(current) // Reconcile lost credential verify ACK BEFORE another create.
         current.credential = current.credential ?: current.setup!!.reservation.credentialIds.firstOrNull()
-        var fresh = false
-        if (current.credential == null) {
-            val options = post(current, AtomicAction.CREDENTIAL_OPTIONS, epoch(current))
-            val publicOptions = options.getValue("options").jsonObject
-            val id = UUID.fromString(current.setup!!.reservation.accountId)
-            val expected = Crypto.encode(ByteBuffer.allocate(16).putLong(id.mostSignificantBits).putLong(id.leastSignificantBits).array())
-            require(AtomicWire.text(publicOptions.getValue("user").jsonObject, "id", 24) == expected)
-            val created = credentials.create(publicOptions); checkOwner(current)
-            val response = checkedCredential(created)
-            val verified = post(current, AtomicAction.CREDENTIAL_VERIFY, verifyBody(current, options, response))
-            AtomicWire.flag(verified, "registered", true); AtomicWire.flag(verified, "recoverable", false)
-            val credentialId = AtomicWire.binary(AtomicWire.text(verified, "credential_id", 2048))
-            require(credentialId == AtomicWire.text(response, "id", 2048))
-            current.credential = credentialId; fresh = true
-        }
+    }
+
+    private suspend fun acknowledgeCreation(current: Owner) {
+        val body = checkNotNull(current.creation)
+        val verified = post(current, AtomicAction.CREDENTIAL_VERIFY, body)
+        AtomicWire.flag(verified, "registered", true); AtomicWire.flag(verified, "recoverable", false)
+        val credentialId = AtomicWire.binary(AtomicWire.text(verified, "credential_id", 2048))
+        require(credentialId == AtomicWire.text(body.getValue("response").jsonObject, "id", 2048))
+        current.credential = credentialId; current.creation = null; current.creationUncertain = false
+    }
+
+    private suspend fun authorize(current: Owner, credentials: RecoveryCredentialPort) {
+        reconcileCredential(current)
+        checkNotNull(current.credential)
         val options = post(current, AtomicAction.SETUP_OPTIONS, buildJsonObject {
             put("epoch", current.setup!!.reservation.epoch); put("credential_id", current.credential)
         })
         val publicOptions = options.getValue("options").jsonObject
         val allowed = publicOptions.getValue("allowCredentials").jsonArray
         require(allowed.size == 1 && AtomicWire.text(allowed.single().jsonObject, "id", 2048) == current.credential)
-        val got = try { if (fresh) credentials.getImmediate(publicOptions) else credentials.get(publicOptions) }
-        catch (missing: NoCredentialException) {
-            if (!fresh) throw missing
-            throw RecoveryVerificationPending(current.credential!!)
-        }
+        val got = credentials.get(publicOptions)
         // Own the PRF before checking a possibly retired callback, so finally always wipes it.
         val secret = atomicPrf(got); current.buffers.add(secret)
         var retained = false
@@ -286,7 +328,12 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         current.setup = AtomicSetup(next, setup.token)
     }
     private fun displayReservation(current: Owner) = when (current.setup!!.reservation.state) {
-        AtomicReservationState.RESERVED -> show(AtomicPhase.HANDLE)
+        AtomicReservationState.RESERVED -> show(when {
+            current.credential != null && state.value.handle.isNotEmpty() -> AtomicPhase.VERIFY_REQUIRED
+            current.credential != null -> AtomicPhase.HANDLE
+            current.creationUncertain -> AtomicPhase.CREDENTIAL_UNKNOWN
+            else -> AtomicPhase.HANDLE
+        })
         AtomicReservationState.ACTIVE -> { current.wipe(); show(AtomicPhase.RESTORE_REQUIRED) }
         else -> { current.wipe(); show(AtomicPhase.TERMINAL) }
     }
@@ -314,13 +361,18 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
             val reason = when {
                 failure is AtomicRegistrationRejected -> failure.reason
                 failure is RecoveryCapabilityUnavailable -> "PRF_UNAVAILABLE"
-                failure is RecoveryVerificationPending -> "CREDENTIAL_PENDING"
                 else -> credentialFailure(failure)?.reason ?: "SETUP_REJECTED"
             }
             when (reason) {
                 "SETUP_AUTH_INVALID", "SETUP_REAUTH_REQUIRED", "STALE_SETUP", "RESERVATION_TERMINAL" -> { current.wipe(); show(AtomicPhase.REAUTHENTICATE, reason) }
                 "ALREADY_ACTIVE" -> { current.wipe(); show(AtomicPhase.RESTORE_REQUIRED, reason) }
-                else -> show(when (state.value.phase) { AtomicPhase.SAVING -> AtomicPhase.HANDLE; AtomicPhase.GOOGLE -> AtomicPhase.IDLE; else -> state.value.phase }, reason)
+                else -> show(when (state.value.phase) {
+                    AtomicPhase.CREATING -> if (current.creationUncertain) AtomicPhase.CREDENTIAL_UNKNOWN else AtomicPhase.CREATE_REQUIRED
+                    AtomicPhase.VERIFYING -> AtomicPhase.VERIFY_REQUIRED
+                    AtomicPhase.SAVING -> AtomicPhase.HANDLE
+                    AtomicPhase.GOOGLE -> AtomicPhase.IDLE
+                    else -> state.value.phase
+                }, reason)
             }
         } finally {
             if (owner === current) { current.job = null; mutable.value = state.value.copy(busy = false) }

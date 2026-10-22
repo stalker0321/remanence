@@ -56,18 +56,21 @@ class AtomicSignInEntryTest {
 
     @Test fun passkeyEntryNeedsNoGoogleAndFencesBothBusyDirections() {
         mount()
+        rule.onNodeWithTag("atomic_existing").performScrollTo().performClick()
         rule.onNodeWithTag("recovery_restore").performScrollTo().assertIsEnabled().performClick()
-        rule.onNodeWithTag("atomic_google").performScrollTo().assertIsNotEnabled()
-        rule.onNodeWithTag("atomic_leave").assertIsNotEnabled()
+        rule.onNodeWithTag("access_google").assertDoesNotExist()
+        rule.onNodeWithTag("atomic_new_account").assertIsNotEnabled()
         assertEquals(0, googleCalls); assertTrue(fixture.requests.isEmpty()); assertEquals(1, restoreCalls)
         rule.runOnIdle { recoveryBusy = false; view = AtomicView(AtomicPhase.GOOGLE, busy = true) }
         rule.onNodeWithTag("recovery_restore").performScrollTo().assertIsNotEnabled()
-        rule.onNodeWithTag("atomic_leave").assertIsEnabled()
+        rule.onNodeWithTag("atomic_new_account").assertIsNotEnabled()
     }
 
     @Test fun switchingToExistingPasskeyRetiresReservedOwnerWithoutNewKeys() {
         runBlocking { controller.begin(fixture.google) }
-        view = controller.state.value; mount()
+        // Returning to the welcome page retires the old setup before an existing sign-in.
+        controller.leave(); view = controller.state.value; mount()
+        rule.onNodeWithTag("atomic_existing").performScrollTo().performClick()
         rule.onNodeWithTag("recovery_restore").performScrollTo().performClick()
         runBlocking { controller.save("forbidden", fixture); controller.retry() }
         assertEquals(AtomicPhase.IDLE, controller.state.value.phase)
@@ -83,11 +86,31 @@ class AtomicSignInEntryTest {
 
     private fun render(name: String, large: Boolean) {
         mount(large)
-        rule.onNodeWithTag("atomic_google").performScrollTo().assertIsEnabled()
+        rule.onNodeWithTag("access_google").performScrollTo().assertIsEnabled()
         capture("$name-google")
+        rule.onNodeWithTag("atomic_existing").performScrollTo().performClick()
         rule.onNodeWithTag("recovery_restore").performScrollTo().assertIsDisplayed().assertIsEnabled()
         capture("$name-passkey")
         assertEquals(0, googleCalls); assertEquals(0, restoreCalls)
+    }
+
+    @Test fun savedStageHasOnlyExplicitVerifyAndRetainsItAfterCancellation() {
+        view = AtomicView(AtomicPhase.VERIFY_REQUIRED, handle = "synthetic_handle")
+        var verifies = 0
+        rule.setContent { HoldTheme { Surface(Modifier.fillMaxSize()) { AccessPage {
+            AtomicRegistrationContent(view, "synthetic_handle", {}, {}, {}, {}, {}, {}, {}, {}, false,
+                onVerify = { verifies++ }) { _, _ -> error("existing sign-in must not compete with verification") }
+        } } } }
+        rule.onNodeWithTag("atomic_verify").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(1, verifies)
+        rule.onNodeWithTag("atomic_create").assertDoesNotExist()
+        rule.onNodeWithTag("atomic_handle").assertDoesNotExist()
+        rule.onNodeWithTag("access_google").assertDoesNotExist()
+        capture("saved")
+        rule.runOnIdle { view = view.copy(error = "PROVIDER_CANCELLED") }
+        rule.onNodeWithTag("atomic_verify").performScrollTo().assertIsEnabled()
+        rule.onNodeWithTag("atomic_key_status").assertExists()
+        capture("saved-cancelled")
     }
 
     private fun capture(name: String) {
@@ -96,7 +119,7 @@ class AtomicSignInEntryTest {
             val decor = rule.activity.window.decorView
             val bitmap = android.graphics.Bitmap.createBitmap(decor.width, decor.height, android.graphics.Bitmap.Config.ARGB_8888)
             decor.draw(android.graphics.Canvas(bitmap))
-            val output = File("build/t423-review/atomic-$name.png")
+            val output = File("build/t454-pixels/atomic-$name.png")
             output.parentFile?.mkdirs()
             output.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
             bitmap.recycle()

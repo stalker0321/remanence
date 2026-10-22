@@ -30,6 +30,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
     var verified by remember { mutableStateOf(false) }
     var showCode by remember { mutableStateOf(false) }
     var offerAnotherManager by remember { mutableStateOf(false) }
+    var awaitingVerification by remember { mutableStateOf(false) }
     var codeInput by remember { mutableStateOf("") }
     DisposableEffect(code) {
         val shown = code
@@ -47,7 +48,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
             try { action() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: RecoveryCapabilityUnavailable) {
-                offerAnotherManager = hasIdentity
+                offerAnotherManager = false
                 message = R.string.recovery_prf_missing
             }
             catch (pending: RecoveryVerificationPending) {
@@ -61,10 +62,12 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
                 verified = presentation.verified
                 offerAnotherManager = presentation.offerAnotherManager
                 message = presentation.message
+                awaitingVerification = true
             }
+            catch (_: RecoveryCreationUncertain) { message = R.string.rework_creation_unknown_detail }
             catch (failure: Exception) {
                 message = recoveryFailureMessage(failure, protecting)
-                if (!isCredentialUserCancellation(failure)) offerAnotherManager = hasIdentity
+                offerAnotherManager = false
             }
             finally { busy = false; onBusyChange(false) }
         }
@@ -72,7 +75,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
     RecoveryPanel(hasIdentity, recoveryRequired, mandatorySetup, passkeysAvailable, busy || !enabled, verified,
         offerAnotherManager, message, code != null, showCode, codeInput,
         onProtect = { launch(protecting = true) {
-                code = recovery.protect(credentials)
+                code = recovery.protect(credentials, verify = awaitingVerification)
                 verified = true
                 message = R.string.recovery_verified
         } },
@@ -96,6 +99,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
                 try { recovery.restoreWithCode(entered); onRecovered() } finally { entered.fill(0) }
         } },
         onHideCode = { code = null },
+        awaitingVerification = awaitingVerification,
         codeContent = { code?.let { Text(AccountRecoveryCrypto.encode(it)) } },
     )
 }

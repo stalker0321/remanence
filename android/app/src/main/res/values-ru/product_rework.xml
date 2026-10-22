@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="rework_setup_step">Шаг %1$d из %2$d</string>
+    <string name="rework_welcome_title">Место для ваших воспоминаний</string>
+    <string name="rework_welcome_detail">Начните с аккаунта Google. Затем выберите имя и сохраните ключ доступа для защиты воспоминаний.</string>
+    <string name="rework_existing_account">Уже есть аккаунт? Войти с ключом доступа</string>
+    <string name="rework_new_account">Создать аккаунт</string>
+    <string name="rework_signin_title">С возвращением</string>
+    <string name="rework_signin_detail">Выберите свой ключ доступа Remanence, чтобы войти и восстановить доступ к воспоминаниям.</string>
+    <string name="rework_handle_detail">По этому имени вас найдут в Remanence. После завершения настройки его нельзя изменить.</string>
+    <string name="rework_create_key_title">Ваши воспоминания — только ваши</string>
+    <string name="rework_create_key_detail">Сохраните ключ доступа в менеджере паролей. Когда окно закроется, вернитесь сюда, чтобы проверить ключ.</string>
+    <string name="rework_key_create_note">Нужен менеджер ключей с поддержкой зашифрованного восстановления. Сначала сохраним ключ, затем проверим, может ли он защитить ваши воспоминания.</string>
+    <string name="rework_create_key">Создать ключ доступа</string>
+    <string name="rework_verify_title">Ключ доступа сохранён</string>
+    <string name="rework_verify_detail">Ещё один шаг: выберите тот же ключ, чтобы проверить доступ и завершить настройку аккаунта.</string>
+    <string name="rework_key_saved">Ключ сохранён у провайдера. Доступ к воспоминаниям будет готов после проверки.</string>
+    <string name="rework_verify_key">Проверить ключ доступа</string>
+    <string name="rework_verify_retry">Отменили выбор или не нашли ключ? Повторите проверку здесь. Новый ключ не создаётся.</string>
+    <string name="rework_creation_unknown_title">Проверим, что сохранилось</string>
+    <string name="rework_creation_unknown_detail">Возможно, провайдер сохранил ключ, но подтверждение не завершилось. Проверьте настройку перед продолжением; не создавайте ещё один ключ.</string>
+    <string name="rework_finishing_title">Завершаем настройку</string>
+    <string name="rework_nav_home">главная</string>
+    <string name="rework_nav_sent">отправлено</string>
+    <string name="rework_history_empty_title">Здесь начнётся новая открытка</string>
+    <string name="rework_history_empty_detail">После отправки здесь появятся сведения о доставке и открытии открытки.</string>
+    <string name="rework_history_make">Создать открытку</string>
+    <string name="rework_settings_detail">Ваш аккаунт. Ваши настройки.</string>
+    <string name="rework_preferences">настройки</string>
+    <string name="rework_optional_feedback">Необязательная обратная связь</string>
+    <string name="rework_optional_feedback_detail">Выберите, чем делиться для улучшения Remanence</string>
+</resources>

@@ -41,6 +41,8 @@ fun HistoryScreen(
     onDismissCancel: () -> Unit,
     onConfirmCancel: () -> Unit,
     copyCode: (String) -> String?,
+    onCreate: (() -> Unit)? = null,
+    showHeader: Boolean = true,
 ) {
     val selected = state.selected
     val back = if (state.selectedKey != null) onBackToList else onBack
@@ -51,17 +53,19 @@ fun HistoryScreen(
     }
     BackHandler(onBack = if (state.confirmKey != null) onDismissCancel else back)
     Column(Modifier.fillMaxSize().background(HoldColors.Paper).testTag("history_screen")) {
-        HoldFlowHeader(onBack = back, onClose = onBack, testKey = "history")
+        if (showHeader || state.selectedKey != null) HoldFlowHeader(onBack = back, onClose = onBack, testKey = "history")
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().testTag("history_scroll"),
             state = if (state.selectedKey != null) detailScroll else listScroll,
-            contentPadding = PaddingValues(horizontal = HoldSpace.pageGutter(), vertical = 16.dp),
+            contentPadding = PaddingValues(horizontal = HoldSpace.pageGutter(), vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item {
-                Text(stringResource(R.string.history_title), style = MaterialTheme.typography.headlineLarge,
-                    modifier = Modifier.semantics { heading() })
-                Text(stringResource(R.string.history_metadata_only), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.history_title), style = MaterialTheme.typography.headlineLarge,
+                        modifier = Modifier.semantics { heading() })
+                    Text(stringResource(R.string.history_metadata_only), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
+                }
             }
             state.outcome?.let { outcome -> item {
                 Text(stringResource(when (outcome) {
@@ -78,7 +82,14 @@ fun HistoryScreen(
                 Text(stringResource(historyFailureCopy(failure)), Modifier.testTag("history_error"), color = HoldColors.Error)
             } }
             if (state.loaded && !state.loading && state.error == null && state.items.isEmpty()) item {
-                Text(stringResource(R.string.history_empty), Modifier.testTag("history_empty"))
+                Column(Modifier.fillMaxWidth().padding(vertical = 24.dp).testTag("history_empty"),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(stringResource(R.string.rework_history_empty_title), style = MaterialTheme.typography.titleLarge)
+                    Text(stringResource(R.string.rework_history_empty_detail), style = MaterialTheme.typography.bodyMedium, color = HoldColors.Muted)
+                    if (onCreate != null) HoldButton(onClick = onCreate, modifier = Modifier.testTag("history_create")) {
+                        Text(stringResource(R.string.rework_history_make))
+                    }
+                }
             }
             if (selected != null) {
                 item {

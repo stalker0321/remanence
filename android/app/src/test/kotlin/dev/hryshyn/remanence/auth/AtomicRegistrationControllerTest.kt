@@ -19,9 +19,9 @@ class AtomicRegistrationControllerTest {
     @Test fun normalCommitReadsPermanentBytesAndOnlyThenPublishesReadbackKeys(): Unit = runBlocking {
         val f = Fixture(); val c = f.controller()
         c.begin(f.google); assertEquals(0, f.generations); assertNull(f.published)
-        c.save("@My.Name", f)
+        c.complete("@My.Name", f)
         assertEquals(AtomicPhase.READY, c.state.value.phase)
-        assertEquals(1, f.generations); assertEquals(1, f.creates); assertEquals(1, f.immediateGets)
+        assertEquals(1, f.generations); assertEquals(1, f.creates); assertEquals(0, f.immediateGets)
         assertEquals(listOf("status", "record", "publish-keys"), f.reads)
         val keys = checkNotNull(f.installed)
         assertEquals(f.saved!!.getValue("key_bundle").jsonObject["encryption_public_keyset"], JsonPrimitive(Crypto.encode(Crypto.public(keys.encryption))))
@@ -33,36 +33,36 @@ class AtomicRegistrationControllerTest {
     @Test fun missingPrfOrRejectedAssertionCannotGenerateOrFinalize(): Unit = runBlocking {
         for (mode in listOf("no-prf", "rejected-proof")) {
             val f = Fixture(); f.providerMode = mode; val c = f.controller()
-            c.begin(f.google); c.save("valid", f)
+            c.begin(f.google); c.complete("valid", f)
             assertEquals(0, f.generations); assertNull(f.saved); assertNull(f.installed)
             assertFalse(c.state.value.sessionEstablished)
         }
     }
 
-    @Test fun missingImmediateCredentialRetriesSameIdWithOrdinaryDiscovery(): Unit = runBlocking {
+    @Test fun explicitVerificationRetriesSameIdWithOrdinaryDiscovery(): Unit = runBlocking {
         val f = Fixture(); f.providerMode = "pending"; val c = f.controller()
-        c.begin(f.google); c.save("valid", f)
-        assertEquals("CREDENTIAL_PENDING", c.state.value.error); assertEquals(0, f.generations)
-        f.providerMode = "ok"; c.save("valid", f)
-        assertEquals(1, f.creates); assertEquals(1, f.immediateGets); assertEquals(1, f.discoveryGets)
+        c.begin(f.google); c.complete("valid", f)
+        assertEquals("PROVIDER_NO_CREDENTIAL", c.state.value.error); assertEquals(0, f.generations)
+        f.providerMode = "ok"; c.complete("valid", f)
+        assertEquals(1, f.creates); assertEquals(1, f.immediateGets); assertEquals(2, f.discoveryGets)
         assertEquals(AtomicPhase.READY, c.state.value.phase)
     }
 
     @Test fun lostCredentialVerificationAckReconcilesStatusBeforeAnotherCreate(): Unit = runBlocking {
         val f = Fixture(); f.loseCredentialAck = true; val c = f.controller()
-        c.begin(f.google); c.save("valid", f)
+        c.begin(f.google); c.complete("valid", f)
         assertEquals(0, f.generations)
-        c.save("valid", f)
+        c.complete("valid", f)
         assertEquals(1, f.creates); assertEquals(1, f.discoveryGets)
         assertEquals(AtomicPhase.READY, c.state.value.phase)
     }
 
     @Test fun handleConflictRetainsEveryCandidateByteAndLiveGrant(): Unit = runBlocking {
         val f = Fixture(); f.finalMode = "handle"; val c = f.controller()
-        c.begin(f.google); c.save("taken", f)
+        c.begin(f.google); c.complete("taken", f)
         val first = f.finals.single()
         assertEquals(AtomicPhase.HANDLE_CONFLICT, c.state.value.phase)
-        f.finalMode = "ok"; c.save("other", f)
+        f.finalMode = "ok"; c.complete("other", f)
         val second = f.finals.last()
         assertEquals(first["key_bundle"], second["key_bundle"]); assertEquals(first["record"], second["record"])
         assertEquals(first["final_authorization"], second["final_authorization"])
@@ -72,11 +72,11 @@ class AtomicRegistrationControllerTest {
 
     @Test fun sameCredentialReassertionMustOpenOriginalCandidateBeforeRenewedGrant(): Unit = runBlocking {
         val f = Fixture(); f.finalMode = "grant"; val c = f.controller()
-        c.begin(f.google); c.save("valid", f)
+        c.begin(f.google); c.complete("valid", f)
         assertEquals(AtomicPhase.ASSERTION_REQUIRED, c.state.value.phase)
-        f.finalMode = "ok"; f.prf = ByteArray(32) { 9 }; c.save("valid", f)
+        f.finalMode = "ok"; f.prf = ByteArray(32) { 9 }; c.complete("valid", f)
         assertEquals(1, f.finals.size); assertEquals(1, f.generations); assertNull(f.published)
-        f.prf = ByteArray(32) { 7 }; c.save("valid", f)
+        f.prf = ByteArray(32) { 7 }; c.complete("valid", f)
         assertEquals(2, f.finals.size); assertEquals(1, f.generations)
         assertEquals(f.finals.first()["record"], f.finals.last()["record"])
         assertEquals(AtomicPhase.READY, c.state.value.phase)
@@ -84,11 +84,11 @@ class AtomicRegistrationControllerTest {
 
     @Test fun reservedStatusIsNotFenceAndUnknownRetryIsByteExact(): Unit = runBlocking {
         val f = Fixture(); f.finalMode = "lost-before"; val c = f.controller()
-        c.begin(f.google); c.save("valid", f)
+        c.begin(f.google); c.complete("valid", f)
         assertEquals(AtomicPhase.UNKNOWN, c.state.value.phase)
         val original = f.finals.single()
         c.resolve(); assertEquals(AtomicPhase.UNKNOWN, c.state.value.phase)
-        c.save("replacement", f); assertEquals(1, f.finals.size)
+        c.complete("replacement", f); assertEquals(1, f.finals.size)
         f.finalMode = "ok"; c.retry()
         assertEquals(original, f.finals.last()); assertEquals(1, f.generations)
         assertEquals(AtomicPhase.READY, c.state.value.phase)
@@ -96,7 +96,7 @@ class AtomicRegistrationControllerTest {
 
     @Test fun committedReplyLossReplayAndFreshOwnerKeepOriginalIdentity(): Unit = runBlocking {
         val f = Fixture(); f.finalMode = "lost-after"; val c = f.controller()
-        c.begin(f.google); c.save("original", f)
+        c.begin(f.google); c.complete("original", f)
         val original = checkNotNull(f.saved)
         assertEquals(AtomicPhase.UNKNOWN, c.state.value.phase); assertNull(f.published)
         c.retry(); assertEquals(AtomicPhase.RESTORE_REQUIRED, c.state.value.phase)
@@ -114,7 +114,7 @@ class AtomicRegistrationControllerTest {
     @Test fun corruptOrUnavailableReadbackPublishesOnlyRestoreRequiredNeverReady(): Unit = runBlocking {
         for (mode in listOf("corrupt", "unavailable")) {
             val f = Fixture(); f.readMode = mode; val c = f.controller()
-            c.begin(f.google); c.save("valid", f)
+            c.begin(f.google); c.complete("valid", f)
             assertEquals(AtomicPhase.RESTORE_REQUIRED, c.state.value.phase)
             assertTrue(c.state.value.sessionEstablished); assertNull(f.installed)
             assertEquals(1, f.generations); assertEquals("publish-locked", f.reads.last())
@@ -123,10 +123,10 @@ class AtomicRegistrationControllerTest {
 
     @Test fun mismatchedAcceptedIntentStaysUnknownAndNeverInstalls(): Unit = runBlocking {
         val f = Fixture(); f.finalMode = "wrong-outcome"; val c = f.controller()
-        c.begin(f.google); c.save("valid", f)
+        c.begin(f.google); c.complete("valid", f)
         assertEquals(AtomicPhase.UNKNOWN, c.state.value.phase)
         assertNull(f.installed); assertNull(f.published); assertTrue(f.reads.isEmpty())
-        c.save("replacement", f); assertEquals(1, f.finals.size); assertEquals(1, f.generations)
+        c.complete("replacement", f); assertEquals(1, f.finals.size); assertEquals(1, f.generations)
     }
 
     @Test fun restartOutcomeOnlyReplayRequiresFreshProofNotAnotherSuccessor(): Unit = runBlocking {
@@ -138,10 +138,10 @@ class AtomicRegistrationControllerTest {
 
     @Test fun expired410NeedsFreshProofThenExplicitRestartWithoutNewKeys(): Unit = runBlocking {
         val f = Fixture(); f.finalMode = "handle"; val c = f.controller()
-        c.begin(f.google); c.save("taken", f); f.reservationState = "EXPIRED"
+        c.begin(f.google); c.complete("taken", f); f.reservationState = "EXPIRED"
         c.cancelReservation()
         assertEquals(AtomicPhase.REAUTHENTICATE, c.state.value.phase); assertEquals("RESERVATION_TERMINAL", c.state.value.error)
-        c.restart(); c.retry(); c.save("replacement", f)
+        c.restart(); c.retry(); c.complete("replacement", f)
         assertEquals(0, f.restarts); assertEquals(1, f.generations)
         val old = f.account
         c.begin(f.google); assertEquals(AtomicPhase.TERMINAL, c.state.value.phase)
@@ -154,7 +154,7 @@ class AtomicRegistrationControllerTest {
         val f = Fixture(); val c = f.controller()
         c.begin(f.google); c.cancelReservation(); c.cancelReservation()
         assertEquals(AtomicPhase.REAUTHENTICATE, c.state.value.phase); assertEquals(0, f.generations)
-        c.begin(f.google); c.restart(); f.finalMode = "lost-after"; c.save("original", f)
+        c.begin(f.google); c.restart(); f.finalMode = "lost-after"; c.complete("original", f)
         val original = f.saved
         c.cancelReservation()
         assertEquals(AtomicPhase.RESTORE_REQUIRED, c.state.value.phase)
@@ -184,7 +184,7 @@ class AtomicRegistrationControllerTest {
         withTimeout(5000) {
             val f = Fixture(); f.finalMode = "handle"; f.hold = AtomicAction.FINALIZE; val c = f.controller()
             c.begin(f.google)
-            val old = launch { c.save("taken", f) }
+            val old = launch { c.complete("taken", f) }
             f.reached.await(); c.leave(); f.hold = null
             c.begin(f.google); assertEquals(AtomicPhase.HANDLE, c.state.value.phase)
             f.release.complete(Unit); old.join()
@@ -196,7 +196,7 @@ class AtomicRegistrationControllerTest {
         val f = Fixture(); f.retireOnRead = true; val c = f.controller()
         c.begin(f.google)
         // A separate coroutine owns the cancelled operation, not this test's scope.
-        val request = launch { c.save("valid", f) }; request.join()
+        val request = launch { c.complete("valid", f) }; request.join()
         assertNull(f.installed); assertNull(f.published); assertEquals(AtomicPhase.IDLE, c.state.value.phase)
     }
 
@@ -213,7 +213,7 @@ class AtomicRegistrationControllerTest {
             for (path in listOf("status", "record")) {
                 val f = Fixture(); f.holdRead = path; val c = f.controller()
                 c.begin(f.google)
-                val saving = launch { c.save("original", f) }
+                val saving = launch { c.complete("original", f) }
                 f.readReached.await() // Login already parsed; this is NOT a pre-response cancellation.
                 assertNotNull(f.saved); assertNull(f.published)
                 c.leave(); f.readRelease.complete(Unit); saving.join()
@@ -230,7 +230,7 @@ class AtomicRegistrationControllerTest {
             for (path in listOf("status", "record")) {
                 val f = Fixture(); f.holdRead = path; val c = f.controller()
                 c.begin(f.google)
-                val saving = launch { c.save("original", f) }
+                val saving = launch { c.complete("original", f) }
                 f.readReached.await()
                 val newer = f.replaceWithNewOwner()
                 f.readRelease.complete(Unit); saving.join()
@@ -244,7 +244,7 @@ class AtomicRegistrationControllerTest {
     @Test fun adoptedReadyAndRestoreRequiredSessionsAreNeverRevoked(): Unit = runBlocking {
         for (mode in listOf("ok", "corrupt", "unavailable")) {
             val f = Fixture(); f.readMode = mode; val c = f.controller()
-            c.begin(f.google); c.save("original", f)
+            c.begin(f.google); c.complete("original", f)
             assertTrue(c.state.value.sessionEstablished)
             assertEquals(if (mode == "ok") AtomicPhase.READY else AtomicPhase.RESTORE_REQUIRED, c.state.value.phase)
             c.leave() // Leaving after adoption is not logout or ACTIVE rollback.
@@ -256,11 +256,76 @@ class AtomicRegistrationControllerTest {
         withTimeout(10000) {
             val f = Fixture(); f.holdRead = "record"; f.logoutFails = true; val c = f.controller()
             c.begin(f.google)
-            val saving = launch { c.save("original", f) }
+            val saving = launch { c.complete("original", f) }
             f.readReached.await(); c.leave(); f.readRelease.complete(Unit); saving.join()
             assertEquals(listOf("pm_at_synthetic"), f.revoked)
             assertNull(f.published); assertEquals(AtomicPhase.IDLE, c.state.value.phase)
         }
+    }
+
+    /** Explicit actions composed only by tests exercising the later publication/lifetime stages. */
+    private suspend fun AtomicRegistrationController.complete(handle: String, credentials: RecoveryCredentialPort) {
+        if (state.value.phase == AtomicPhase.HANDLE) chooseHandle(handle)
+        if (state.value.phase == AtomicPhase.CREDENTIAL_UNKNOWN) resolve()
+        if (state.value.phase == AtomicPhase.CREATE_REQUIRED) {
+            save(handle, credentials)
+            if (state.value.phase != AtomicPhase.VERIFY_REQUIRED) return
+        }
+        verify(handle, credentials)
+    }
+
+    @Test fun creationStopsBeforeAnyAssertionAndVerificationCannotCreate(): Unit = runBlocking {
+        val f = Fixture(); val c = f.controller()
+        c.begin(f.google); c.chooseHandle("valid"); c.save("valid", f)
+        assertEquals(AtomicPhase.VERIFY_REQUIRED, c.state.value.phase)
+        assertEquals(1, f.creates); assertEquals(0, f.discoveryGets); assertEquals(0, f.immediateGets)
+        assertEquals(0, f.generations); assertNull(f.installed)
+        assertFalse(f.requests.any { it.first == AtomicAction.SETUP_OPTIONS })
+        c.save("valid", f)
+        assertEquals(1, f.creates); assertEquals(0, f.discoveryGets)
+        c.verify("valid", f)
+        assertEquals(AtomicPhase.READY, c.state.value.phase)
+        assertEquals(1, f.creates); assertEquals(1, f.discoveryGets); assertEquals(0, f.immediateGets)
+    }
+
+    @Test fun savedCredentialSurvivesCancellationAndMissingPrfWithoutAnotherCreate(): Unit = runBlocking {
+        val f = Fixture(); val c = f.controller()
+        c.begin(f.google); c.save("valid", f)
+        c.verify("valid", object : RecoveryCredentialPort by f {
+            override suspend fun get(options: JsonObject): JsonObject =
+                throw androidx.credentials.exceptions.GetCredentialCancellationException()
+        })
+        assertEquals(AtomicPhase.VERIFY_REQUIRED, c.state.value.phase)
+        assertEquals("PROVIDER_CANCELLED", c.state.value.error)
+        f.providerMode = "no-prf"; c.verify("valid", f)
+        assertEquals(AtomicPhase.VERIFY_REQUIRED, c.state.value.phase)
+        assertEquals("PRF_UNAVAILABLE", c.state.value.error)
+        assertEquals(1, f.creates); assertEquals(0, f.generations); assertNull(f.published)
+        f.providerMode = "ok"; c.verify("valid", f)
+        assertEquals(AtomicPhase.READY, c.state.value.phase); assertEquals(1, f.creates)
+    }
+
+    @Test fun lostUnstagedAcknowledgementReplaysPublicProofWithoutSecondCreate(): Unit = runBlocking {
+        val f = Fixture()
+        var loseBeforeStage = true
+        val port = object : AtomicRegistrationPort by f {
+            override suspend fun request(action: AtomicAction, reservation: String?, token: String?, body: JsonObject?): JsonObject {
+                if (action == AtomicAction.CREDENTIAL_VERIFY && loseBeforeStage) {
+                    loseBeforeStage = false
+                    throw IOException("before staging")
+                }
+                return f.request(action, reservation, token, body)
+            }
+        }
+        val c = AtomicRegistrationController(AtomicEnvironment(port, { 0 }, { true },
+            { _, _ -> error("no readback expected") }, { _, _, _, _ -> error("no publish expected") },
+            { false }, {}, cryptoDispatcher = Dispatchers.Unconfined))
+        c.begin(f.google); c.save("valid", f)
+        assertEquals(AtomicPhase.CREDENTIAL_UNKNOWN, c.state.value.phase)
+        c.save("valid", f); assertEquals(1, f.creates)
+        c.resolve()
+        assertEquals(AtomicPhase.VERIFY_REQUIRED, c.state.value.phase)
+        assertEquals(1, f.creates); assertEquals(0, f.discoveryGets)
     }
 
     internal class Fixture : AtomicRegistrationPort, RecoveryCredentialPort {
@@ -402,7 +467,11 @@ class AtomicRegistrationControllerTest {
             put("access_expires_at", "2026-10-21T10:10:00Z"); put("refresh_expires_at", "2026-11-21T10:00:00Z")
         }
         override suspend fun create(options: JsonObject): JsonObject { creates++; return credential(false) }
-        override suspend fun get(options: JsonObject): JsonObject { discoveryGets++; assertions++; return credential(true) }
+        override suspend fun get(options: JsonObject): JsonObject {
+            discoveryGets++
+            if (providerMode == "pending") throw NoCredentialException()
+            assertions++; return credential(true)
+        }
         override suspend fun getImmediate(options: JsonObject): JsonObject {
             immediateGets++
             if (providerMode == "pending") throw NoCredentialException()

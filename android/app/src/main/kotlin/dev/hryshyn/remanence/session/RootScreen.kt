@@ -207,6 +207,11 @@ fun AuthenticatedHomeChrome(
     onSettings: (() -> Unit)? = null,
     onHistory: (() -> Unit)? = null,
 ) {
+    if (onSettings != null && onHistory != null) {
+        dev.hryshyn.remanence.ui.hold.ProductFrame(
+            dev.hryshyn.remanence.ui.hold.ProductSection.HOME, {}, onHistory, onSettings, homeContent)
+        return
+    }
     Column(modifier = modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             // T186: handleless receive-only accounts show no handle row —

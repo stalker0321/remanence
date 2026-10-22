@@ -48,7 +48,8 @@ class AtomicProviderFailureTest {
             c.save("synthetic_handle", object : RecoveryCredentialPort by f {
                 override suspend fun create(options: JsonObject): JsonObject { calls++; throw failure }
             })
-            assertEquals(reason, c.state.value.error); assertEquals(AtomicPhase.HANDLE, c.state.value.phase)
+            assertEquals(reason, c.state.value.error)
+            assertEquals(if (failure is CreateCredentialCancellationException) AtomicPhase.CREATE_REQUIRED else AtomicPhase.CREDENTIAL_UNKNOWN, c.state.value.phase)
             assertFalse(c.state.value.busy); assertFalse(c.state.value.sessionEstablished)
             assertEquals(1, calls); assertEquals(0, f.generations); assertNull(f.published); assertNull(f.installed)
             assertFalse(f.requests.any { it.first in setOf(AtomicAction.CREDENTIAL_VERIFY, AtomicAction.SETUP_OPTIONS, AtomicAction.FINALIZE) })
@@ -59,28 +60,30 @@ class AtomicProviderFailureTest {
         for ((failure, reason) in getFailures()) {
             val f = AtomicRegistrationControllerTest.Fixture(); f.registered = true
             val c = f.controller(); var calls = 0; c.begin(f.google)
-            c.save("synthetic_handle", object : RecoveryCredentialPort by f {
+            c.chooseHandle("synthetic_handle")
+            c.verify("synthetic_handle", object : RecoveryCredentialPort by f {
                 override suspend fun get(options: JsonObject): JsonObject { calls++; throw failure }
             })
-            assertEquals(reason, c.state.value.error); assertEquals(AtomicPhase.HANDLE, c.state.value.phase)
+            assertEquals(reason, c.state.value.error); assertEquals(AtomicPhase.VERIFY_REQUIRED, c.state.value.phase)
             assertEquals(1, calls); assertEquals(0, f.creates); assertEquals(0, f.generations)
             assertFalse(f.requests.any { it.first == AtomicAction.SETUP_VERIFY || it.first == AtomicAction.FINALIZE })
             assertNull(f.published); assertNull(f.installed)
         }
     }
 
-    @Test fun freshMissingImmediateCredentialKeepsExistingPendingContinuation(): Unit = runBlocking {
+    @Test fun freshCreationNeverAttemptsImmediateOrOrdinaryGet(): Unit = runBlocking {
         val f = AtomicRegistrationControllerTest.Fixture(); f.providerMode = "pending"; val c = f.controller()
         c.begin(f.google); c.save("synthetic_handle", f)
-        assertEquals("CREDENTIAL_PENDING", c.state.value.error)
-        assertEquals(1, f.creates); assertEquals(1, f.immediateGets); assertEquals(0, f.discoveryGets)
+        assertNull(c.state.value.error); assertEquals(AtomicPhase.VERIFY_REQUIRED, c.state.value.phase)
+        assertEquals(1, f.creates); assertEquals(0, f.immediateGets); assertEquals(0, f.discoveryGets)
         assertEquals(0, f.generations); assertNull(f.published)
     }
 
     @Test fun missingPrfIsNeitherProviderCancelNorCommittedAccount(): Unit = runBlocking {
         val f = AtomicRegistrationControllerTest.Fixture(); f.providerMode = "no-prf"; val c = f.controller()
         c.begin(f.google); c.save("synthetic_handle", f)
-        assertEquals("PRF_UNAVAILABLE", c.state.value.error); assertEquals(AtomicPhase.HANDLE, c.state.value.phase)
+        c.verify("synthetic_handle", f)
+        assertEquals("PRF_UNAVAILABLE", c.state.value.error); assertEquals(AtomicPhase.VERIFY_REQUIRED, c.state.value.phase)
         assertEquals(0, f.generations); assertNull(f.saved); assertNull(f.published); assertNull(f.installed)
     }
 
@@ -108,6 +111,7 @@ class AtomicProviderFailureTest {
                 }
             }) }
             arrived.await(); assertNotNull(c.leave()); c.begin(f.google); c.save("new_handle", f)
+            c.verify("new_handle", f)
             val ready = c.state.value; val keys = checkNotNull(f.installed); val login = checkNotNull(f.published)
             assertEquals(AtomicPhase.READY, ready.phase)
             release.complete(Unit); old.join()

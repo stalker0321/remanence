@@ -34,10 +34,14 @@ async function result(page, index, status = 200) {
   await page.waitForTimeout(100)
 }
 try {
-  await scenario('found-then-edit', async (page) => {
+  await scenario('found-then-change-and-edit', async (page) => {
     await find(page, 'alice_qa')
     await result(page, 0)
     assert.equal((await state(page)).pending, 'alice_qa')
+    // The confirmation is deliberately a separate screen. Return through the
+    // real Change action before editing; no direct controller reset in a test.
+    await page.getByRole('button', { name: 'change recipient', exact: true }).click()
+    assert.equal((await state(page)).pending, null)
     await input(page).fill('bob_qa')
     assert.equal((await state(page)).pending, null)
     assert.equal(await confirm(page).count(), 0)
@@ -61,10 +65,11 @@ try {
     await result(page, 1)
     assert.equal((await state(page)).pending, 'bob_qa')
   })
-  await scenario('self-then-edit', async (page) => {
-    await page.locator('.handle-form button[type=button]').click()
+  await scenario('self-then-change-and-edit', async (page) => {
+    await page.getByRole('button', { name: 'for myself', exact: true }).click()
     await result(page, 0)
     assert.equal((await state(page)).pending, 'self_qa')
+    await page.getByRole('button', { name: 'change recipient', exact: true }).click()
     await input(page).fill('bob_qa')
     assert.equal((await state(page)).pending, null)
   })

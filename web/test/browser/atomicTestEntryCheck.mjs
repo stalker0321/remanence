@@ -174,7 +174,7 @@ try {
   await shot(page, 'fresh-existing-restored')
   for (const kind of ['noPrf', 'cancel']) {
     reset(); page = await fresh(); await begin(page); await page.evaluate(kind => { window.__t418Providers[kind] = true }, kind); await save(page); await phase(page, 'handle')
-    const expected = kind === 'noPrf' ? /this passkey manager cannot open/ : /passkey prompt was dismissed/i
+    const expected = kind === 'noPrf' ? /this passkey manager cannot open/ : /passkey step did not finish/i
     check(`${kind}: explicit provider failure, no permanent commit or READY`, commits === 0 && saved === null && await page.locator('.atomic-account [role=alert]').filter({ hasText: expected }).count() === 1)
     await shot(page, kind)
   }

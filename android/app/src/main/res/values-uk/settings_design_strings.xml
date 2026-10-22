@@ -5,7 +5,7 @@
     <string name="settings_design_title">налаштування</string>
     <string name="settings_design_account">акаунт</string>
     <string name="settings_design_language">мова</string>
-    <string name="settings_design_access">доступ до спогадів</string>
+    <string name="settings_design_access">доступ до акаунту</string>
     <string name="settings_design_privacy">приватність</string>
     <string name="settings_design_about">про Remanence</string>
     <string name="settings_design_logout">вийти з цього акаунта</string>

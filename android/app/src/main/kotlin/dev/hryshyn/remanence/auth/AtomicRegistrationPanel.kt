@@ -34,6 +34,7 @@ internal fun atomicRegistrationErrorMessage(reason: String): Int = when (reason)
 @Composable
 internal fun AtomicRegistrationPanel(model: AtomicRegistrationViewModel, view: AtomicView, recoveryBusy: Boolean,
     existingAccount: Boolean, onExistingAccount: (Boolean) -> Unit,
+    onExitSetup: () -> Unit,
     recoveryContent: @Composable (enabled: Boolean, beforeSignIn: () -> Unit) -> Unit) {
     val activity = LocalContext.current as Activity
     val google = remember(activity) { AndroidGoogleCredentials(activity) }
@@ -46,6 +47,7 @@ internal fun AtomicRegistrationPanel(model: AtomicRegistrationViewModel, view: A
         model::retry, model::cancelReservation, model::leave, recoveryBusy,
         onChooseHandle = { model.chooseHandle(handle) },
         onVerify = { model.verify(view.handle.ifEmpty { handle }, passkeys) },
+        onExitSetup = onExitSetup,
         existingAccount = existingAccount, onExistingAccount = onExistingAccount,
         recoveryContent = recoveryContent)
 }
@@ -56,6 +58,7 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
     onBegin: () -> Unit, onSave: () -> Unit, onRestart: () -> Unit, onResolve: () -> Unit,
     onRetry: () -> Unit, onCancel: () -> Unit, onLeave: () -> Unit, recoveryBusy: Boolean,
     onChooseHandle: () -> Unit = {}, onVerify: () -> Unit = {},
+    onExitSetup: () -> Unit = onLeave,
     existingAccount: Boolean? = null, onExistingAccount: ((Boolean) -> Unit)? = null,
     recoveryContent: @Composable (enabled: Boolean, beforeSignIn: () -> Unit) -> Unit) {
     val enabled = !view.busy && !recoveryBusy
@@ -63,6 +66,7 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
     val existing = existingAccount ?: localExisting
     fun showExisting(value: Boolean) { if (onExistingAccount != null) onExistingAccount(value) else localExisting = value }
     val restore = existing || view.phase == AtomicPhase.RESTORE_REQUIRED
+    val capabilityBlocked = view.error == "PRF_UNAVAILABLE"
     val keyboard = LocalSoftwareKeyboardController.current
     BackHandler(existing && !recoveryBusy) { showExisting(false) }
     val step = when (view.phase) {
@@ -74,6 +78,7 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
     }
     val title = when {
         restore -> R.string.rework_signin_title
+        capabilityBlocked -> R.string.rework_capability_title
         step == 2 -> R.string.mvp_handle_title
         view.phase == AtomicPhase.CREDENTIAL_UNKNOWN -> R.string.rework_creation_unknown_title
         step == 3 -> R.string.rework_create_key_title
@@ -91,7 +96,7 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
         else -> R.string.rework_welcome_detail
     }
     val scroll = rememberScrollState()
-    LaunchedEffect(step, restore) { scroll.scrollTo(0) }
+    LaunchedEffect(step, restore, capabilityBlocked) { scroll.scrollTo(0) }
     Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(bottom = HoldSpace.Section),
         verticalArrangement = Arrangement.spacedBy(HoldSpace.Section)) {
         Column(verticalArrangement = Arrangement.spacedBy(HoldSpace.Related)) {
@@ -99,7 +104,7 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
             if (!restore) Text(stringResource(R.string.rework_setup_step, step, 4),
                 style = MaterialTheme.typography.labelSmall, color = HoldColors.Muted,
                 modifier = Modifier.testTag("atomic_step"))
-            AccessHeading(stringResource(title), stringResource(detail))
+            AccessHeading(stringResource(title), if (capabilityBlocked) null else stringResource(detail))
         }
         if (restore) {
             // Stable composition site for the lifetime of the sign-in operation.
@@ -110,7 +115,16 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
             if (view.error != null) Text(stringResource(atomicRegistrationErrorMessage(view.error)),
                 color = HoldColors.Error, style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.testTag("atomic_error").semantics { liveRegion = LiveRegionMode.Polite })
-            when (view.phase) {
+            if (capabilityBlocked) {
+                HoldButton(enabled = enabled, onClick = onExitSetup,
+                    modifier = Modifier.fillMaxWidth().testTag("atomic_leave_setup")) {
+                    Text(stringResource(R.string.atomic_registration_leave))
+                }
+                HoldTextButton(enabled = enabled, onClick = onVerify,
+                    modifier = Modifier.fillMaxWidth().testTag("atomic_verify")) {
+                    Text(stringResource(R.string.rework_verify_key))
+                }
+            } else when (view.phase) {
                 AtomicPhase.HANDLE, AtomicPhase.HANDLE_CONFLICT -> {
                     val valid = handle.isNotBlank() && RegistrationFormValidator.handleError(handle) == null
                     Column(verticalArrangement = Arrangement.spacedBy(HoldSpace.Related)) {
@@ -124,16 +138,17 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
                         modifier = Modifier.fillMaxWidth().testTag("atomic_handle_continue")) { Text(stringResource(R.string.mvp_continue)) }
                 }
                 AtomicPhase.CREATE_REQUIRED, AtomicPhase.CREATING -> {
-                    KeyStepNote(view.handle, R.string.rework_key_create_note)
+                    KeyIdentity(view.handle)
                     HoldButton(enabled = enabled && Build.VERSION.SDK_INT >= 28, onClick = onSave,
                         modifier = Modifier.fillMaxWidth().testTag("atomic_create")) { Text(stringResource(R.string.rework_create_key)) }
                     if (Build.VERSION.SDK_INT < 28) Text(stringResource(R.string.auth_credential_unavailable))
                 }
                 AtomicPhase.VERIFY_REQUIRED, AtomicPhase.VERIFYING, AtomicPhase.ASSERTION_REQUIRED, AtomicPhase.SAVING -> {
-                    KeyStepNote(view.handle, R.string.rework_key_saved)
+                    KeyIdentity(view.handle)
                     HoldButton(enabled = enabled, onClick = onVerify,
                         modifier = Modifier.fillMaxWidth().testTag("atomic_verify")) { Text(stringResource(R.string.rework_verify_key)) }
-                    Text(stringResource(R.string.rework_verify_retry), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
+                    if (view.error != null) Text(stringResource(R.string.rework_verify_retry),
+                        style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
                 }
                 AtomicPhase.CREDENTIAL_UNKNOWN -> {
                     HoldButton(enabled = enabled, onClick = onResolve, modifier = Modifier.fillMaxWidth().testTag("atomic_check_creation")) {
@@ -162,10 +177,21 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
 }
 
 @Composable
-private fun KeyStepNote(handle: String, detail: Int) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(HoldSpace.Related)) {
-        if (handle.isNotEmpty()) Text("\u2068@$handle\u2069", style = MaterialTheme.typography.titleMedium, color = HoldColors.Ink)
-        Text(stringResource(detail), style = MaterialTheme.typography.bodyMedium, color = HoldColors.Muted,
-            modifier = Modifier.testTag("atomic_key_status").semantics { liveRegion = LiveRegionMode.Polite })
-    }
+private fun KeyIdentity(handle: String) {
+    if (handle.isNotEmpty()) Text("\u2068@$handle\u2069", style = MaterialTheme.typography.titleMedium, color = HoldColors.Ink,
+        modifier = Modifier.testTag("atomic_key_status"))
+}
+
+/** Shared with the root and its rendered journey tests. Leaving never deletes a provider key. */
+@Composable
+internal fun AtomicLeaveDialog(onDismiss: () -> Unit, onLeave: () -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.rework_leave_title)) },
+        text = { Text(stringResource(R.string.rework_leave_detail), Modifier.verticalScroll(rememberScrollState())) },
+        confirmButton = { HoldTextButton(onClick = onLeave, modifier = Modifier.testTag("atomic_leave_confirm")) {
+            Text(stringResource(R.string.atomic_registration_leave))
+        } },
+        dismissButton = { HoldTextButton(onClick = onDismiss, modifier = Modifier.testTag("atomic_leave_cancel")) {
+            Text(stringResource(R.string.rework_keep_setup))
+        } })
 }

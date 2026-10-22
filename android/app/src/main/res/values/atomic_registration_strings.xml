@@ -1,6 +1,6 @@
 <resources>
     <string name="atomic_registration_title">Set up your account</string>
-    <string name="atomic_registration_prf_unavailable">Your passkey is saved, but this provider did not supply the capability needed to protect your postcards. Setup is not complete. Repeating verification may not fix this. You can leave setup; the saved passkey is kept.</string>
+    <string name="atomic_registration_prf_unavailable">Your key is saved, but its provider did not supply the protection your postcards need. Setup is incomplete. Verification may fail again.</string>
     <string name="atomic_registration_failed">Account setup could not complete this step. Check your connection and try later.</string>
     <string name="atomic_registration_intro">Sign in with Google, then choose a passkey manager. Your account is saved only with a recovery record.</string>
     <string name="atomic_registration_unknown">The account may already be saved. Check its status, retry the same request, or sign in again to restore the original keys.</string>

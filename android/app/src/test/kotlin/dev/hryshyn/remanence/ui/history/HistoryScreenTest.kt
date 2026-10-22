@@ -15,6 +15,8 @@ import dev.hryshyn.remanence.core.data.network.*
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.session.SessionBoundary
 import dev.hryshyn.remanence.ui.hold.HoldTheme
+import dev.hryshyn.remanence.ui.hold.ProductFrame
+import dev.hryshyn.remanence.ui.hold.ProductSection
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import org.junit.*
@@ -49,10 +51,10 @@ class HistoryScreenTest {
             val density = androidx.compose.ui.platform.LocalDensity.current
             CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
                 androidx.compose.ui.unit.Density(density.density, fontScale)) {
-            HoldTheme { Surface(Modifier.fillMaxSize()) {
+            HoldTheme { Surface(Modifier.fillMaxSize()) { ProductFrame(ProductSection.SENT, {}, {}, {}) {
                 HistoryScreen(state, { exited++ }, vm::select, vm::backToList, vm::refresh, vm::loadMore,
-                    vm::canCancel, vm::requestCancel, vm::dismissCancel, vm::confirmCancel, copy)
-            } }
+                    vm::canCancel, vm::requestCancel, vm::dismissCancel, vm::confirmCancel, copy, showHeader = false)
+            } } }
             }
         }
     }
@@ -60,7 +62,7 @@ class HistoryScreenTest {
         rule.waitForIdle()
         val semantics = rule.onAllNodes(isRoot()).printToString()
         rule.runOnIdle {
-            val directory = File("build/t369-review").apply { mkdirs() }
+            val directory = File("build/t454-pixels").apply { mkdirs() }
             // A Compose dialog owns another window: capture that actual decor,
             // not the underlying activity while claiming to show confirmation.
             val view = if (name.contains("confirm")) requireNotNull(ShadowDialog.getLatestDialog().window).decorView else root

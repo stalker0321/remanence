@@ -319,7 +319,7 @@ private fun RootSurface(
                     backEnabled = !recoveryBusy && !atomicState.busy,
                     footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) }) {
                     dev.hryshyn.remanence.auth.AtomicRegistrationPanel(atomicViewModel, atomicState, recoveryBusy,
-                        atomicExistingAccount, { atomicExistingAccount = it }) { enabled, beforeSignIn ->
+                        atomicExistingAccount, { atomicExistingAccount = it }, { atomicExitRequested = true }) { enabled, beforeSignIn ->
                         dev.hryshyn.remanence.recovery.RecoveryActions(container, hasIdentity = false, recoveryRequired = false,
                             onRecovered = rootViewModel::onSessionEstablished, onBusyChange = { recoveryBusy = it },
                             enabled = enabled, onBeforeSignIn = beforeSignIn)
@@ -786,15 +786,10 @@ private fun RootSurface(
     // session-bound provider request. The provider sheet owns its own cancel.
     BackHandler(recoveryBusy || googleState == dev.hryshyn.remanence.auth.GoogleAuthState.Working) { }
     if (atomicExitRequested) {
-        androidx.compose.material3.AlertDialog(onDismissRequest = { atomicExitRequested = false },
-            title = { Text(stringResource(R.string.rework_leave_title)) },
-            text = { Text(stringResource(R.string.rework_leave_detail)) },
-            confirmButton = { HoldTextButton(onClick = {
+        dev.hryshyn.remanence.auth.AtomicLeaveDialog(onDismiss = { atomicExitRequested = false },
+            onLeave = {
                 atomicExitRequested = false; atomicViewModel.leave(); rootViewModel.cancelHomeIntent()
-            }) { Text(stringResource(R.string.atomic_registration_leave)) } },
-            dismissButton = { HoldTextButton(onClick = { atomicExitRequested = false }) {
-                Text(stringResource(R.string.rework_keep_setup))
-            } })
+            })
     }
     if (logoutRequested && authState != AuthUiState.SignedOut) {
         androidx.compose.material3.AlertDialog(

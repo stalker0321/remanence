@@ -58,14 +58,9 @@ fun RecoveryPanel(hasIdentity: Boolean, recoveryRequired: Boolean, mandatorySetu
                 Text(stringResource(R.string.recovery_another_manager))
             }
         } else {
-            val label = if (recoveryRequired) R.string.recovery_restore_signed_in else R.string.recovery_sign_in
-            if (recoveryRequired) HoldButton(enabled = !busy, onClick = onRestore,
+            val label = if (recoveryRequired) R.string.recovery_restore_signed_in else R.string.rework_signin_action
+            HoldButton(enabled = !busy, onClick = onRestore,
                 modifier = Modifier.fillMaxWidth().testTag("recovery_restore")) { RecoveryActionLabel(busy, label) }
-            else {
-                HoldSecondaryButton(enabled = !busy, onClick = onRestore,
-                    modifier = Modifier.fillMaxWidth().testTag("recovery_restore")) { RecoveryActionLabel(busy, label) }
-                Text(stringResource(R.string.access_passkey_detail), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
-            }
         }
         if (recoveryRequired) {
             HoldTextButton(onClick = { manualCode = !manualCode }, enabled = !busy,

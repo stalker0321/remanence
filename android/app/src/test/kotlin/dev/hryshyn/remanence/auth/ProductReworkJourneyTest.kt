@@ -10,8 +10,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.ui.auth.AccessPage
+import dev.hryshyn.remanence.ui.auth.AccessLanguageControl
 import dev.hryshyn.remanence.ui.history.HistoryScreen
 import dev.hryshyn.remanence.ui.history.HistoryUiState
 import dev.hryshyn.remanence.ui.hold.*
@@ -25,6 +27,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowDialog
 
 /** Real Compose screens; synthetic states/callbacks only, no provider/network/account operations. */
 @RunWith(AndroidJUnit4::class)
@@ -45,13 +48,22 @@ class ProductReworkJourneyTest {
     fun ukrainianLargeOnboardingKeepsActionsReachable() = onboarding("uk-large", 1.8f)
 
     private fun onboarding(locale: String, scale: Float) {
+        var exitRequested by mutableStateOf(false)
+        var left by mutableStateOf(false)
         rule.setContent { CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
-            HoldTheme { Surface(Modifier.fillMaxSize()) { AccessPage {
+            HoldTheme { Surface(Modifier.fillMaxSize()) {
+            if (left) HomeScreen(BackendHealthUiState.AVAILABLE, AccountCapabilityState.NotAuthenticated,
+                publicEntry = true, showLanguageSwitch = false)
+            else AccessPage(onBack = { exitRequested = true },
+                footer = { AccessLanguageControl(AppLocale.SYSTEM, {}) }) {
                 AtomicRegistrationContent(AtomicView(phase, error = error, handle = handle), handle,
                     { handle = it }, { phase = AtomicPhase.HANDLE }, { creates++; phase = AtomicPhase.VERIFY_REQUIRED },
                     {}, {}, {}, {}, {}, false,
-                    onChooseHandle = { phase = AtomicPhase.CREATE_REQUIRED }, onVerify = { verifies++ }) { _, _ -> }
-            } } }
+                    onChooseHandle = { phase = AtomicPhase.CREATE_REQUIRED }, onVerify = { verifies++ },
+                    onExitSetup = { exitRequested = true }) { _, _ -> }
+            }
+            if (exitRequested) AtomicLeaveDialog({ exitRequested = false }, { exitRequested = false; left = true })
+            } }
         } }
         capture("$locale-welcome")
         rule.onNodeWithTag("atomic_handle").assertDoesNotExist()
@@ -70,11 +82,22 @@ class ProductReworkJourneyTest {
         rule.onNodeWithTag("atomic_verify").performScrollTo().assertIsDisplayed()
         capture("$locale-verify")
         rule.onNodeWithTag("atomic_verify").performClick(); assertEquals(1, verifies)
+        rule.onNodeWithTag("access_back").performClick()
+        rule.onNodeWithTag("atomic_leave_confirm").assertIsDisplayed()
+        capture("$locale-back-confirmation", dialog = true)
+        rule.onNodeWithTag("atomic_leave_cancel").performClick()
         rule.runOnIdle { error = "PRF_UNAVAILABLE" }
         rule.onNodeWithTag("atomic_error").performScrollTo().assertIsDisplayed()
         capture("$locale-capability-stop")
         rule.onNodeWithTag("atomic_verify").performScrollTo().assertIsEnabled()
         rule.onNodeWithTag("atomic_create").assertDoesNotExist()
+        rule.onNodeWithTag("atomic_leave_setup").performScrollTo().assertIsEnabled()
+        capture("$locale-capability-actions")
+        rule.onNodeWithTag("atomic_leave_setup").performClick()
+        capture("$locale-leave-confirmation", dialog = true)
+        rule.onNodeWithTag("atomic_leave_confirm").performClick()
+        rule.onNodeWithTag("scan_action").assertExists()
+        assertEquals(1, creates); assertEquals(1, verifies)
     }
 
     @Test fun englishNavigationAndHistoryAction() = utilities("en", 1f)
@@ -100,26 +123,39 @@ class ProductReworkJourneyTest {
             } }
         } }
         capture("$locale-home")
-        rule.onNodeWithTag("root_home_button").assertIsSelected()
-        rule.onNodeWithTag("root_history_button").performClick()
-        rule.onNodeWithTag("root_history_button").assertIsSelected()
+        rule.onNodeWithTag("product_navigation").assertHeightIsAtMost(96.dp)
+        rule.onNodeWithTag("root_home_button", useUnmergedTree = true).assertIsSelected()
+        navigate(ProductSection.SENT)
+        rule.onNodeWithTag("root_history_button", useUnmergedTree = true).assertIsSelected()
         rule.onNodeWithTag("history_create").performScrollTo().performClick()
         assertEquals(1, made); capture("$locale-sent-empty")
-        rule.onNodeWithTag("root_settings_button").performClick()
-        rule.onNodeWithTag("root_settings_button").assertIsSelected()
+        navigate(ProductSection.SETTINGS)
+        rule.onNodeWithTag("root_settings_button", useUnmergedTree = true).assertIsSelected()
         capture("$locale-settings")
         rule.onNodeWithTag("settings_feedback_row").performScrollTo().performClick()
         rule.onNodeWithTag("language_switch_row").performScrollTo().performClick()
-        capture("$locale-language")
+        capture("$locale-language", dialog = true)
         rule.onNodeWithTag("language_dialog_close").performClick()
-        rule.onNodeWithTag("root_home_button").performClick()
+        navigate(ProductSection.HOME)
         rule.onNodeWithTag("scan_action").assertExists()
     }
 
-    private fun capture(name: String) {
+    private fun navigate(section: ProductSection) {
+        if (rule.onAllNodesWithTag("product_navigation_menu").fetchSemanticsNodes().isNotEmpty()) {
+            rule.onNodeWithTag("product_navigation_menu").performClick()
+            rule.onNodeWithTag("navigation_destination_" + section.name).performClick()
+        } else rule.onNodeWithTag(when (section) {
+            ProductSection.HOME -> "root_home_button"
+            ProductSection.SENT -> "root_history_button"
+            ProductSection.SETTINGS -> "root_settings_button"
+        }).performClick()
+    }
+
+    private fun capture(name: String, dialog: Boolean = false) {
+        rule.mainClock.advanceTimeBy(300)
         rule.waitForIdle()
         rule.runOnIdle {
-            val decor = rule.activity.window.decorView
+            val decor = if (dialog) requireNotNull(ShadowDialog.getLatestDialog().window).decorView else rule.activity.window.decorView
             val bitmap = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
             decor.draw(android.graphics.Canvas(bitmap))
             val target = File("build/t454-pixels/$name.png"); target.parentFile?.mkdirs()

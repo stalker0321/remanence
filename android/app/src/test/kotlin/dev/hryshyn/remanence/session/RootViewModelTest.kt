@@ -89,6 +89,19 @@ class RootViewModelTest {
         assertEquals(0, scheduled)
     }
 
+    @Test fun utilitiesNavigateBetweenEachOtherWithoutOpeningTransientRoutes() = runTest {
+        val vm = RootViewModel(FixedOutcomeResolver(SessionState.Active(
+            "10000000-0000-4000-8000-000000000001", "sender_qa", true, true)))
+        vm.openSettings(); assertEquals(AppDestination.Settings, vm.destination.value)
+        vm.openHistory(); assertEquals(AppDestination.History, vm.destination.value)
+        vm.openSettings(); assertEquals(AppDestination.Settings, vm.destination.value)
+        vm.openHistory(); vm.requestHomeIntent(HomeIntent.MAKE)
+        assertEquals(AppDestination.Create, vm.destination.value)
+        vm.openSettings(); vm.openHistory()
+        assertEquals(AppDestination.Create, vm.destination.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
     private class FixedOutcomeResolver(private val state: SessionState) : SessionStateResolver {
         var resolveCount: Int = 0
             private set

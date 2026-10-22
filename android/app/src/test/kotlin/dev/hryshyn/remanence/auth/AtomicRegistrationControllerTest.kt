@@ -44,7 +44,7 @@ class AtomicRegistrationControllerTest {
         c.begin(f.google); c.complete("valid", f)
         assertEquals("PROVIDER_NO_CREDENTIAL", c.state.value.error); assertEquals(0, f.generations)
         f.providerMode = "ok"; c.complete("valid", f)
-        assertEquals(1, f.creates); assertEquals(1, f.immediateGets); assertEquals(2, f.discoveryGets)
+        assertEquals(1, f.creates); assertEquals(0, f.immediateGets); assertEquals(2, f.discoveryGets)
         assertEquals(AtomicPhase.READY, c.state.value.phase)
     }
 

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="rework_setup_step">Шаг %1$d из %2$d</string>
-    <string name="rework_welcome_title">Место для ваших воспоминаний</string>
-    <string name="rework_welcome_detail">Начните с аккаунта Google. Затем выберите имя и сохраните ключ доступа для защиты воспоминаний.</string>
+    <string name="rework_welcome_title">кое-что лично для вас</string>
+    <string name="rework_welcome_detail">Создайте аккаунт, чтобы отправить открытку или открыть адресованную вам. Начните с Google, затем выберите имя и сохраните личный доступ.</string>
     <string name="rework_existing_account">Уже есть аккаунт? Войти с ключом доступа</string>
     <string name="rework_new_account">Создать аккаунт</string>
     <string name="rework_signin_title">С возвращением</string>
@@ -29,4 +29,7 @@
     <string name="rework_preferences">настройки</string>
     <string name="rework_optional_feedback">Необязательная обратная связь</string>
     <string name="rework_optional_feedback_detail">Выберите, чем делиться для улучшения Remanence</string>
+    <string name="rework_leave_title">Пока выйти из настройки?</string>
+    <string name="rework_leave_detail">Сохранённый ключ останется у провайдера. Позже войдите в тот же аккаунт Google, чтобы проверить настройку и использовать этот ключ. Если сохранение не подтвердилось, для продолжения может потребоваться помощь.</string>
+    <string name="rework_keep_setup">Продолжить настройку</string>
 </resources>

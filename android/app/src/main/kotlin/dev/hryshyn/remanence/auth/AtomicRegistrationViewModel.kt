@@ -25,6 +25,7 @@ internal class AtomicRegistrationViewModel(container: AppContainer) : ViewModel(
         if (enabled()) viewModelScope.launch { controller.save(handle, credentials) }
     }
     fun chooseHandle(handle: String) { if (enabled()) controller.chooseHandle(handle) }
+    fun backToHandle(): Boolean = enabled() && controller.backToHandle()
     fun verify(handle: String, credentials: RecoveryCredentialPort) {
         if (enabled()) viewModelScope.launch { controller.verify(handle, credentials) }
     }

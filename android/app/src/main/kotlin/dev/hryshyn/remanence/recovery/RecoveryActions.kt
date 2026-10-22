@@ -31,6 +31,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
     var showCode by remember { mutableStateOf(false) }
     var offerAnotherManager by remember { mutableStateOf(false) }
     var awaitingVerification by remember { mutableStateOf(false) }
+    var creationUncertain by remember { mutableStateOf(false) }
     var codeInput by remember { mutableStateOf("") }
     DisposableEffect(code) {
         val shown = code
@@ -69,7 +70,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
                 message = recoveryFailureMessage(failure, protecting)
                 offerAnotherManager = false
             }
-            finally { busy = false; onBusyChange(false) }
+            finally { creationUncertain = recovery.hasUnconfirmedCreation; busy = false; onBusyChange(false) }
         }
     }
     RecoveryPanel(hasIdentity, recoveryRequired, mandatorySetup, passkeysAvailable, busy || !enabled, verified,
@@ -100,6 +101,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
         } },
         onHideCode = { code = null },
         awaitingVerification = awaitingVerification,
+        creationUncertain = creationUncertain,
         codeContent = { code?.let { Text(AccountRecoveryCrypto.encode(it)) } },
     )
 }

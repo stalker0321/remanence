@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="rework_setup_step">Step %1$d of %2$d</string>
-    <string name="rework_welcome_title">A place for your memories</string>
-    <string name="rework_welcome_detail">Start with your Google account. Next, choose your name and save a passkey to keep your memories private.</string>
+    <string name="rework_welcome_title">something just for you</string>
+    <string name="rework_welcome_detail">Set up your account to send a postcard or open one addressed to you. Start with Google; then choose a name and save your private access.</string>
     <string name="rework_existing_account">Already here? Sign in with a passkey</string>
     <string name="rework_new_account">Create an account</string>
     <string name="rework_signin_title">Welcome back</string>
@@ -29,4 +29,7 @@
     <string name="rework_preferences">preferences</string>
     <string name="rework_optional_feedback">Optional feedback</string>
     <string name="rework_optional_feedback_detail">Choose what you share to improve Remanence</string>
+    <string name="rework_leave_title">Leave setup for now?</string>
+    <string name="rework_leave_detail">A saved passkey is kept in your provider. Continue later with the same Google account to check setup and use that key. If saving was not confirmed, setup may need help to continue.</string>
+    <string name="rework_keep_setup">Continue setup</string>
 </resources>

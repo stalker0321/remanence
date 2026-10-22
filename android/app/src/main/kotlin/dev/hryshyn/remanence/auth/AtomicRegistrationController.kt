@@ -98,6 +98,13 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         show(if (current.credential != null || current.creation != null) AtomicPhase.VERIFY_REQUIRED else AtomicPhase.CREATE_REQUIRED)
     }
 
+    /** Back before creation is ordinary editing; after creation it must never return to Create. */
+    fun backToHandle(): Boolean {
+        if (state.value.busy || state.value.phase != AtomicPhase.CREATE_REQUIRED) return false
+        show(AtomicPhase.HANDLE)
+        return true
+    }
+
     /** One provider CREATE only. A successful return always stops at an explicit Verify action. */
     suspend fun save(rawHandle: String, credentials: RecoveryCredentialPort) {
         if (state.value.phase == AtomicPhase.HANDLE) chooseHandle(rawHandle)
@@ -159,7 +166,7 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
             val reply = env.api.request(AtomicAction.STATUS, setup.reservation.id, setup.token, null)
             checkOwner(current)
             updateReservation(current, AtomicWire.reservation(reply.getValue("reservation").jsonObject))
-            current.credential = current.credential ?: current.setup!!.reservation.credentialIds.firstOrNull()
+            reconcileStagedId(current)
             if (current.setup!!.reservation.state == AtomicReservationState.RESERVED && current.intent != null) show(AtomicPhase.UNKNOWN)
             else if (current.setup!!.reservation.state == AtomicReservationState.RESERVED && current.creation != null) {
                 if (current.credential == null) acknowledgeCreation(current)
@@ -209,7 +216,15 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         checkOwner(current)
         updateReservation(current, AtomicWire.reservation(status.getValue("reservation").jsonObject))
         requireReserved(current) // Reconcile lost credential verify ACK BEFORE another create.
-        current.credential = current.credential ?: current.setup!!.reservation.credentialIds.firstOrNull()
+        reconcileStagedId(current)
+    }
+
+    private fun reconcileStagedId(current: Owner) {
+        if (current.credential != null) return
+        val ids = current.setup!!.reservation.credentialIds
+        val createdId = current.creation?.getValue("response")?.jsonObject?.let { AtomicWire.text(it, "id", 2048) }
+        current.credential = if (createdId != null) ids.firstOrNull { it == createdId }
+            else if (!current.creationUncertain) ids.firstOrNull() else null
     }
 
     private suspend fun acknowledgeCreation(current: Owner) {

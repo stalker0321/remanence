@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="rework_setup_step">Крок %1$d з %2$d</string>
-    <string name="rework_welcome_title">Місце для ваших спогадів</string>
-    <string name="rework_welcome_detail">Почніть з облікового запису Google. Потім виберіть ім’я та збережіть ключ доступу для захисту спогадів.</string>
+    <string name="rework_welcome_title">дещо особисто для вас</string>
+    <string name="rework_welcome_detail">Створіть обліковий запис, щоб надіслати листівку або відкрити адресовану вам. Почніть із Google, потім виберіть ім’я та збережіть особистий доступ.</string>
     <string name="rework_existing_account">Уже маєте обліковий запис? Увійти з ключем доступу</string>
     <string name="rework_new_account">Створити обліковий запис</string>
     <string name="rework_signin_title">З поверненням</string>
@@ -29,4 +29,7 @@
     <string name="rework_preferences">налаштування</string>
     <string name="rework_optional_feedback">Необов’язковий зворотний зв’язок</string>
     <string name="rework_optional_feedback_detail">Виберіть, чим ділитися для поліпшення Remanence</string>
+    <string name="rework_leave_title">Поки вийти з налаштування?</string>
+    <string name="rework_leave_detail">Збережений ключ залишиться у провайдера. Пізніше увійдіть у той самий обліковий запис Google, щоб перевірити налаштування й використати цей ключ. Якщо збереження не підтвердилося, для продовження може знадобитися допомога.</string>
+    <string name="rework_keep_setup">Продовжити налаштування</string>
 </resources>

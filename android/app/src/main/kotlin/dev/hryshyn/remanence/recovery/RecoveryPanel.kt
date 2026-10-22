@@ -24,6 +24,7 @@ fun RecoveryPanel(hasIdentity: Boolean, recoveryRequired: Boolean, mandatorySetu
                   onContinue: () -> Unit, onToggleCode: () -> Unit, onCodeChange: (String) -> Unit,
                   onRestoreCode: () -> Unit, onHideCode: () -> Unit,
                   awaitingVerification: Boolean = false,
+                  creationUncertain: Boolean = false,
                   codeContent: @Composable () -> Unit = {}) {
     var manualCode by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(HoldSpace.Group)) {
@@ -37,7 +38,11 @@ fun RecoveryPanel(hasIdentity: Boolean, recoveryRequired: Boolean, mandatorySetu
         else if (hasIdentity) {
             if (!verified) HoldButton(enabled = !busy, onClick = onProtect,
                 modifier = Modifier.fillMaxWidth().testTag("recovery_save")) {
-                RecoveryActionLabel(busy, if (awaitingVerification) R.string.rework_verify_key else R.string.rework_create_key)
+                RecoveryActionLabel(busy, when {
+                    awaitingVerification -> R.string.rework_verify_key
+                    creationUncertain -> R.string.atomic_registration_check
+                    else -> R.string.rework_create_key
+                })
             }
             if (verified) {
                 Text(stringResource(R.string.access_verified_detail), style = MaterialTheme.typography.bodyMedium,

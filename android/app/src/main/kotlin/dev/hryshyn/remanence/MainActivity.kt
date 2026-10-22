@@ -256,10 +256,18 @@ private fun RootSurface(
     var registering by rememberSaveable { mutableStateOf(false) }
     var showLegacyAuth by rememberSaveable { mutableStateOf(!BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) }
     var logoutRequested by remember { mutableStateOf(false) }
+    var atomicExitRequested by remember { mutableStateOf(false) }
+    val atomicBack: () -> Unit = {
+        if (!atomicState.busy && !recoveryBusy) {
+            if (!atomicViewModel.backToHandle()) {
+                if (atomicState.phase != dev.hryshyn.remanence.auth.AtomicPhase.IDLE) atomicExitRequested = true
+                else { atomicViewModel.leave(); rootViewModel.cancelHomeIntent() }
+            }
+        }
+    }
     BackHandler(authState == AuthUiState.SignedOut && homeIntent != null) {
         if (BuildConfig.REMANENCE_ATOMIC_REGISTRATION) {
-            atomicViewModel.leave()
-            rootViewModel.cancelHomeIntent()
+            atomicBack()
             return@BackHandler
         }
         // Consume Back while a provider request owns this surface; otherwise
@@ -305,8 +313,8 @@ private fun RootSurface(
                     }
                 }
             } else if (BuildConfig.REMANENCE_ATOMIC_REGISTRATION && authState == AuthUiState.SignedOut) {
-                AccessPage(onBack = { atomicViewModel.leave(); rootViewModel.cancelHomeIntent() },
-                    backEnabled = !recoveryBusy,
+                AccessPage(onBack = atomicBack,
+                    backEnabled = !recoveryBusy && !atomicState.busy,
                     footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) }) {
                     dev.hryshyn.remanence.auth.AtomicRegistrationPanel(atomicViewModel, atomicState, recoveryBusy) { enabled, beforeSignIn ->
                         dev.hryshyn.remanence.recovery.RecoveryActions(container, hasIdentity = false, recoveryRequired = false,
@@ -774,6 +782,17 @@ private fun RootSurface(
     // Register after child routes so an activity-level Back cannot dispose a
     // session-bound provider request. The provider sheet owns its own cancel.
     BackHandler(recoveryBusy || googleState == dev.hryshyn.remanence.auth.GoogleAuthState.Working) { }
+    if (atomicExitRequested) {
+        androidx.compose.material3.AlertDialog(onDismissRequest = { atomicExitRequested = false },
+            title = { Text(stringResource(R.string.rework_leave_title)) },
+            text = { Text(stringResource(R.string.rework_leave_detail)) },
+            confirmButton = { HoldTextButton(onClick = {
+                atomicExitRequested = false; atomicViewModel.leave(); rootViewModel.cancelHomeIntent()
+            }) { Text(stringResource(R.string.atomic_registration_leave)) } },
+            dismissButton = { HoldTextButton(onClick = { atomicExitRequested = false }) {
+                Text(stringResource(R.string.rework_keep_setup))
+            } })
+    }
     if (logoutRequested && authState != AuthUiState.SignedOut) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { logoutRequested = false },

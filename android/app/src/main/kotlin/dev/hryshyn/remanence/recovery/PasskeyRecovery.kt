@@ -75,6 +75,7 @@ internal fun publicCredential(c: JsonObject): JsonObject = buildJsonObject {
 class PasskeyRecovery(private val container: AppContainer) {
     private val api = container.apiStack.recoveryRepository
     private val ceremony = ProtectCeremony()
+    val hasUnconfirmedCreation: Boolean get() = ceremony.uncertain
     private fun enabled() = check(BuildConfig.REMANENCE_RECOVERY_ENABLED)
 
     /** Returns the code only after a verified complete upload. UI owns its short lifetime. */
@@ -216,16 +217,6 @@ private fun restore(out: JsonObject, secret: ByteArray, code: Boolean, account: 
     Crypto.restore(out.getValue("record").jsonObject.record(), secret, code, account, bundle,
         Crypto.decode(out.text("encryption_public_keyset")), Crypto.decode(out.text("signing_public_keyset")))
 
-/**
- * Protect orchestration over the explicit environment seam: same
- * ordering, gates, and zeroization as the production path. ONLY a
- * credential created AND server-registered in THIS invocation takes
- * the immediate-only verification get; every retry, STORED check,
- * sign-in, and restore uses normal discovery with hybrid/remote
- * options intact. A fresh immediate get that finds nothing becomes
- * the typed same-key continuation — never an automatic retry, new
- * key, readiness mark, or manager switch.
- */
 /** Public proof retained across acknowledgement loss; never contains PRF or private key material. */
 internal class ProtectCeremony {
     var owner: String? = null
@@ -273,7 +264,9 @@ internal suspend fun protectWith(
         check(result == proof.getValue("response").jsonObject.text("id"))
         ceremony.proof = null; ceremony.uncertain = false
         throw RecoveryVerificationPending(result)
-    } else status.text("credential_id")
+    } else status.text("credential_id").also { staged ->
+        ceremony.proof?.getValue("response")?.jsonObject?.let { check(it.text("id") == staged) }
+    }
     ceremony.proof = null; ceremony.uncertain = false
     if (!stored && !verify) throw RecoveryVerificationPending(id)
     val begin = env.requestAuthenticated(lease, "setup/options", buildJsonObject { put("credential_id", id) })

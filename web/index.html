@@ -10,9 +10,16 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="apple-touch-icon" href="icons/icon-192.png" />
     <title>Remanence</title>
+    <style>
+      html, body { margin: 0; background: #f4f2ec; color: #333951; }
+      .boot-placeholder { padding: 3rem 1.5rem; max-width: 68rem; margin: auto; font: 1.5rem system-ui, sans-serif; }
+      .boot-placeholder p { margin: 0; }
+      .boot-placeholder span { display: block; width: 3rem; height: .25rem; margin-top: 1rem; border-radius: 1rem; background: #b0acc8; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="boot-placeholder" aria-busy="true" aria-label="Remanence"><p>remanence.</p><span aria-hidden="true"></span></div></div>
+    <noscript>Remanence needs JavaScript. Для Remanence нужен JavaScript. Для Remanence потрібен JavaScript.</noscript>
     <script src="boot.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>

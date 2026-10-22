@@ -59,6 +59,7 @@ import { SessionStore } from '../session/session'
 import { HistoryPage } from '../history/HistoryPage'
 import { RecentRecipients } from '../history/RecentRecipients'
 import { SendAccessSection } from '../access/SendAccessSection'
+import { Icon, StepTrail } from './Primitives'
 
 export function App({
   store,
@@ -103,6 +104,17 @@ export function App({
   const layers = useSyncExternalStore(navigation.subscribe, navigation.getSnapshot)
   const presenting = view.phase === 'presentation-admitted' && held !== null
   const t = (key: MessageKey) => translate(view.language, key)
+  const content = useRef<HTMLElement>(null)
+  const previousRoute = useRef(route)
+
+  useEffect(() => {
+    if (previousRoute.current === route) return
+    previousRoute.current = route
+    const heading = content.current?.querySelector('h1')
+    if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }) }
+    window.scrollTo({ top: 0, behavior: 'instant' })
+    setNotice('errorRegion')
+  }, [route])
 
   useEffect(() => {
     const current = draft.current
@@ -153,14 +165,24 @@ export function App({
 
   return (
     <>
-    <main className="shell" inert={presenting} tabIndex={-1}>
-      <div className="bar">
-        <p className="mark">remanence</p>
+    <div className="shell" inert={presenting} tabIndex={-1}>
+      <button className="skip-content" onClick={() => content.current?.focus()}>{t('skipContent')}</button>
+      <header className="bar">
+        <a className="mark" href={href('home')}>remanence<span className="mark-dot" aria-hidden="true">.</span></a>
+        <a className="account-link" href={href('account')} aria-label={t('navAccount')} aria-current={route === 'account' ? 'page' : undefined}>
+          <Icon name="key" /><span>{view.handle ? `@${view.handle}` : t('account')}</span>
+        </a>
         <LanguageMenu language={view.language} onSelect={chooseLanguage} t={t} />
-      </div>
-      {deploymentUnavailable ? <p role="alert" data-deployment-unavailable>{t('deploymentUnavailable')}</p> : null}
+      </header>
+      <nav className="main-nav" aria-label={t('navMain')}>
+        {(['home', 'scan', 'create', 'history', 'settings'] as const).map((item) => <a key={item} href={href(item)} aria-current={route === item ? 'page' : undefined}>
+          {t(({ home: 'navHome', scan: 'navScan', create: 'navMake', history: 'historyTitle', settings: 'settingsTitle' } as const)[item])}
+        </a>)}
+      </nav>
+      {deploymentUnavailable ? <p className="notice notice--warning" role="alert" data-deployment-unavailable>{t('deploymentUnavailable')}</p> : null}
       <ShellStatus t={t} details={false} />
-      {route === 'home' ? <Home t={t} /> : null}
+      <main className={`route-content route-${route}`} id="route-content" ref={content} tabIndex={-1}>
+      {route === 'home' ? <Home t={t} signedIn={view.phase !== 'signed-out'} /> : null}
       {route === 'history' ? <HistoryPage key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} language={view.language} /> : null}
       {route === 'scan' ? (
         <Scan
@@ -202,9 +224,10 @@ export function App({
           onNotice={setNotice}
         />
       ) : null}
-      <p className="status" role="status">{t(phaseKey(view.phase))}</p>
-      {deploymentUnavailable || (route === 'account' && atomicRegistration) ? null : <p className="status" role="alert">{t(notice)}</p>}
-    </main>
+      {deploymentUnavailable || notice === 'errorRegion' || (route === 'account' && atomicRegistration) ? null : <p className="notice" role="alert">{t(notice)}</p>}
+      </main>
+      {route !== 'account' && route !== 'settings' ? <p className="session-status" role="status"><Icon name="key" />{t(phaseKey(view.phase))}</p> : null}
+    </div>
     {presenting && held ? (
       <CollageStage held={held} t={t} onClose={() => navigation.closeSheet()} navigation={{
         index: layers?.owner === held ? layers.index : null,
@@ -217,28 +240,23 @@ export function App({
   )
 }
 
-function Home({ t }: { t: (key: MessageKey) => string }) {
+function Home({ t, signedIn }: { t: (key: MessageKey) => string; signedIn: boolean }) {
   return (
     <>
-      <section className="card">
-        <h1>{t('homeOpenTitle')}</h1>
+      <header className="home-intro"><h1>{t('homeTitle')}</h1><p>{t('homeIntro')}</p></header>
+      <div className="home-actions">
+      <a className="action-card action-card--receive" href={href('scan')} aria-label={t('scan')}>
+        <h2>{t('homeOpenTitle')}</h2>
         <p>{t('homeOpenBody')}</p>
-        <div className="actions">
-          <a className="button primary" href={href('scan')}>{t('scan')}</a>
-        </div>
-      </section>
-      <section className="card">
+        <span className="action-card-footer"><span>{t('scan')}</span><span className="arrow-tile"><Icon name="arrow" /></span></span>
+      </a>
+      <a className="action-card action-card--create" href={href('create')} aria-label={t('make')}>
         <h2>{t('homeMakeTitle')}</h2>
         <p>{t('homeMakeBody')}</p>
-        <div className="actions">
-          <a className="button" href={href('create')}>{t('make')}</a>
-        </div>
-      </section>
-      <div className="actions">
-        <a href={href('account')}>{t('account')}</a>
-        <a href={href('settings')}>{t('settingsTitle')}</a>
-        <a href={href('history')}>{t('historyTitle')}</a>
+        <span className="action-card-footer"><span>{t('make')}</span><span className="arrow-tile"><Icon name="arrow" /></span></span>
+      </a>
       </div>
+      {!signedIn ? <aside className="welcome-account"><Icon name="key" /><p>{t('homeAccountHint')}</p><a className="button quiet" href={href('account')}>{t('account')}<Icon name="arrow" /></a></aside> : null}
     </>
   )
 }
@@ -456,10 +474,15 @@ export function Scan({
   }
 
   return (
-    <section className="card">
-      <h1>{t('scanTitle')}</h1>
+    <section className="card scan-page">
+      <header className="page-heading"><h1>{t('scanTitle')}</h1><p className="page-lead">{t('scanGuideHint')}</p></header>
+      <div className="scan-layout">
+      <div className="scan-frame">
+        {!live ? <div className="scan-placeholder"><Icon name="scan" /><p>{t('scanGuide')}</p></div> : null}
+        <div ref={host} />
+      </div>
+      <div className="scan-controls">
       {!live ? <p>{t('scanWaiting')}</p> : null}
-      <div ref={host} />
       {held ? <p>{t('cameraHeld')}</p> : null}
       {working ? <p role="status">{t(openStatus)}</p> : null}
       <div className="actions">
@@ -473,6 +496,9 @@ export function Scan({
           <button ref={cameraButton} type="button" className="primary" onClick={() => { void open() }}>{t('useCamera')}</button>
         )}
         <a href={href('home')} onClick={close}>{t('back')}</a>
+      </div>
+      {store.getSnapshot().phase === 'signed-out' || store.getSnapshot().phase === 'authenticated' ? <aside className="scan-account"><p>{t('scanAccountHint')}</p><div className="actions"><a href={href('account')} onClick={close}>{t('account')}</a></div></aside> : null}
+      </div>
       </div>
     </section>
   )
@@ -545,12 +571,16 @@ export function Create({
   const [creatorImages, setCreatorImages] = useState<CreatorComposerPhoto[] | null>(null)
   const [creatorImageState, setCreatorImageState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const measurer = useMemo(() => canvasTextMeasurer(document), [])
+  const recipientHeading = useRef<HTMLHeadingElement>(null)
 
   const open = view.phase !== 'signed-out' && view.phase !== 'authenticated' && view.accountId !== null
   const pending = open ? recipient.pending() : null
   const confirmed = open ? recipient.confirmed() : null
   const selectedMusic = confirmed ? music.selected() : null
   const bound = confirmed ? `${confirmed.userId}:${confirmed.keyBundleId}:${confirmed.directoryVersion}` : ''
+  useEffect(() => {
+    if (pending !== null && confirmed === null) recipientHeading.current?.focus()
+  }, [pending, confirmed])
   void stamp
   // ---- T326 in-memory Send (one admitted attempt per mounted Create visit) ----
   // Epoch + capsuleId are allocated lazily ONCE per mount (a new Create visit
@@ -1083,23 +1113,26 @@ export function Create({
 
   if (!open) {
     return (
-      <section className="card">
-        <h1>{t('homeMakeTitle')}</h1>
-        <p>{t('createLocked')}</p>
+      <section className="card create-locked">
+        <header className="page-heading"><h1>{t('homeMakeTitle')}</h1><p className="page-lead">{t('homeMakeBody')}</p></header>
+        <div className="empty-state"><Icon name="key" /><p>{t('createLocked')}</p>
         <div className="actions">
-          <a className="button" href={href('account')}>{t('account')}</a>
+          <a className="button primary" href={href('account')}>{t('account')}<Icon name="arrow" /></a>
           <a href={href('home')}>{t('back')}</a>
+        </div>
         </div>
       </section>
     )
   }
 
   return (
-    <section className="card">
-      <h1>{t('homeMakeTitle')}</h1>
-      {confirmed ? <RecipientLine t={t} snapshot={confirmed} held={sendPhase === 'idle' && !pictured} /> : null}
-      {pending && !confirmed ? <RecipientLine t={t} snapshot={pending} held={false} /> : null}
-      {!confirmed ? (
+    <section className={`card create-page${confirmed ? '' : ' recipient-picker'}`}>
+      <StepTrail labels={['stepRecipient', 'stepCompose', 'stepPostcard']} current={confirmed ? frozenRef.current ? 2 : 1 : 0} t={t} />
+      <header className="page-heading"><h1 ref={recipientHeading} tabIndex={-1}>{t(confirmed ? 'createDetailsTitle' : pending ? 'recipientConfirmTitle' : 'recipientTitle')}</h1>
+      <p className="page-lead">{t(confirmed ? 'createDraftHint' : pending ? 'recipientOnly' : 'recipientBody')}</p></header>
+      {confirmed ? <div className="draft-recipient"><RecipientLine t={t} snapshot={confirmed} held={sendPhase === 'idle' && !pictured} /><button type="button" disabled={busy || sendPhase === 'working'} onClick={changeRecipient}>{t('recipientChange')}</button></div> : null}
+      {!confirmed && !pending ? (
+        <>
         <form
           className="handle-form"
           onSubmit={(event) => {
@@ -1121,13 +1154,18 @@ export function Create({
           </label>
           <div className="actions">
             <button type="submit" className="primary" disabled={busy || handle.trim().length === 0}>{t('lookupRecipient')}</button>
-            <button type="button" disabled={busy || view.handle === null} onClick={() => { void lookup('self') }}>{t('forMyself')}</button>
           </div>
         </form>
+        <p className="choice-divider">{t('recipientDivider')}</p>
+        <button type="button" className="self-choice" aria-label={t('forMyself')} disabled={busy || view.handle === null} onClick={() => { void lookup('self') }}><span><strong>{t('forMyself')}</strong>{view.handle ? <span>@{view.handle}</span> : null}<small>{t('recipientSelfHint')}</small></span><Icon name="arrow" /></button>
+        </>
       ) : null}
-      {!confirmed ? <RecentRecipients key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} disabled={busy}
+      {busy && !confirmed ? <p className="notice" role="status">{t('accountWorking')}</p> : null}
+      {!confirmed && !pending ? <RecentRecipients key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} disabled={busy}
         onSelect={(row) => { editRecipient(row.handle); void lookup('named', row.handle, row.user_id) }} /> : null}
       {pending && !confirmed ? (
+        <div className="recipient-confirm">
+        <RecipientLine t={t} snapshot={pending} held={false} />
         <div className="actions">
           <button
             type="button"
@@ -1152,14 +1190,12 @@ export function Create({
             {t('recipientChange')}
           </button>
         </div>
+        </div>
       ) : null}
       {confirmed ? (
         <>
-          <div ref={host} />
-          {pictured && fpState === 'idle' && sendPhase === 'idle' ? <p>{t('frontHeld')}</p> : null}
-          {pictured && fpState === 'working' && sendPhase === 'idle' ? <p>{t('frontWorking')}</p> : null}
-          {pictured && fpState === 'ready' && sendPhase === 'idle' ? <p>{t('frontReady')}</p> : null}
-          {pictured && fpState === 'failed' ? <p role="alert">{t('frontScanFailed')}</p> : null}
+          <div className="draft-grid">
+          <section className="draft-section">
           <label className="handle-form">
             {t('noteLabel')}
             <textarea
@@ -1173,9 +1209,10 @@ export function Create({
               }}
             />
           </label>
-          <p>{note.bytes()} / {NOTE_MAX_UTF8_BYTES}</p>
+          <p className="field-hint">{t('createNoteHint')} · {note.bytes()} / {NOTE_MAX_UTF8_BYTES}</p>
           {note.fits() ? null : <p>{t('noteTooLong')}</p>}
-          <div className="photo-draft" aria-busy={photoIntakePending}>
+          </section>
+          <div className="draft-section photo-draft" aria-busy={photoIntakePending}>
             <label>
               {t('addPhotos')}
               <input
@@ -1207,6 +1244,7 @@ export function Create({
             </ul>
             <p>{photos.photos().length} / {PHOTO_COUNT_MAX}</p>
             {sendPhase === 'idle' ? <p>{t('photoCount')}</p> : null}
+          </div>
           </div>
           {accepted !== null && noteFits ? (
             creatorImageState === 'loading' ? (
@@ -1276,7 +1314,22 @@ export function Create({
             </ul>
               {sendPhase === 'idle' ? <p>{t('musicNotSent')}</p> : null}
             </div>
+          <section className="front-section">
+            <h2>{t('createFrontTitle')}</h2><p>{t('createFrontHint')}</p>
+            <div ref={host} />
+            {pictured && fpState === 'idle' && sendPhase === 'idle' ? <p role="status">{t('frontHeld')}</p> : null}
+            {pictured && fpState === 'working' && sendPhase === 'idle' ? <p role="status">{t('frontWorking')}</p> : null}
+            {pictured && fpState === 'ready' && sendPhase === 'idle' ? <p role="status">{t('frontReady')}</p> : null}
+            {pictured && fpState === 'failed' ? <p role="alert">{t('frontScanFailed')}</p> : null}
+            <div className="actions">
+              {live ? <>
+                <button type="button" className="primary" disabled={busy || sendPhase === 'working'} onClick={() => { void takeFront() }}>{t('takePicture')}</button>
+                <button type="button" disabled={busy} onClick={closeCamera}>{t('closeCamera')}</button>
+              </> : <button type="button" className="primary" disabled={busy} onClick={() => { void openCamera() }}>{t('useCamera')}</button>}
+            </div>
+          </section>
             <div className="send-block">
+              {sendPhase === 'idle' && !sendReady ? <p className="field-hint">{t('createSendHint')}</p> : null}
               <button
                 type="button"
                 data-testid="send_button"
@@ -1303,15 +1356,6 @@ export function Create({
               ) : null}
             </div>
           <div className="actions">
-            {live ? (
-              <>
-                <button type="button" className="primary" disabled={busy || sendPhase === 'working'} onClick={() => { void takeFront() }}>{t('takePicture')}</button>
-                <button type="button" disabled={busy} onClick={closeCamera}>{t('closeCamera')}</button>
-              </>
-            ) : (
-              <button type="button" className="primary" disabled={busy} onClick={() => { void openCamera() }}>{t('useCamera')}</button>
-            )}
-            <button type="button" disabled={busy || sendPhase === 'working'} onClick={changeRecipient}>{t('recipientChange')}</button>
             <a href={href('home')}>{t('back')}</a>
           </div>
         </>
@@ -1334,10 +1378,10 @@ function RecipientLine({
   held: boolean
 }) {
   return (
-    <p>
-      @{snapshot.handle}
-      {snapshot.self ? ` · ${t('forMyself')}` : ''}
-      {held ? ` ${t('recipientHeld')}` : ''}
+    <p className="recipient-line">
+      <strong>@{snapshot.handle}</strong>
+      {snapshot.self ? <span>{t('forMyself')}</span> : null}
+      {held ? <span>{t('recipientHeld')}</span> : null}
     </p>
   )
 }
@@ -1427,11 +1471,12 @@ function Account({
   }
 
   return (
-    <section className="card">
+    <section className="card legacy-account">
       <h1>{t('authTitle')}</h1>
       <p>{t('authBody')}</p>
       {!signedIn ? <p>{t('accountExistingOnly')}</p> : null}
-      <p>{view.handle ? view.handle : t(phaseKey(view.phase))}</p>
+      {view.handle ? <p className="account-handle">@{view.handle}</p> : null}
+      <p role="status">{t(phaseKey(view.phase))}</p>
       <div className="actions">
         {signedIn ? null : (
           <button

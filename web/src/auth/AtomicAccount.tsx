@@ -10,6 +10,7 @@ import type { MemoryKeys } from './memoryKeys'
 import { explainFailure, explainRestore } from './notice'
 import type { PasskeyPort } from './passkey'
 import { restoreSignedInAccount } from './restore'
+import { Icon, StepTrail } from '../ui/Primitives'
 import './atomicAccount.css'
 
 /** Explicit isolated TEST composition only. App has no env/storage/public flag
@@ -75,15 +76,23 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     REGISTRATION_ADMISSION_CLOSED: 'atomicUnavailable', WRONG_CREDENTIAL: 'wrongPasskey', WRONG_ACCOUNT: 'wrongPasskey',
   } as Record<string, MessageKey>)[state.error] ?? 'atomicFailure'
   return <section className="card atomic-account" data-atomic-phase={state.phase}>
-    <h1 ref={heading} tabIndex={-1}>{t('authTitle')}</h1>
+    {!signedIn ? <StepTrail labels={['stepAccount', 'stepHandle', 'stepKeys']} current={state.phase === 'idle' || state.phase === 'google' ? 0 : state.phase === 'handle' || state.phase === 'handle-conflict' ? 1 : 2} t={t} /> : null}
+    <div className="account-layout">
+    <div className="account-intro">
+    <span className="account-emblem"><Icon name="key" /></span>
+    <h1 ref={heading} tabIndex={-1}>{t(unlocked ? 'accountReadyTitle' : signedIn ? 'accountLockedTitle' : choosing ? 'accountHandleTitle' : 'authTitle')}</h1>
+    {view.handle ? <p className="account-handle">@{view.handle}</p> : null}
     {!signedIn && (choosing || state.phase === 'idle' || state.phase === 'google') ? <p>{t('atomicIntro')}</p> : signedIn && !unlocked ? <p>{t('authBody')}</p> : null}
-    {unlocked ? <p role="status">{t('atomicReady')}</p> : phaseMessage ? <p role="status">{t(phaseMessage)}</p> : null}
-    {errorMessage ? <p role="alert">{t(errorMessage)}</p> : null}
-    {restoreNotice ? <p role="alert">{t(restoreNotice)}</p> : null}
+    <aside className="key-explanation"><h2>{t('accountKeysTitle')}</h2><p>{t(unlocked ? 'accountVisitHint' : 'accountKeysBody')}</p></aside>
+    </div>
+    <div className="account-controls" aria-busy={busy}>
+    {unlocked ? <p className="account-ready" role="status"><Icon name="check" />{t('atomicReady')}</p> : phaseMessage ? <p className="notice" role="status">{t(phaseMessage)}</p> : null}
+    {errorMessage ? <p className="notice notice--warning" role="alert">{t(errorMessage)}</p> : null}
+    {restoreNotice ? <p className="notice" role="alert">{t(restoreNotice)}</p> : null}
     {!signedIn && choosing ? <form onSubmit={(event) => { event.preventDefault(); void controller.save(handle) }}>
       <p>{t('chooseHandle')}</p>
       <label htmlFor="atomic-handle">{t('handleLabel')}</label>
-      <input ref={input} id="atomic-handle" name="handle" value={handle} autoCapitalize="none" autoComplete="off" spellCheck={false}
+      <input ref={input} id="atomic-handle" name="handle" value={handle} autoCapitalize="none" autoComplete="off" spellCheck={false} aria-invalid={state.error === 'HANDLE_TAKEN' || state.error === 'HANDLE_INVALID' || undefined}
         maxLength={31} disabled={busy} onChange={(event) => setHandle(event.target.value)} />
       <div className="actions"><button type="submit" className="primary" aria-disabled={busy}>{t('atomicSave')}</button></div>
     </form> : null}
@@ -104,5 +113,8 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     {!signedIn && state.phase !== 'idle' ? <>
       <p>{t('atomicLeaveHint')}</p><button type="button" onClick={leave}>{t('atomicLeave')}</button>
     </> : null}
+    {unlocked ? <div className="account-next"><h2>{t('accountNext')}</h2><div className="actions"><a className="button primary" href={href('scan')}>{t('scan')}<Icon name="arrow" /></a><a className="button" href={href('create')}>{t('make')}</a></div></div> : null}
+    </div>
+    </div>
   </section>
 }

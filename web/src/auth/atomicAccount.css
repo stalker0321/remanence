@@ -1,5 +1,23 @@
-/* Scoped new registration form only. Shared shell/settings/composer belong to T406. */
-.atomic-account { overflow-wrap: anywhere; padding-inline: clamp(.4rem, 4vw, 1.15rem); }
+/* Account presentation only; real setup/restore/leave lifetime stays unchanged. */
+.card.atomic-account { overflow-wrap: anywhere; background: transparent; padding: 0; }
+.account-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2.5rem; align-items: start; }
+.account-intro > p { max-width: 30rem; color: var(--muted); }
+.account-emblem { display: flex; width: 3.2rem; height: 3.2rem; align-items: center; justify-content: center; margin-bottom: 1.25rem; border-radius: 1rem; background: var(--lilac); }
+.account-emblem .ui-icon { width: 1.75rem; height: 1.75rem; }
+.account-handle { color: var(--ink) !important; font-size: 1.4rem; margin-bottom: .75rem !important; }
+.key-explanation { margin-top: 2rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+.key-explanation h2 { font-size: 1.15rem; line-height: 1.3; letter-spacing: 0; }
+.key-explanation p { color: var(--muted); font-size: .9rem; }
+.account-controls { min-width: 0; padding: 1.5rem; border-radius: 1.5rem; background: var(--bridge); }
+.account-controls > .actions:first-child { margin-top: 0; }
+.account-controls > .actions { gap: .8rem; }
+.account-controls > .actions > .primary { flex-basis: 100%; }
+.account-controls > .actions > a { margin-inline-start: auto; }
+.account-controls .notice { background: var(--paper); padding: .85rem; }
+.account-ready { display: flex; align-items: flex-start; gap: .75rem; }
+.account-ready .ui-icon { color: var(--lilac-deep); margin-top: .15rem; }
+.account-next { margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+.account-next h2 { font-size: 1.2rem; line-height: 1.35; letter-spacing: 0; }
 .atomic-account form { display: grid; gap: .65rem; margin-top: 1rem; min-width: 0; }
 .atomic-account input {
   box-sizing: border-box;
@@ -13,3 +31,8 @@
   outline: 2px solid var(--lilac-deep); outline-offset: 3px;
 }
 .atomic-account > p + p { margin-top: .65rem; }
+@media (max-width: 700px) {
+  .account-layout { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+  .key-explanation { margin-top: 1.25rem; }
+  .account-controls { padding: 1.2rem; }
+}

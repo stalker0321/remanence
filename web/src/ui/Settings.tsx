@@ -29,18 +29,20 @@ export interface SettingsProps {
 export function Settings({ t, language, onSelectLanguage, handle, signedIn, sessionState, sendAccess }: SettingsProps) {
   return (
     <>
-      <section className="card">
+      <header className="page-heading">
         <h1>{t('settingsTitle')}</h1>
-        <p>{t('settingsBody')}</p>
-      </section>
+        <p className="page-lead">{t('settingsBody')}</p>
+      </header>
+      <div className="settings-layout">
       <section className="card settings-group">
         <h2>{t('account')}</h2>
         <dl className="settings-facts">
           <dt>{t('handleLabel')}</dt>
-          <dd className="settings-handle">{signedIn && handle !== null ? handle : t('settingsSignedOut')}</dd>
+          <dd className="settings-handle">{signedIn && handle !== null ? `@${handle}` : t('settingsSignedOut')}</dd>
           <dt>{t('settingsSession')}</dt>
           <dd>{sessionState}</dd>
         </dl>
+        {signedIn ? <p className="field-hint">{t('settingsAccountHint')}</p> : null}
         <div className="actions">
           <a href={href('account')}>{t('account')}</a>
         </div>
@@ -48,9 +50,11 @@ export function Settings({ t, language, onSelectLanguage, handle, signedIn, sess
       {sendAccess}
       <section className="card settings-group">
         <h2>{t('language')}</h2>
+        <p>{t('languageHint')}</p>
         <LanguageMenu language={language} onSelect={onSelectLanguage} t={t} />
       </section>
       <ShellStatus t={t} details />
+      </div>
       <div className="actions">
         <a href={href('home')}>{t('back')}</a>
       </div>

@@ -2,11 +2,13 @@ import { historyEn, historyRu, historyUk } from '../history/messages'
 import { accessEn, accessRu, accessUk } from '../access/messages'
 import { journeyEn, journeyRu, journeyUk } from '../auth/journeyMessages'
 import { atomicEn, atomicRu, atomicUk } from '../auth/atomicMessages'
+import { uxEn, uxRu, uxUk } from '../ui/uxMessages'
 export const languages = ['en', 'ru', 'uk'] as const
 
 export type Language = (typeof languages)[number]
 
 export const messageKeys = [
+  ...Object.keys(uxEn) as (keyof typeof uxEn)[],
   ...Object.keys(atomicEn) as (keyof typeof atomicEn)[],
   ...Object.keys(journeyEn) as (keyof typeof journeyEn)[],
   ...Object.keys(accessEn) as (keyof typeof accessEn)[],
@@ -149,6 +151,7 @@ export type MessageKey = (typeof messageKeys)[number]
 
 export const catalog: Record<Language, Record<MessageKey, string>> = {
   en: {
+    ...uxEn,
     ...accessEn,
     ...journeyEn,
     ...atomicEn,
@@ -202,7 +205,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     registrationUnsaved: 'reloading this tab drops this registration. nothing is saved yet.',
     registrationFailed: 'the account was not created. the same registration can be tried again.',
     prfUnavailable: 'this passkey manager cannot open the recovery key.',
-    passkeyCancelled: 'the passkey prompt was dismissed.',
+    passkeyCancelled: 'The passkey step did not finish. You can try again when you’re ready.',
     passkeyUnavailable: 'this browser cannot use a passkey.',
     recoveryNotStarted: 'this account has no passkey yet. opening the keys does not create one.',
     savePasskey: 'save a passkey for these keys',
@@ -259,7 +262,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     removePhoto: 'remove',
     photoEarlier: 'earlier',
     photoLater: 'later',
-    photoCount: 'a card needs 3 to 5 photos. these stay on this device and are not sent.',
+    photoCount: 'Choose 3 to 5 photos. They stay in this draft until you send.',
     photoRejected: 'that file could not be added as a photo. JPEG up to 64 MB, or five photos are already here.',
     photoLoading: 'preparing the photos…',
     createComposeFailed: 'these photos could not be prepared for the card. add them again.',
@@ -287,6 +290,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     settingsSignedOut: 'not signed in on this device.',
   },
   ru: {
+    ...uxRu,
     ...accessRu,
     ...journeyRu,
     ...atomicRu,
@@ -340,7 +344,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     registrationUnsaved: 'перезагрузка этой вкладки сбрасывает регистрацию. пока ничего не сохранено.',
     registrationFailed: 'аккаунт не создан. эту же регистрацию можно повторить.',
     prfUnavailable: 'этот менеджер ключей не может открыть ключ восстановления.',
-    passkeyCancelled: 'запрос ключа доступа закрыт.',
+    passkeyCancelled: 'Шаг с ключом доступа не завершён. Когда будете готовы, можно попробовать снова.',
     passkeyUnavailable: 'этот браузер не может использовать ключ доступа.',
     recoveryNotStarted: 'у этого аккаунта ещё нет ключа доступа. открытие ключей его не создаёт.',
     savePasskey: 'сохранить ключ доступа для этих ключей',
@@ -397,7 +401,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     removePhoto: 'убрать',
     photoEarlier: 'раньше',
     photoLater: 'позже',
-    photoCount: 'для открытки нужно от 3 до 5 фото. они остаются на этом устройстве и не отправляются.',
+    photoCount: 'Выберите от 3 до 5 фото. До отправки они остаются в черновике.',
     photoRejected: 'этот файл не удалось добавить как фото. JPEG до 64 МБ, или пять фото уже выбраны.',
     photoLoading: 'готовим фото…',
     createComposeFailed: 'эти фото не удалось подготовить для открытки. добавьте их снова.',
@@ -425,6 +429,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     settingsSignedOut: 'на этом устройстве вход не выполнен.',
   },
   uk: {
+    ...uxUk,
     ...accessUk,
     ...journeyUk,
     ...atomicUk,
@@ -478,7 +483,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     registrationUnsaved: 'перезавантаження цієї вкладки скидає реєстрацію. ще нічого не збережено.',
     registrationFailed: 'акаунт не створено. цю саму реєстрацію можна повторити.',
     prfUnavailable: 'цей менеджер ключів не може відкрити ключ відновлення.',
-    passkeyCancelled: 'запит ключа доступу закрито.',
+    passkeyCancelled: 'Крок із ключем доступу не завершено. Коли будете готові, можна спробувати знову.',
     passkeyUnavailable: 'цей браузер не може використати ключ доступу.',
     recoveryNotStarted: 'у цього акаунта ще немає ключа доступу. відкриття ключів його не створює.',
     savePasskey: 'зберегти ключ доступу для цих ключів',
@@ -535,7 +540,7 @@ export const catalog: Record<Language, Record<MessageKey, string>> = {
     removePhoto: 'прибрати',
     photoEarlier: 'раніше',
     photoLater: 'пізніше',
-    photoCount: 'для листівки потрібно від 3 до 5 фото. вони лишаються на цьому пристрої і не надсилаються.',
+    photoCount: 'Виберіть від 3 до 5 фото. До надсилання вони залишаються в чернетці.',
     photoRejected: 'цей файл не вдалося додати як фото. JPEG до 64 МБ, або п’ять фото вже вибрано.',
     photoLoading: 'готуємо фото…',
     createComposeFailed: 'ці фото не вдалося підготувати для листівки. додайте їх знову.',

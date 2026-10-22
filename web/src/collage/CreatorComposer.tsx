@@ -74,16 +74,18 @@ interface Copy {
   locked: string
   empty: string
   preview: string
+  adjustTitle: string
+  adjustHint: string
   transform: (z: number, x: number, y: number) => string
 }
 
 const copy: Record<CreatorLang, Copy> = {
   en: {
-    prev: 'Previous candidate',
-    next: 'Next candidate',
-    count: (index, total) => `Candidate ${index + 1} of ${total}`,
+    prev: 'Previous layout',
+    next: 'Next layout',
+    count: (index, total) => `Layout ${index + 1} of ${total}`,
     branch: (branch) => `Branch ${branch}`,
-    slot: (index) => `Slot ${index + 1}`,
+    slot: (index) => `Photo ${index + 1}`,
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',
     panUp: 'Move up',
@@ -91,18 +93,19 @@ const copy: Record<CreatorLang, Copy> = {
     panLeft: 'Move left',
     panRight: 'Move right',
     reset: 'Reset crop',
-    freeze: 'Freeze selection',
+    freeze: 'Choose this layout',
     preparing: 'Preparing preview…',
-    frozen: (branch) => `Frozen ${branch} — edit to invalidate`,
-    musicUnsupported: 'Music is not yet supported for this composition — Freeze is disabled.',
-    noRecipient: 'Confirm a recipient to freeze.',
+    frozen: () => 'Layout selected. Editing it will clear the selection.',
+    musicUnsupported: 'Music cannot be sent with this composition yet. Remove the song to choose a layout.',
+    noRecipient: 'Confirm a recipient to choose a layout.',
     noSender: 'Confirm a sender to compose.',
-    noteOverflow: 'Note does not fit its region — Freeze is disabled.',
-    noteMissing: 'A sealed note region requires note text — Freeze is disabled.',
-    notReady: 'Preview is not ready yet — Freeze is disabled.',
+    noteOverflow: 'The note does not fit this layout. Shorten it or choose another.',
+    noteMissing: 'Add a note for this layout, or choose one without text.',
+    notReady: 'Wait for the preview before choosing this layout.',
     locked: 'Locked — preview cleared.',
     empty: 'Add 3–5 photos to compose.',
-    preview: 'Candidate preview',
+    preview: 'Postcard composition preview',
+    adjustTitle: 'a little adjustment', adjustHint: 'Choose a photo, then adjust its crop. Your original stays unchanged.',
     transform: (z, x, y) => `zoom ${z.toFixed(2)} pan ${x.toFixed(1)} ${y.toFixed(1)}`,
   },
   ru: {
@@ -110,7 +113,7 @@ const copy: Record<CreatorLang, Copy> = {
     next: 'Следующий вариант',
     count: (index, total) => `Вариант ${index + 1} из ${total}`,
     branch: (branch) => `Ветка ${branch}`,
-    slot: (index) => `Слот ${index + 1}`,
+    slot: (index) => `Фото ${index + 1}`,
     zoomIn: 'Приблизить',
     zoomOut: 'Отдалить',
     panUp: 'Вверх',
@@ -118,18 +121,19 @@ const copy: Record<CreatorLang, Copy> = {
     panLeft: 'Влево',
     panRight: 'Вправо',
     reset: 'Сбросить кадрирование',
-    freeze: 'Зафиксировать выбор',
+    freeze: 'Выбрать эту композицию',
     preparing: 'Готовим предпросмотр…',
-    frozen: (branch) => `Зафиксировано: ${branch} — изменение сбросит фиксацию`,
-    musicUnsupported: 'Музыка пока не поддерживается в этой композиции — фиксация отключена.',
-    noRecipient: 'Подтвердите получателя для фиксации.',
+    frozen: () => 'Композиция выбрана. После изменения её нужно выбрать снова.',
+    musicUnsupported: 'Музыку пока нельзя отправить с этой композицией. Уберите песню, чтобы выбрать вариант.',
+    noRecipient: 'Подтвердите получателя, чтобы выбрать композицию.',
     noSender: 'Подтвердите отправителя для композиции.',
-    noteOverflow: 'Текст не помещается в область — фиксация отключена.',
-    noteMissing: 'Для области заметки нужен текст — фиксация отключена.',
-    notReady: 'Предпросмотр ещё не готов — фиксация отключена.',
+    noteOverflow: 'Текст не помещается в эту композицию. Сократите его или выберите другую.',
+    noteMissing: 'Добавьте заметку для этой композиции или выберите вариант без текста.',
+    notReady: 'Дождитесь предпросмотра, прежде чем выбирать композицию.',
     locked: 'Заблокировано — предпросмотр очищен.',
     empty: 'Добавьте 3–5 фото для композиции.',
     preview: 'Предпросмотр варианта',
+    adjustTitle: 'немного поправить', adjustHint: 'Выберите фото и поправьте кадрирование. Оригинал не изменится.',
     transform: (z, x, y) => `зум ${z.toFixed(2)} сдвиг ${x.toFixed(1)} ${y.toFixed(1)}`,
   },
   uk: {
@@ -137,7 +141,7 @@ const copy: Record<CreatorLang, Copy> = {
     next: 'Наступний варіант',
     count: (index, total) => `Варіант ${index + 1} з ${total}`,
     branch: (branch) => `Гілка ${branch}`,
-    slot: (index) => `Слот ${index + 1}`,
+    slot: (index) => `Фото ${index + 1}`,
     zoomIn: 'Наблизити',
     zoomOut: 'Віддалити',
     panUp: 'Вгору',
@@ -145,18 +149,19 @@ const copy: Record<CreatorLang, Copy> = {
     panLeft: 'Вліво',
     panRight: 'Вправо',
     reset: 'Скинути кадрування',
-    freeze: 'Зафіксувати вибір',
+    freeze: 'Вибрати цю композицію',
     preparing: 'Готуємо попередній перегляд…',
-    frozen: (branch) => `Зафіксовано: ${branch} — зміна скине фіксацію`,
-    musicUnsupported: 'Музика поки не підтримується в цій композиції — фіксація вимкнена.',
-    noRecipient: 'Підтвердіть отримувача для фіксації.',
+    frozen: () => 'Композицію вибрано. Після зміни її потрібно вибрати знову.',
+    musicUnsupported: 'Музику поки не можна надіслати з цією композицією. Приберіть пісню, щоб вибрати варіант.',
+    noRecipient: 'Підтвердіть одержувача, щоб вибрати композицію.',
     noSender: 'Підтвердіть відправника для композиції.',
-    noteOverflow: 'Текст не вміщується в область — фіксація вимкнена.',
-    noteMissing: 'Для області нотатки потрібен текст — фіксація вимкнена.',
-    notReady: 'Попередній перегляд ще не готовий — фіксація вимкнена.',
+    noteOverflow: 'Текст не вміщується в цю композицію. Скоротіть його або виберіть іншу.',
+    noteMissing: 'Додайте нотатку для цієї композиції або виберіть варіант без тексту.',
+    notReady: 'Дочекайтеся попереднього перегляду, перш ніж вибирати композицію.',
     locked: 'Заблоковано — попередній перегляд очищено.',
     empty: 'Додайте 3–5 фото для композиції.',
     preview: 'Попередній перегляд варіанта',
+    adjustTitle: 'трохи поправити', adjustHint: 'Виберіть фото й поправте кадрування. Оригінал не зміниться.',
     transform: (z, x, y) => `зум ${z.toFixed(2)} зсув ${x.toFixed(1)} ${y.toFixed(1)}`,
   },
 }
@@ -659,6 +664,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
 
   return (
     <div className="creator-composer" data-testid="creator-composer">
+      <div className="creator-preview">
       <div className="creator-pager">
         <button type="button" data-testid="creator-prev" aria-label={t.prev} disabled={planIndex === 0} onClick={() => setPlanIndex((i) => Math.max(0, i - 1))}>
           ‹
@@ -674,10 +680,13 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
           ›
         </button>
       </div>
-      <p className="creator-branch" data-testid="creator-branch">
+      <p className="creator-branch visually-hidden" aria-hidden="true" data-testid="creator-branch">
         {t.branch(view.branch)}
       </p>
       <canvas ref={canvasRef} data-testid="creator-canvas" role="img" aria-label={t.preview} width={360} height={640} />
+      </div>
+      <div className="creator-controls">
+      <h2>{t.adjustTitle}</h2><p>{t.adjustHint}</p>
       <div className="creator-slots" role="group" aria-label={t.preview}>
         {view.slots.map((slot, index) => (
           <button
@@ -737,6 +746,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         <p data-testid="creator-freeze-error">{freezeError}</p>
       ) : null}
       {paintError !== null ? <p data-testid="creator-paint-error">{paintError}</p> : null}
+      </div>
     </div>
   )
 }

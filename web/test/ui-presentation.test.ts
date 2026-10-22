@@ -1,7 +1,8 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { catalog, languages, translate } from '../src/i18n/catalog'
+import { catalog, languages } from '../src/i18n/catalog'
+import { translate } from '../src/i18n/translate'
 import { Icon, StepTrail } from '../src/ui/Primitives'
 import { uxEn, uxRu, uxUk } from '../src/ui/uxMessages'
 

@@ -6,7 +6,7 @@
 .account-emblem .ui-icon { width: 1.75rem; height: 1.75rem; }
 .account-handle { color: var(--ink) !important; font-size: 1.4rem; margin-bottom: .75rem !important; }
 .key-explanation { margin-top: 2rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
-.key-explanation h2 { font-size: 1.15rem; line-height: 1.3; letter-spacing: 0; }
+.atomic-account .key-explanation h2 { font-size: 1.15rem; line-height: 1.3; letter-spacing: 0; }
 .key-explanation p { color: var(--muted); font-size: .9rem; }
 .account-controls { min-width: 0; padding: 1.5rem; border-radius: 1.5rem; background: var(--bridge); }
 .account-controls > .actions:first-child { margin-top: 0; }
@@ -17,7 +17,7 @@
 .account-ready { display: flex; align-items: flex-start; gap: .75rem; }
 .account-ready .ui-icon { color: var(--lilac-deep); margin-top: .15rem; }
 .account-next { margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
-.account-next h2 { font-size: 1.2rem; line-height: 1.35; letter-spacing: 0; }
+.atomic-account .account-next h2 { font-size: 1.2rem; line-height: 1.35; letter-spacing: 0; }
 .atomic-account form { display: grid; gap: .65rem; margin-top: 1rem; min-width: 0; }
 .atomic-account input {
   box-sizing: border-box;

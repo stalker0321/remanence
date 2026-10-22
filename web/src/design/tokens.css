@@ -423,7 +423,7 @@ button.quiet, a.button.quiet {
 /* Product chrome stays outside the canonical collage canvas/geometry. */
 .ui-icon { width: 1.35em; height: 1.35em; flex: 0 0 auto; }
 .mark-dot { color: var(--lilac-deep); }
-.bar .mark { padding-block: .35rem; }
+.bar .mark { display: inline-flex; align-items: center; min-height: 44px; padding-block: .35rem; }
 .account-link { display: inline-flex; align-items: center; gap: .45rem; min-height: 44px; max-width: 45%; margin-inline-start: auto; text-decoration: none; font-size: .85rem; }
 .account-link span { overflow-wrap: anywhere; }
 .bar > .language-menu { margin-inline-start: 0; }

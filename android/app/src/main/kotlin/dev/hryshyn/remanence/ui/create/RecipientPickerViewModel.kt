@@ -153,28 +153,40 @@ class RecipientPickerViewModel(
                     return@launch
                 }
             }
-            val expectedOwner = sessionOwnerProvider() ?: run {
-                if (isCurrent()) {
-                    _state.value = RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+            try {
+                val expectedOwner = sessionOwnerProvider() ?: run {
+                    if (isCurrent()) {
+                        _state.value = RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+                    }
+                    return@launch
                 }
-                return@launch
-            }
-            if (!isCurrent()) return@launch
-            val result = try {
-                mapResult(directory.lookup(rawHandle))
+                if (!isCurrent()) return@launch
+                val result = try {
+                    mapResult(directory.lookup(rawHandle))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    RecipientLookupUiState.Failed("Unexpected error. Try again later.")
+                }
+                if (!isCurrent()) return@launch
+                val currentOwner = sessionOwnerProvider()
+                if (isCurrent()) {
+                    _state.value = when {
+                        currentOwner != expectedOwner ->
+                            RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+                        expectedRecipient != null && result is RecipientLookupUiState.Resolved &&
+                            result.snapshot.userId != expectedRecipient -> recentIdentityFailure()
+                        else -> result
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                RecipientLookupUiState.Failed("Unexpected error. Try again later.")
-            }
-            val currentOwner = sessionOwnerProvider()
-            if (isCurrent()) {
-                _state.value = when {
-                    currentOwner != expectedOwner ->
-                        RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
-                    expectedRecipient != null && result is RecipientLookupUiState.Resolved &&
-                        result.snapshot.userId != expectedRecipient -> recentIdentityFailure()
-                    else -> result
+                // Owner-store reads are part of the same bounded attempt as
+                // directory IO. Never expose storage details or bind a result
+                // whose owner could not be freshly checked; allow a retry.
+                if (isCurrent()) {
+                    _state.value = RecipientLookupUiState.Failed("Unexpected error. Try again later.")
                 }
             }
         }

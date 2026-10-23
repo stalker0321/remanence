@@ -16,5 +16,9 @@ if [ ! -d "$release/venv" ]; then
 fi
 ln -sfn "releases/$sha" "$root/current.new" && mv -T "$root/current.new" "$root/current"
 sudo systemctl restart remanence-backend
-sleep 3
-curl -fsS "http://127.0.0.1:18125/healthz" && echo " deployed $sha"
+for _ in $(seq 1 30); do
+  curl -fsS "http://127.0.0.1:18125/healthz" >/dev/null 2>&1 && { echo "deployed $sha"; exit 0; }
+  sleep 1
+done
+echo "backend did not become healthy; see: journalctl -u remanence-backend" >&2
+exit 1

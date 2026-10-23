@@ -36,4 +36,11 @@ class PostcardFlipFrameTest {
         val frame = flipFrame(0f, card, Rect(0f, 100f, 1080f, 2300f), screen)
         assertEquals(500f, frame.rect.top, 0.5f)
     }
+
+    @Test fun hapticBeatsFollowTheTurnInOrder() {
+        val stages = (0..100).map { openingHapticStage(it / 100f) }
+        assertEquals(listOf(0, 1, 2, 3), stages.distinct())
+        assertEquals(stages, stages.sorted())
+        assertEquals(3, openingHapticStage(1f))
+    }
 }

@@ -52,9 +52,11 @@ fun CapturedPostcardStage(
 ) {
     val carryFront = LocalAstraCarryFront.current
     val lift = remember(postcard) { Animatable(if (motion == AstraMotionSpec.Resolved.FULL) 0f else 1f) }
+    val haptics = dev.hryshyn.remanence.ui.motion.rememberOpeningHaptics()
     LaunchedEffect(postcard, motion) {
         if (motion == AstraMotionSpec.Resolved.FULL) {
             delay(LIFT_HOLD_MS)
+            haptics.lift()
             lift.animateTo(1f, astraTween(LIFT_MS, FastOutSlowInEasing))
         } else {
             lift.snapTo(1f)

@@ -36,11 +36,9 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.invisibleToUser
@@ -50,7 +48,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import dev.hryshyn.remanence.capture.CapturedPostcard
 import dev.hryshyn.remanence.ui.scan.drawPostcardFace
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.math.min
 
@@ -74,18 +71,20 @@ fun AstraPostcardFlip(
 ) {
     val clock = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    val haptics = LocalHapticFeedback.current
+    val haptics = rememberOpeningHaptics()
     LaunchedEffect(Unit) {
         clock.animateTo(1f, tween(FLIP_TOTAL_MS, easing = LinearEasing))
     }
     LaunchedEffect(Unit) {
-        snapshotFlow { clock.value }
-            .map { t -> (if (t >= FLIP_MID) 1 else 0) + (if (t >= EXPAND_END) 1 else 0) }
+        // A skip jumps straight to the last stage, so only the landing plays.
+        snapshotFlow { openingHapticStage(clock.value) }
             .distinctUntilChanged()
             .collect { stage ->
                 when (stage) {
-                    1 -> haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    2 -> haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    0 -> haptics.lift()
+                    1 -> haptics.turn()
+                    2 -> haptics.edge()
+                    3 -> haptics.land()
                 }
             }
     }
@@ -190,6 +189,17 @@ internal data class FlipFrame(
         maxOf(rect.width / full.width, rect.height / full.height).coerceIn(0.01f, 1f)
 }
 
+/** Haptic beat for [t]: lift, turn starts, edge-on, landed. */
+internal fun openingHapticStage(t: Float): Int {
+    val turned = FastOutSlowInEasing.transform(phase(t, FLIP_START, FLIP_END))
+    return when {
+        t >= EXPAND_END -> 3
+        turned >= 0.5f -> 2
+        t >= FLIP_START -> 1
+        else -> 0
+    }
+}
+
 internal fun flipFrame(t: Float, front: OpeningRect, origin: Rect?, size: Size): FlipFrame {
     val ox = origin?.left ?: 0f
     val oy = origin?.top ?: 0f
@@ -274,7 +284,6 @@ internal const val FLIP_TOTAL_MS = 2000
 private const val LIFT_END = 0.10f
 private const val FLIP_START = 0.06f
 private const val FLIP_END = 0.46f
-internal const val FLIP_MID = (FLIP_START + FLIP_END) / 2f
 internal const val EXPAND_END = 0.70f
 private const val DEVELOP_START = 0.48f
 private const val CAMERA_DISTANCE = 14f

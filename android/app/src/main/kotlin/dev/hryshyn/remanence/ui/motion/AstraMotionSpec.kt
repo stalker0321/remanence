@@ -26,6 +26,9 @@ object AstraMotionSpec {
     /** Calmer product routine Carry; originally340ms in the study. */
     const val ROUTINE_CONTEXT_MS = 520
 
+    /** Screen and step cross-dissolve: the old frame melts into the new one. */
+    const val CROSSFADE_MS = 460
+
     /** Calmer product image handoff range; originally420..480ms. */
     const val IMAGE_TRAVEL_MIN_MS = 540
 
@@ -99,6 +102,13 @@ object AstraMotionSpec {
         animatorDurationScale <= 0f -> Resolved.INSTANT
         animatorDurationScale < 1f -> Resolved.REDUCED_SHORT
         else -> Resolved.FULL
+    }
+
+    /** Cross-dissolve duration for a regime. */
+    fun crossfadeMs(resolved: Resolved): Int = when (resolved) {
+        Resolved.FULL -> CROSSFADE_MS
+        Resolved.REDUCED_SHORT -> REDUCED_CROSSFADE_MS
+        Resolved.INSTANT -> 0
     }
 
     /** Routine state-transition duration for a regime. */

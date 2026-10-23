@@ -30,7 +30,7 @@ import dev.hryshyn.remanence.ui.motion.LocalAstraCarryFront
 import dev.hryshyn.remanence.ui.scan.AstraPostcard
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
-import dev.hryshyn.remanence.ui.motion.AstraContextArrival
+import dev.hryshyn.remanence.ui.motion.AstraCrossfade
 import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 
 /**
@@ -57,6 +57,55 @@ fun RootScreen(
     onOpenSettings: (() -> Unit)? = null,
     onOpenHistory: (() -> Unit)? = null,
 ) {
+    // One transition per boundary, owned by the root: the whole surface
+    // cross-dissolves from its last frame, so auth, shell and flows all move
+    // the same way. Signing out never fades — private pixels end with the
+    // session.
+    val motion = rememberAstraMotion()
+    val boundary: Any = when {
+        authState is AuthUiState.Resolving -> RootBoundary.RESOLVING
+        authState == AuthUiState.SignedOut && showPublicHome -> RootBoundary.PUBLIC_HOME
+        authState !is AuthUiState.Authenticated -> authState::class
+        else -> destination
+    }
+    AstraCrossfade(
+        motion = motion,
+        contentKey = boundary,
+        modifier = modifier.fillMaxSize(),
+        animate = { from, to ->
+            val leavingSession = from is AppDestination && to !is AppDestination
+            // Scan -> Capsule carries the postcard itself; a dissolve on top
+            // would double the movement.
+            val carried = from == AppDestination.Scan && to is AppDestination.Capsule
+            !leavingSession && !carried
+        },
+    ) {
+        RootSurface(
+            authState, destination, authenticationContent, homeContent, createContent, scanContent,
+            capsuleContent, onExitFlow, showPublicHome, settingsContent, historyContent, onOpenSettings, onOpenHistory,
+        )
+    }
+}
+
+private enum class RootBoundary { RESOLVING, PUBLIC_HOME }
+
+@Composable
+private fun RootSurface(
+    authState: AuthUiState,
+    destination: AppDestination,
+    authenticationContent: @Composable () -> Unit,
+    homeContent: @Composable () -> Unit,
+    createContent: @Composable () -> Unit,
+    scanContent: @Composable () -> Unit,
+    capsuleContent: @Composable (grantId: String) -> Unit,
+    onExitFlow: () -> Unit,
+    showPublicHome: Boolean,
+    settingsContent: @Composable () -> Unit,
+    historyContent: @Composable () -> Unit,
+    onOpenSettings: (() -> Unit)?,
+    onOpenHistory: (() -> Unit)?,
+) {
+    val modifier = Modifier
     if (authState is AuthUiState.Resolving) {
         // Cold-start session check still in flight: hold a neutral frame so
         // neither the auth form nor any home surface flashes for a frame.
@@ -65,15 +114,8 @@ fun RootScreen(
         Box(modifier.fillMaxSize().testTag("root_resolving_frame"))
         return
     }
-    // Resolved above the early return so the uncovered auth/home switches
-    // below share the same calm arrival as the route boundaries: one
-    // arrival per boundary, owned by the root, keyed coarsely so typing in
-    // a form never replays it.
-    val motion = rememberAstraMotion()
     if (authState == AuthUiState.SignedOut && showPublicHome) {
-        AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = AppDestination.Home) {
-            homeContent()
-        }
+        Box(modifier.fillMaxSize()) { homeContent() }
         return
     }
     if (authState !is AuthUiState.Authenticated) {
@@ -87,9 +129,7 @@ fun RootScreen(
                 Spacer(Modifier.height(8.dp))
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                AstraContextArrival(motion = motion, contentKey = authState::class) {
-                    authenticationContent()
-                }
+                authenticationContent()
             }
         }
         return
@@ -100,8 +140,6 @@ fun RootScreen(
         onBack = onExitFlow,
     )
 
-    // One persistent product shell: navigation never fades or travels with a
-    // page. Only the incoming body arrives; the outgoing body is disposed now.
     val section = when (destination) {
         AppDestination.Home -> dev.hryshyn.remanence.ui.hold.ProductSection.HOME
         AppDestination.History -> dev.hryshyn.remanence.ui.hold.ProductSection.SENT
@@ -110,13 +148,11 @@ fun RootScreen(
     }
     if (section != null && onOpenSettings != null && onOpenHistory != null) {
         dev.hryshyn.remanence.ui.hold.ProductFrame(section, onExitFlow, onOpenHistory, onOpenSettings) {
-            AstraContextArrival(motion, Modifier.fillMaxSize(), contentKey = destination) {
-                key(destination) {
-                    when (destination) {
-                        AppDestination.Settings -> settingsContent()
-                        AppDestination.History -> historyContent()
-                        else -> homeContent()
-                    }
+            key(destination) {
+                when (destination) {
+                    AppDestination.Settings -> settingsContent()
+                    AppDestination.History -> historyContent()
+                    else -> homeContent()
                 }
             }
         }
@@ -137,27 +173,17 @@ fun RootScreen(
 
     CompositionLocalProvider(LocalAstraCarryFront provides carryFront) {
     when (destination) {
-        AppDestination.Settings -> key(destination) {
-            AstraContextArrival(motion, modifier.fillMaxSize(), contentKey = destination) { settingsContent() }
-        }
-        AppDestination.History -> key(destination) {
-            AstraContextArrival(motion, modifier.fillMaxSize(), contentKey = destination) { historyContent() }
-        }
+        AppDestination.Settings -> key(destination) { settingsContent() }
+        AppDestination.History -> key(destination) { historyContent() }
         // Create owns its step-aware back arrow and pinned close control.
         // The root owns only the route boundary and session lifecycle.
-        AppDestination.Create -> key(destination) {
-            AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
-                createContent()
-            }
-        }
+        AppDestination.Create -> key(destination) { Box(modifier.fillMaxSize()) { createContent() } }
 
         AppDestination.Scan -> key(destination) {
-            AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
-                Column(Modifier.fillMaxSize()) {
-                    dev.hryshyn.remanence.ui.hold.HoldFlowHeader(onBack = onExitFlow, onClose = onExitFlow, testKey = "scan")
-                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                        scanContent()
-                    }
+            Column(modifier.fillMaxSize()) {
+                dev.hryshyn.remanence.ui.hold.HoldFlowHeader(onBack = onExitFlow, onClose = onExitFlow, testKey = "scan")
+                Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    scanContent()
                 }
             }
         }
@@ -165,18 +191,15 @@ fun RootScreen(
         is AppDestination.Capsule ->
             // Scan-accepted opening: the published postcard rect carries into
             // the capsule through one overlapping movement. Without a rect
-            // (rotation, restart, direct entry) this falls back to the plain
-            // boundary arrival. A capsule opening carries like any other route
-            // boundary; the arrival is incoming-only, so no private outgoing
-            // node is ever retained. Keyed by grant: each grant arrives
-            // exactly once.
+            // (rotation, restart, direct entry) the root dissolve applies.
+            // Keyed by grant: each grant arrives exactly once.
             key(destination) {
                 val front = remember(destination) {
                     carryFront.consumeIf(destination is AppDestination.Capsule)
                 }
                 if (front != null) {
                     AstraOpeningCarry(
-                        motion = motion,
+                        motion = rememberAstraMotion(),
                         modifier = modifier.fillMaxSize(),
                         front = front,
                         backdropColor = MaterialTheme.colorScheme.background,
@@ -185,20 +208,12 @@ fun RootScreen(
                         capsuleContent(destination.grantId)
                     }
                 } else {
-                    AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
-                        capsuleContent(destination.grantId)
-                    }
+                    Box(modifier.fillMaxSize()) { capsuleContent(destination.grantId) }
                 }
             }
 
         // Until a live grant exists, Home remains the fallback surface.
-        // Home owns the return arrival so Back to Home carries like any
-        // other boundary; the outgoing flow is dropped synchronously.
-        else -> key(destination) {
-            AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
-                homeContent()
-            }
-        }
+        else -> key(destination) { Box(modifier.fillMaxSize()) { homeContent() } }
     }
     }
 }

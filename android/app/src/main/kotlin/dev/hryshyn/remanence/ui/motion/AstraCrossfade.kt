@@ -1,0 +1,108 @@
+package dev.hryshyn.remanence.ui.motion
+
+import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+
+/**
+ * Calm cross-dissolve between two states of one surface.
+ *
+ * The outgoing composable is disposed immediately, as before: only the last
+ * frame it drew survives, as a recorded display list that fades out on top
+ * of the live incoming content. Nothing outgoing stays composed or
+ * interactive, and the incoming content takes input from its first frame.
+ *
+ * The host must sit at a stable position above whatever [contentKey]
+ * switches, otherwise it is recreated with the content and has nothing to
+ * fade from. [animate] decides per change whether the old frame is kept
+ * (sign-out passes false so private pixels never outlive the session).
+ * The very first composition never fades.
+ */
+@Composable
+fun AstraCrossfade(
+    motion: AstraMotionSpec.Resolved,
+    contentKey: Any?,
+    modifier: Modifier = Modifier,
+    animate: (from: Any?, to: Any?) -> Boolean = { _, _ -> true },
+    content: @Composable () -> Unit,
+) {
+    val first = rememberGraphicsLayer()
+    val second = rememberGraphicsLayer()
+    val state = remember { CrossfadeHolder(contentKey) }
+    val outgoing = remember { Animatable(0f) }
+    var generation by remember { mutableIntStateOf(0) }
+    val currentAnimate by rememberUpdatedState(animate)
+
+    if (contentKey != state.key) {
+        val from = state.key
+        state.key = contentKey
+        if (state.hasFrame && motion != AstraMotionSpec.Resolved.INSTANT && currentAnimate(from, contentKey)) {
+            // The layer holding the last drawn frame stops recording and
+            // becomes the outgoing snapshot; the next draw records into the
+            // other one.
+            state.recordingFirst = !state.recordingFirst
+            state.frozenDirty = true
+            generation++
+        } else {
+            state.dropFrozen = true
+            generation++
+        }
+    }
+
+    LaunchedEffect(generation) {
+        if (generation == 0) return@LaunchedEffect
+        if (state.dropFrozen) {
+            state.dropFrozen = false
+            outgoing.snapTo(0f)
+            return@LaunchedEffect
+        }
+        outgoing.snapTo(1f)
+        outgoing.animateTo(0f, astraTween(AstraMotionSpec.crossfadeMs(motion), AstraDissolveEasing))
+    }
+
+    Box(modifier.drawWithContent {
+        val recording = if (state.recordingFirst) first else second
+        val frozen = if (state.recordingFirst) second else first
+        recording.alpha = 1f
+        recording.record { this@drawWithContent.drawContent() }
+        drawLayer(recording)
+        state.hasFrame = true
+        val fade = outgoing.value
+        if (fade > 0f && state.frozenDirty) {
+            frozen.alpha = fade
+            drawLayer(frozen)
+        } else if (state.frozenDirty) {
+            // Fade finished (or was cancelled): drop the old frame's pixels.
+            frozen.clear()
+            state.frozenDirty = false
+        }
+    }) {
+        content()
+    }
+}
+
+private class CrossfadeHolder(var key: Any?) {
+    var recordingFirst = true
+    var hasFrame = false
+    var frozenDirty = false
+    var dropFrozen = false
+}
+
+private fun GraphicsLayer.clear() {
+    record(
+        density = androidx.compose.ui.unit.Density(1f),
+        layoutDirection = androidx.compose.ui.unit.LayoutDirection.Ltr,
+        size = androidx.compose.ui.unit.IntSize.Zero,
+    ) {}
+}

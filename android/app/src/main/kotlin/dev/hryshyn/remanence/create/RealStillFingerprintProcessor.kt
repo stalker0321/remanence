@@ -277,7 +277,20 @@ class RealStillFingerprintProcessor(
         selection: dev.hryshyn.remanence.core.recognition.PostcardCropSelection,
         lineCandidates: List<QuadCandidate>?,
     ): CapturedPostcard? = runCatching {
-        val quad = OpeningQuad.select(selection.candidate, selection.usedGuideFallback, lineCandidates, width, height)
+        // The line locator may be off for recognition (local rollout switch);
+        // the opening still uses it, for display only.
+        val outlines = lineCandidates ?: if (selection.usedGuideFallback) {
+            try {
+                v2Locator.detect(pixels, width, height)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        val quad = OpeningQuad.select(selection.candidate, selection.usedGuideFallback, outlines, width, height)
             ?: return null
         val scale = minOf(1.0, OPENING_PHOTO_EDGE_PX / maxOf(width, height).toDouble())
         val full = android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)

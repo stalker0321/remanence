@@ -48,6 +48,7 @@ class ProductReworkJourneyTest {
     fun ukrainianLargeOnboardingKeepsActionsReachable() = onboarding("uk-large", 1.8f)
 
     private fun onboarding(locale: String, scale: Float) {
+        windowFontScale(scale)
         var exitRequested by mutableStateOf(false)
         var left by mutableStateOf(false)
         rule.setContent { CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
@@ -107,6 +108,7 @@ class ProductReworkJourneyTest {
     fun ukrainianLargeNavigationAndSettings() = utilities("uk-large", 1.8f)
 
     private fun utilities(locale: String, scale: Float) {
+        windowFontScale(scale)
         var section by mutableStateOf(ProductSection.HOME)
         var made = 0
         rule.setContent { CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
@@ -150,6 +152,18 @@ class ProductReworkJourneyTest {
             ProductSection.SENT -> "root_history_button"
             ProductSection.SETTINGS -> "root_settings_button"
         }).performClick()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun windowFontScale(scale: Float) {
+        // Separate Dialog windows derive density from Resources, not the
+        // overridden Compose local. Exercise the actual window configuration too.
+        val application = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        for (resources in listOf(application.resources, rule.activity.resources)) {
+            val configuration = android.content.res.Configuration(resources.configuration)
+            configuration.fontScale = scale
+            resources.updateConfiguration(configuration, resources.displayMetrics)
+        }
     }
 
     private fun capture(name: String, dialog: Boolean = false) {

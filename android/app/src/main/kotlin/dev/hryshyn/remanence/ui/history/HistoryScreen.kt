@@ -175,9 +175,9 @@ private fun HistoryDetail(item: OutgoingItem, cancellable: Boolean,
                 Modifier.testTag("history_code_unavailable"), color = HoldColors.Muted)
         }
         item.cancelDeadline?.let { DetailDate(R.string.history_cancel_deadline, it) }
-        if (cancellable) HoldDestructiveButton(onClick = { onCancel(item.key) },
-            modifier = Modifier.fillMaxWidth().testTag("history_cancel")) {
-            Text(stringResource(R.string.create_audit_revoke_confirm))
+        if (cancellable) HoldTextButton(onClick = { onCancel(item.key) },
+            modifier = Modifier.testTag("history_cancel")) {
+            Text(stringResource(R.string.create_audit_revoke_confirm), color = HoldColors.Destructive)
         } else Text(stringResource(R.string.history_cancel_unavailable), Modifier.testTag("history_no_cancel"), color = HoldColors.Muted)
     }
 }

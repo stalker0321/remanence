@@ -8,6 +8,7 @@ from pydantic import SecretStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from remanence.api.rate_limit import auth_limit, refresh_limit
 from remanence.api.auth_schemas import (
     ActiveKeyBundleResponse,
     LoginRequest,
@@ -61,7 +62,7 @@ def logout(
 
 
 @router.post(
-    "/v1/auth/refresh",
+    "/v1/auth/refresh", dependencies=[Depends(refresh_limit)],
     response_model=RefreshResponse,
     status_code=200,
 )
@@ -89,7 +90,7 @@ def refresh(
 
 
 @router.post(
-    "/v1/auth/login",
+    "/v1/auth/login", dependencies=[Depends(auth_limit)],
     response_model=LoginResponse,
     status_code=200,
 )
@@ -172,7 +173,7 @@ def login(
 
 
 @router.post(
-    "/v1/auth/register",
+    "/v1/auth/register", dependencies=[Depends(auth_limit)],
     response_model=RegistrationResponse,
     status_code=201,
 )

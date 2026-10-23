@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from remanence.api.auth import router as auth_router
 from remanence.api.google_auth import router as google_auth_router
+from remanence.api.rate_limit import RateLimitedError
 from remanence.api.registration_setup import router as registration_setup_router, RegistrationNoStoreMiddleware
 from remanence.api.dependencies import (
     AuthenticationRequiredError,
@@ -210,6 +211,13 @@ def create_app(
         if request.url.path.startswith("/v2/registration/"):
             return JSONResponse({"reason": "SETUP_UNAVAILABLE"}, status_code=503, headers={"Cache-Control": "no-store"})
         return problem_response(request, "INTERNAL_UNAVAILABLE")
+
+    @app.exception_handler(RateLimitedError)
+    def _rate_limited(request: Request, exc: RateLimitedError) -> JSONResponse:
+        headers = {"Retry-After": str(exc.retry_after)}
+        if request.url.path.startswith("/v2/registration/"):
+            return JSONResponse({"reason": "RATE_LIMITED"}, status_code=429, headers={**headers, "Cache-Control": "no-store"})
+        return problem_response(request, "RATE_LIMITED", extra_headers=headers)
 
     @app.exception_handler(AuthenticationRequiredError)
     def _authentication_required(request: Request, exc: AuthenticationRequiredError) -> JSONResponse:

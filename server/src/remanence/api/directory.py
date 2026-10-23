@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from remanence.api.rate_limit import directory_limit
 from remanence.api.dependencies import AuthenticatedPrincipal, get_authenticated_principal, get_db_session
 from remanence.api.directory_schemas import (
     DirectoryKeyBundleResponse,
@@ -56,7 +57,7 @@ def _public_bundle_fields(bundle: UserKeyBundle) -> dict:
     }
 
 
-@router.get("/v1/directory/handles/{handle}", response_model=DirectoryLookupResponse)
+@router.get("/v1/directory/handles/{handle}", dependencies=[Depends(directory_limit)], response_model=DirectoryLookupResponse)
 def lookup_handle(
     handle: str,
     request: Request,
@@ -86,7 +87,7 @@ def lookup_handle(
     return body
 
 
-@router.get("/v1/directory/users/{user_id}", response_model=DirectoryLookupResponse)
+@router.get("/v1/directory/users/{user_id}", dependencies=[Depends(directory_limit)], response_model=DirectoryLookupResponse)
 def lookup_user(
     user_id: uuid.UUID,
     request: Request,
@@ -113,7 +114,7 @@ def lookup_user(
     )
 
 
-@router.get("/v1/directory/key-bundles/{key_bundle_id}", response_model=KeyBundleByIdResponse)
+@router.get("/v1/directory/key-bundles/{key_bundle_id}", dependencies=[Depends(directory_limit)], response_model=KeyBundleByIdResponse)
 def get_key_bundle(
     key_bundle_id: str,
     request: Request,

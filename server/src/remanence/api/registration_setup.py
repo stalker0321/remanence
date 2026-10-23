@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from remanence.api.rate_limit import registration_limit
 from remanence.api.dependencies import (AuthenticationRequiredError, get_db_session,
     get_access_bearer_token, get_authenticated_principal)
 from remanence.registration_setup.schemas import EpochRequest, SetupOptions, SetupVerify, FinalRequest
@@ -33,7 +34,7 @@ def enabled(request: Request):
         raise HTTPException(404)
 
 
-router = APIRouter(prefix="/v2/registration/reservations", dependencies=[Depends(enabled)])
+router = APIRouter(prefix="/v2/registration/reservations", dependencies=[Depends(enabled), Depends(registration_limit)])
 ID = Path(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 

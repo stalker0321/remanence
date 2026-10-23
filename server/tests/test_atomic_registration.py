@@ -38,6 +38,8 @@ def atomic(google_env):
     client.app.state.settings.registration_atomic_admission_enabled = True
     now = [datetime.now(timezone.utc)]
     client.app.state.registration_clock = lambda: now[0]
+    # These tests sweep many request variants; limiter behaviour is covered elsewhere.
+    client.app.state.rate_limits_disabled = True
     return client, factory, token, now
 
 

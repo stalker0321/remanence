@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     music_catalog_path: Path | None = None
     music_search_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     recovery_enabled: bool = False
+    recovery_test_page_enabled: bool = False
     send_access_mode: SendAccessMode = SendAccessMode.OFF
     google_sign_in_enabled: bool = False
     # Atomic registration A: isolated opt-in; admission and durable legacy fence

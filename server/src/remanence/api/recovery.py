@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from webauthn import generate_registration_options, generate_authentication_options, verify_registration_response, verify_authentication_response, options_to_json
 from webauthn.helpers.structs import AuthenticatorSelectionCriteria, ResidentKeyRequirement, UserVerificationRequirement, PublicKeyCredentialDescriptor
 
+from remanence.api.rate_limit import recovery_limit
 from remanence.api.dependencies import get_authenticated_principal, get_db_session, AuthenticatedPrincipal
 from remanence.api.auth_schemas import LoginResponse, RegistrationUserResponse, ActiveKeyBundleResponse
 from remanence.auth.tokens import generate_access_token, generate_refresh_token, hash_opaque_token
@@ -41,8 +42,13 @@ def enabled(request: Request, response: Response):
 router = APIRouter(dependencies=[Depends(enabled)])
 
 
-@router.get("/recovery-test/")
-@router.get("/recovery-test/{filename}")
+def test_page_enabled(request: Request):
+    if not request.app.state.settings.recovery_test_page_enabled:
+        raise HTTPException(404)
+
+
+@router.get("/recovery-test/", dependencies=[Depends(test_page_enabled)])
+@router.get("/recovery-test/{filename}", dependencies=[Depends(test_page_enabled)])
 def browser(filename: str = "index.html"):
     if filename not in {"index.html", "app.mjs", "crypto.mjs"}: raise HTTPException(404)
     content = (Path(__file__).parent.parent / "recovery" / "web" / filename).read_bytes()
@@ -227,12 +233,12 @@ def registration_options(request, db, principal):
     return {"flow": str(row.id), "options": out}
 
 
-@router.post("/v1/recovery/register/options")
+@router.post("/v1/recovery/register/options", dependencies=[Depends(recovery_limit)])
 def register_options(payload: Empty, request: Request, principal: AuthenticatedPrincipal = Depends(get_authenticated_principal), db: Session = Depends(get_db_session)):
     return run(db, lambda: registration_options(request, db, principal))
 
 
-@router.post("/v1/recovery/register/verify")
+@router.post("/v1/recovery/register/verify", dependencies=[Depends(recovery_limit)])
 def register_verify(payload: VerifyRequest, request: Request, principal: AuthenticatedPrincipal = Depends(get_authenticated_principal), db: Session = Depends(get_db_session)):
     def operation(row):
         db.scalar(select(User).where(User.id == principal.user_id).with_for_update())
@@ -258,12 +264,12 @@ def auth_options(request, db, principal=None, credential_id=None):
     return {"flow": str(row.id), "options": out}
 
 
-@router.post("/v1/recovery/setup/options")
+@router.post("/v1/recovery/setup/options", dependencies=[Depends(recovery_limit)])
 def setup_options(payload: CredentialRequest, request: Request, principal: AuthenticatedPrincipal = Depends(get_authenticated_principal), db: Session = Depends(get_db_session)):
     return run(db, lambda: auth_options(request, db, principal, payload.credential_id))
 
 
-@router.post("/v1/recovery/login/options")
+@router.post("/v1/recovery/login/options", dependencies=[Depends(recovery_limit)])
 def login_options(payload: Empty, request: Request, db: Session = Depends(get_db_session)):
     return run(db, lambda: auth_options(request, db))
 
@@ -311,12 +317,12 @@ def authenticate(payload, request, db, row, principal=None):
     return {**recovered, "login": login.model_dump(mode="json"), "authentication_verified": True}
 
 
-@router.post("/v1/recovery/setup/verify")
+@router.post("/v1/recovery/setup/verify", dependencies=[Depends(recovery_limit)])
 def setup_verify(payload: VerifyRequest, request: Request, principal: AuthenticatedPrincipal = Depends(get_authenticated_principal), db: Session = Depends(get_db_session)):
     return run(db, lambda row: authenticate(payload, request, db, row, principal), (payload.flow, "SETUP", principal))
 
 
-@router.post("/v1/recovery/login/verify")
+@router.post("/v1/recovery/login/verify", dependencies=[Depends(recovery_limit)])
 def login_verify(payload: VerifyRequest, request: Request, db: Session = Depends(get_db_session)):
     return run(db, lambda row: authenticate(payload, request, db, row), (payload.flow, "LOGIN", None))
 

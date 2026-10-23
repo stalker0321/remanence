@@ -12,6 +12,7 @@ from sqlalchemy import select, delete, func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from remanence.api.rate_limit import auth_limit
 from remanence.api.dependencies import get_db_session
 from remanence.api.auth_schemas import RegistrationKeyBundleRequest, RegistrationUserResponse, ActiveKeyBundleResponse, LoginResponse
 from remanence.api.recovery import b64, unb64, active_bundle
@@ -147,7 +148,7 @@ def login_response(db, user, client_profile_version: int = 0):
         refresh_expires_at=now + REFRESH_TTL).model_dump(mode="json")
 
 
-@router.post("/v1/auth/google/options")
+@router.post("/v1/auth/google/options", dependencies=[Depends(auth_limit)])
 def options(payload: Empty, request: Request, db: Session = Depends(get_db_session)):
     nonce = b64(secrets.token_bytes(32))
     try:
@@ -158,7 +159,7 @@ def options(payload: Empty, request: Request, db: Session = Depends(get_db_sessi
         db.rollback(); return fail()
 
 
-@router.post("/v1/auth/google/verify")
+@router.post("/v1/auth/google/verify", dependencies=[Depends(auth_limit)])
 def verify(payload: GoogleProof, request: Request, db: Session = Depends(get_db_session)):
     if payload.onboarding_version is not None and request.app.state.settings.mode not in (AppMode.TEST, AppMode.DEV):
         raise HTTPException(404)
@@ -207,7 +208,7 @@ def verify(payload: GoogleProof, request: Request, db: Session = Depends(get_db_
         return fail()
 
 
-@router.post("/v1/auth/google/register")
+@router.post("/v1/auth/google/register", dependencies=[Depends(auth_limit)])
 def register(payload: GoogleRegistration, request: Request, db: Session = Depends(get_db_session)):
     try:
         if required_policy(db, request.app.state.settings):

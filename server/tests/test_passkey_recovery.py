@@ -232,6 +232,8 @@ def test_concurrent_same_challenge_has_exactly_one_login_winner(env):
 
 def test_browser_route_and_assets_are_feature_gated_and_no_store(env):
     client, _ = env
+    assert client.get("/recovery-test/").status_code == 404
+    client.app.state.settings = client.app.state.settings.model_copy(update={"recovery_test_page_enabled": True})
     for path in ("/recovery-test/", "/recovery-test/crypto.mjs", "/recovery-test/app.mjs"):
         response = client.get(path)
         assert response.status_code == 200 and response.headers["cache-control"] == "no-store"

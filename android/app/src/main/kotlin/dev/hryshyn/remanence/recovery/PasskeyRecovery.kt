@@ -261,6 +261,7 @@ internal suspend fun protectWith(
         throw RecoveryVerificationPending(result)
     } else status.text("credential_id").also { staged ->
         check(freshState == "PENDING" || stored)
+        if (ceremony.uncertain && ceremony.proof == null && ceremony.credentialId == null) throw RecoveryCreationUncertain()
         ceremony.proof?.getValue("response")?.jsonObject?.let { check(it.text("id") == staged) }
         ceremony.credentialId?.let { check(it == staged) }
     }

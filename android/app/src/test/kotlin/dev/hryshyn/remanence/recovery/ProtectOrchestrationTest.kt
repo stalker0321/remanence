@@ -295,6 +295,19 @@ class ProtectOrchestrationTest {
         assertTrue(f.verified.isEmpty()); assertNull(f.uploaded)
     }
 
+    @Test fun unresolvedCreatedIdCannotAdoptAnArbitraryPendingCredential() = runTest {
+        val f = fixture(); val ceremony = ProtectCeremony()
+        val credentials = FakeCredentials(created = buildJsonObject { })
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("malformed provider response") }
+        catch (_: NoSuchElementException) { }
+        assertTrue(ceremony.uncertain); assertNull(ceremony.proof)
+        f.status = buildJsonObject { put("state", "PENDING"); put("credential_id", credId2) }
+        try { protectWith(f.env(), credentials, ceremony = ceremony, verify = true); fail("unknown ID cannot be adopted") }
+        catch (_: RecoveryCreationUncertain) { }
+        assertEquals(1, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
+        assertTrue(f.verified.isEmpty()); assertNull(f.uploaded)
+    }
+
     @Test fun acknowledgedCredentialCannotRecreateWhenStatusLosesItsStage() = runTest {
         val f = fixture(); val ceremony = ProtectCeremony()
         val credentials = FakeCredentials(created = credentialJson(credId1, prfB64))

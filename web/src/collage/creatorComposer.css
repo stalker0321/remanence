@@ -114,6 +114,12 @@
   opacity: 0.45;
 }
 
+/* Keep the complete composition in view beside its controls on ordinary
+   desktop heights. Canonical canvas geometry remains 360 × 640. */
+@media (min-width:900px) and (min-height:700px) {
+  .creator-composer { grid-template-columns: minmax(0, clamp(240px, calc((100dvh - 400px) * .5625), 360px)) minmax(0, 17rem); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .creator-composer *,
   .creator-composer *::before,

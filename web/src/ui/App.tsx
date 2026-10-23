@@ -1148,15 +1148,17 @@ export function Create({
   }
 
   return (
-    <section className={`card create-page${confirmed ? '' : ' recipient-picker'}`}>
+    <section className={`card create-page${confirmed ? '' : ' recipient-picker'}`} data-workspace={confirmed ? createStep : undefined}>
       {!confirmed ? <StepTrail labels={['stepRecipient', 'stepCompose', 'stepPostcard']} current={0} t={t} /> : <nav className="workspace-nav" aria-label={t('createSteps')}>
         {(['content', 'composition', 'postcard'] as const).map((step, index) => <button key={step} type="button" aria-current={createStep === step ? 'step' : undefined}
           disabled={sendPhase !== 'idle' || busy || (step === 'composition' && (accepted === null || !noteFits || !note.accepted()?.trim() || photoIntakePending || creatorImages === null)) || (step === 'postcard' && frozenRef.current === null)}
           onClick={() => showCreateStep(step)}><span aria-hidden="true">{index + 1}</span>{t(step === 'content' ? 'createContent' : step === 'composition' ? 'createComposition' : 'stepPostcard')}</button>)}
       </nav>}
+      <div className="create-context">
       <header className="page-heading"><h1 ref={recipientHeading} tabIndex={-1}>{t(confirmed ? createStep === 'composition' ? 'createCompositionTitle' : createStep === 'postcard' ? 'createPostcardTitle' : 'createDetailsTitle' : pending ? 'recipientConfirmTitle' : 'recipientTitle')}</h1>
-      <p className="page-lead">{t(confirmed ? 'createDraftHint' : pending ? 'recipientOnly' : 'recipientBody')}</p></header>
-      {confirmed ? <div className="draft-recipient"><RecipientLine t={t} snapshot={confirmed} held={sendPhase === 'idle' && !pictured} /><button type="button" disabled={busy || sendPhase === 'working'} onClick={changeRecipient}>{t('recipientChange')}</button></div> : null}
+      {!confirmed || createStep === 'content' ? <p className="page-lead">{t(confirmed ? 'createDraftHint' : pending ? 'recipientOnly' : 'recipientBody')}</p> : null}</header>
+      {confirmed ? <div className="draft-recipient"><RecipientLine t={t} snapshot={confirmed} held={false} /><button type="button" disabled={busy || sendPhase === 'working'} onClick={changeRecipient}>{t('recipientChange')}</button></div> : null}
+      </div>
       {!confirmed && !pending ? (
         <>
         <form

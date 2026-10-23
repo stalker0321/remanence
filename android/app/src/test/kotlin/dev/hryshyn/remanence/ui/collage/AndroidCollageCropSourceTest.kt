@@ -413,6 +413,31 @@ class AndroidCollageCropSourceTest {
     }
 
     @Test
+    fun subsampledPixelsAreAnalyzedAtTheOriginalSourceSize() {
+        // Same 100x100 pixels as above, but decoded from a 2000x2000 original:
+        // the resolution floor sees the original size, so the slot is solved.
+        val subsampled = FieldStageImage(
+            100,
+            100,
+            IntArray(10_000) { 0xFF336699.toInt() },
+            sourceWidth = 2000,
+            sourceHeight = 2000,
+        )
+        val yunet = FakeYuNetRuntime().apply { pass = { YuNetPass(640, 640, 15, emptyList()) } }
+        val seam = seam(decoder = FakeDecoder(subsampled), yunet = yunet)
+        try {
+            val crops = runBlocking {
+                seam.source.cropsFor(listOf(CollageCropRequest("p0", 340, 248)))
+            }
+            assertTrue("expected a solved crop, got $crops", crops != null && crops.containsKey("p0"))
+            assertTrue(seam.source.lastCropRejections.isEmpty())
+            assertTrue(seam.source.cachedAnalysisFor("p0", 2000, 2000) != null)
+        } finally {
+            seam.source.close()
+        }
+    }
+
+    @Test
     fun closeIsIdempotentAndReleasesAllRunners() {
         val seam = seam()
         runBlocking { seam.source.cropsFor(styleSlots("p0")) }

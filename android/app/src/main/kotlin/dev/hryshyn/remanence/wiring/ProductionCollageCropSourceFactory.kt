@@ -32,7 +32,7 @@ internal fun productionCollageCropSourceFactory(
     val cacheBase = java.io.File(appContext.cacheDir, "collage")
     AndroidCollageCropSource(
         bytesSource = holder.asUprightBytesSource(),
-        imageDecoder = FieldUprightDecoder::decodeUpright,
+        imageDecoder = FieldUprightDecoder::decodeForAnalysis,
         fieldRunner = FieldStageRunner(fieldRuntime()),
         nanoDetRunner = NanoDetRunner(
             collageModelAsset(appContext, "collage/nanodet.onnx", NANODET_BYTES, NANODET_SHA256),

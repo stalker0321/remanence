@@ -31,9 +31,10 @@ fun interface UprightBytesSource {
 
 /**
  * Host-neutral decode of upright JPEG bytes to upright ARGB. Returns `null`
- * when undecodable. Must apply the EXIF transpose at full resolution (the
- * probe uses `FieldUprightDecoder::decodeUpright`); the 2560 re-encoded
- * normalized/preview bytes must never be substituted.
+ * when undecodable. Decodes the original bytes (never the 2560 re-encoded
+ * normalized/preview bytes) and applies the EXIF transpose; the pixels may be
+ * subsampled as long as the image reports the original upright size
+ * (production uses `FieldUprightDecoder::decodeForAnalysis`).
  */
 fun interface UprightImageDecoder {
     fun decode(jpeg: ByteArray): FieldStageImage?
@@ -202,8 +203,8 @@ class AndroidCollageCropSource(
         currentCoroutineContext().ensureActive()
         return FieldAggregator.aggregate(
             ImportFieldPrimitives(
-                sourceWidth = image.width,
-                sourceHeight = image.height,
+                sourceWidth = image.sourceWidth,
+                sourceHeight = image.sourceHeight,
                 faces = faces,
                 objects = objects,
                 saliency = maps.saliency,

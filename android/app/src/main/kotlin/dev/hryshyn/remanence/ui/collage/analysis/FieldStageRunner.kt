@@ -23,9 +23,21 @@ import kotlinx.coroutines.withContext
  * are a different, unproven analysis contract version and must never be
  * silently substituted here.
  */
-class FieldStageImage(val width: Int, val height: Int, val argb: IntArray) {
+/**
+ * Upright ARGB pixels. [sourceWidth]/[sourceHeight] are the upright original's
+ * dimensions when the pixels were decoded at a reduced size; every analysis
+ * output is normalized, so only the reported dimensions need the original.
+ */
+class FieldStageImage(
+    val width: Int,
+    val height: Int,
+    val argb: IntArray,
+    val sourceWidth: Int = width,
+    val sourceHeight: Int = height,
+) {
     init {
         require(width > 0 && height > 0) { "source dimensions must be positive" }
+        require(sourceWidth >= width && sourceHeight >= height) { "source dimensions must cover the pixels" }
         require(argb.size == width * height) { "ARGB length must equal width*height" }
     }
 }

@@ -11,6 +11,7 @@ import { PhotoDraft } from '../../src/create/photos'
 import { MusicDraft } from '../../src/create/music'
 import { catalog, type Language } from '../../src/i18n/catalog'
 import type { ApiTransport, ByteTransport } from '../../src/auth/http'
+import { browserCamera } from '../../src/scan/camera'
 import '../../src/design/tokens.css'
 
 const lang = (new URL(location.href).searchParams.get('lang') || 'en') as Language
@@ -24,6 +25,16 @@ const calls: { method: string; path: string; query?: unknown }[] = [], forbidden
 const musicReplies: { route: string; aborted: boolean }[] = []
 const preferences = new Map<string, string>()
 let releaseMusic: (() => void) | null = null, cameraStarts = 0, cameraStops = 0
+let cameraMode = 'ready', cameraAttempts = 0, rejectCamera: (() => void) | null = null
+function setCameraMode(mode: string) {
+  cameraMode = mode
+  Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: mode === 'missing' ? {} : {
+    getUserMedia: async () => {
+      if (cameraMode === 'pending-denied') await new Promise<void>((_, reject) => { rejectCamera = () => reject(new DOMException('synthetic denial', 'NotAllowedError')) })
+      throw new DOMException('synthetic camera failure', cameraMode === 'denied' ? 'NotAllowedError' : cameraMode === 'blocked' ? 'SecurityError' : 'NotReadableError')
+    },
+  } })
+}
 const deny = (name: string): never => { forbidden.push(name); throw new Error(`Forbidden fixture action: ${name}`) }
 const hit = { id: '0198f0a0-0000-7000-8000-00000000c001', title: 'Synthetic shoreline', artists: ['Fixture artist'],
   version: null, release: null, year: null, durationMs: 123000, artworkAvailable: false, recordingMbid: null }
@@ -58,7 +69,7 @@ createRoot(host).render(<App store={store} keys={keys} memory={memory} recipient
   transport={transport} preferences={{ get: key => preferences.get(key) ?? null, set: (key, value) => { preferences.set(key, value) }, remove: key => { preferences.delete(key) } }}
   google={{ requestIdToken: async () => deny('Google') }}
   passkeys={{ canAuthenticate: () => true, create: async () => deny('passkey create'), get: async () => deny('passkey get') }}
-  camera={{ open: async () => { cameraStarts++; return { preview: document.createElement('video'),
+  camera={{ open: async (signal) => { cameraAttempts++; if (cameraMode !== 'ready') return browserCamera(document).open(signal); cameraStarts++; return { preview: document.createElement('video'),
     capture: async () => deny('camera capture/admission'), stop: () => { cameraStops++ } } } }} />)
 
 async function pick() {
@@ -74,10 +85,11 @@ async function pick() {
   input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }))
 }
 Object.assign(window, { candidateUI: { catalog, pick,
+  setCameraMode, rejectCamera: () => { rejectCamera?.(); rejectCamera = null },
   unlock() { store.signIn({ accountId: account, bundleId: bundle, handle: 'self_qa', accessToken: 'synthetic-only', refreshToken: 'synthetic-only', accessExpiresAt: date, refreshExpiresAt: date }); store.unlock() },
   lock: () => store.lock(), releaseMusic: () => { releaseMusic?.(); releaseMusic = null },
   releaseOnNavigation(event: 'popstate' | 'hashchange') { window.addEventListener(event, () => { releaseMusic?.(); releaseMusic = null }, { once: true }) },
-  state: () => ({ calls, forbidden, cameraStarts, cameraStops, pending: recipient.pending()?.handle ?? null,
+  state: () => ({ calls, forbidden, cameraStarts, cameraStops, cameraAttempts, pending: recipient.pending()?.handle ?? null,
     confirmed: recipient.confirmed()?.handle ?? null, photos: photos.photos().length, music: music.selected()?.id ?? null,
     hits: music.hits().length, phase: store.getSnapshot().phase, preferences: [...preferences], musicReplies }),
 } })

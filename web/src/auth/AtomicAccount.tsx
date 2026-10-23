@@ -119,6 +119,7 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
       {!signedIn && state.phase === 'terminal' ? <button aria-disabled={busy} onClick={() => { void controller.restart() }}>{t('atomicRestart')}</button> : null}
       {signedIn && !unlocked ? <button className="primary" aria-disabled={busy} onClick={() => { void open() }}>{t('openWithPasskey')}</button> : null}
     </div>
+    {unsupported ? <p className="field-hint">{t('atomicResumeSavedHint')}</p> : null}
     {!signedIn && verifying && !busy && !unsupported ? <p className="field-hint">{t('atomicVerifyHint')}</p> : null}
     {busy && !phaseMessage ? <p role="status">{t('accountWorking')}</p> : null}
     {signedIn && (unlocked || returnTo === 'history') ? <div className="account-next">

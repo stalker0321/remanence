@@ -46,9 +46,10 @@
 @media (max-width: 700px) {
   .account-layout { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
   .key-explanation { margin-top: 1.25rem; }
-  .account-controls { grid-column: 1; grid-row: auto; padding: 1.2rem; }
+  .account-controls { grid-column: 1; grid-row: auto; padding: clamp(12px, 4vw, 22px); }
+  .account-controls button, .account-controls a.button { padding-inline: clamp(12px, 3vw, 21px); }
   .account-emblem { display: none; }
-  .atomic-account .step-trail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .atomic-account .step-trail { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); }
   .account-intro > h1 { max-width: 16ch; }
   .key-explanation { margin-top: 0; }
 }

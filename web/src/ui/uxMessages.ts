@@ -1,5 +1,7 @@
 /** Presentation copy only; no new capabilities or persisted preferences. */
 export const uxEn = {
+  cameraDeniedHelp: 'Check camera access for this site in your browser and device settings, then try again below. If access is blocked here, use a browser with camera access.',
+  cameraUnavailableHelp: 'Check that a camera is connected and not in use by another app, then try again below. If this browser cannot use it, use another browser or device with a camera.',
   createMusicTitle: 'a song · not sent yet',
   createSteps: 'making your remanence', createContent: 'content', createComposition: 'composition',
   createCompositionTitle: 'which feels right?', createPostcardTitle: 'now, the postcard',
@@ -27,7 +29,7 @@ export const uxEn = {
   createDetailsTitle: 'put it together', createNoteHint: 'A few words to go with the pictures.',
   createFrontTitle: 'the picture on the postcard',
   createFrontHint: 'Take a fresh picture of the front. This is how they’ll find the memory.',
-  createSendHint: 'Add a note and 3–5 photos, choose a composition, then photograph the postcard before sending.',
+  createSendHint: 'Photograph the postcard above before sending. Your content and composition are already selected.',
   createDraftHint: 'This draft is only here for this visit. Closing the page loses unsent work.',
   scanGuide: 'the picture side goes here', scanGuideHint: 'Keep the whole postcard in view, with even light.',
   scanAccountHint: 'You can open the camera now. Sign in and unlock your keys to open a matched postcard.',
@@ -35,6 +37,8 @@ export const uxEn = {
   settingsAccountHint: 'Your public handle stays with this account.', languageHint: 'Choose the language for this browser.',
 } as const
 export const uxRu: Record<keyof typeof uxEn, string> = {
+  cameraDeniedHelp: 'Проверьте доступ к камере для этого сайта в настройках браузера и устройства, затем попробуйте снова ниже. Если доступ здесь заблокирован, используйте браузер с доступом к камере.',
+  cameraUnavailableHelp: 'Проверьте, что камера подключена и не занята другим приложением, затем попробуйте снова ниже. Если браузер не может её использовать, откройте сайт в другом браузере или на устройстве с камерой.',
   createMusicTitle: 'песня · пока не отправляется',
   createSteps: 'создание remanence', createContent: 'содержание', createComposition: 'композиция',
   createCompositionTitle: 'какой вариант ближе?', createPostcardTitle: 'теперь — открытка',
@@ -60,7 +64,7 @@ export const uxRu: Record<keyof typeof uxEn, string> = {
   createDetailsTitle: 'соберите вместе', createNoteHint: 'Несколько слов к фотографиям.',
   createFrontTitle: 'изображение на открытке',
   createFrontHint: 'Сделайте свежий снимок лицевой стороны. По нему получатель найдёт воспоминание.',
-  createSendHint: 'Добавьте заметку и 3–5 фото, выберите композицию и сфотографируйте открытку перед отправкой.',
+  createSendHint: 'Сфотографируйте открытку выше перед отправкой. Содержание и композиция уже выбраны.',
   createDraftHint: 'Черновик хранится только во время этого визита. Если закрыть страницу, неотправленное исчезнет.',
   scanGuide: 'здесь будет лицевая сторона', scanGuideHint: 'Поместите открытку целиком в кадр при ровном свете.',
   scanAccountHint: 'Камеру можно открыть сейчас. Чтобы открыть найденную открытку, войдите и разблокируйте ключи.',
@@ -68,6 +72,8 @@ export const uxRu: Record<keyof typeof uxEn, string> = {
   settingsAccountHint: 'Ваше публичное имя остаётся с этим аккаунтом.', languageHint: 'Выберите язык для этого браузера.',
 }
 export const uxUk: Record<keyof typeof uxEn, string> = {
+  cameraDeniedHelp: 'Перевірте доступ до камери для цього сайту в налаштуваннях браузера та пристрою, потім спробуйте знову нижче. Якщо доступ тут заблокований, скористайтеся браузером із доступом до камери.',
+  cameraUnavailableHelp: 'Перевірте, що камеру підключено й вона не зайнята іншим застосунком, потім спробуйте знову нижче. Якщо браузер не може її використати, відкрийте сайт в іншому браузері або на пристрої з камерою.',
   createMusicTitle: 'пісня · поки не надсилається',
   createSteps: 'створення remanence', createContent: 'вміст', createComposition: 'композиція',
   createCompositionTitle: 'який варіант ближчий?', createPostcardTitle: 'тепер — листівка',
@@ -93,7 +99,7 @@ export const uxUk: Record<keyof typeof uxEn, string> = {
   createDetailsTitle: 'зберіть разом', createNoteHint: 'Кілька слів до фотографій.',
   createFrontTitle: 'зображення на листівці',
   createFrontHint: 'Зробіть свіжий знімок лицьового боку. За ним одержувач знайде спогад.',
-  createSendHint: 'Додайте нотатку й 3–5 фото, виберіть композицію й сфотографуйте листівку перед надсиланням.',
+  createSendHint: 'Сфотографуйте листівку вище перед надсиланням. Вміст і композицію вже вибрано.',
   createDraftHint: 'Чернетка зберігається лише під час цього візиту. Якщо закрити сторінку, ненадіслане зникне.',
   scanGuide: 'тут буде лицьовий бік', scanGuideHint: 'Помістіть листівку повністю в кадр за рівного світла.',
   scanAccountHint: 'Камеру можна відкрити зараз. Щоб відкрити знайдену листівку, увійдіть і розблокуйте ключі.',

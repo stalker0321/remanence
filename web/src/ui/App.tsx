@@ -60,6 +60,7 @@ import { HistoryPage } from '../history/HistoryPage'
 import { RecentRecipients } from '../history/RecentRecipients'
 import { SendAccessSection } from '../access/SendAccessSection'
 import { Icon, StepTrail } from './Primitives'
+import { CameraFeedback, type CameraFailure } from './CameraFeedback'
 
 export function App({
   store,
@@ -299,6 +300,7 @@ export function Scan({
   const [held, setHeld] = useState(false)
   const [working, setWorking] = useState(false)
   const [openStatus, setOpenStatus] = useState<MessageKey>('scanPreparing')
+  const [cameraFailure, setCameraFailure] = useState<CameraFailure | null>(null)
 
   useEffect(() => {
     if (!live && focusAfterClose.current) {
@@ -349,6 +351,8 @@ export function Scan({
   async function open() {
     if (busy.current) return
     busy.current = true
+    setCameraFailure(null)
+    onNotice('errorRegion')
     const attempt = ++operation.current
     openAbort.current?.abort()
     const controller = new AbortController()
@@ -370,7 +374,7 @@ export function Scan({
       onNotice('errorRegion')
     } catch (error) {
       if (controller.signal.aborted || operation.current !== attempt) return
-      onNotice(error instanceof ScanError && error.code === 'CAMERA_DENIED' ? 'cameraDenied' : 'cameraUnavailable')
+      setCameraFailure({ notice: error instanceof ScanError && error.code === 'CAMERA_DENIED' ? 'cameraDenied' : 'cameraUnavailable' })
     } finally {
       if (operation.current === attempt) busy.current = false
     }
@@ -381,6 +385,7 @@ export function Scan({
     const current = session.current
     if (!current) return
     busy.current = true
+    setCameraFailure(null)
     const attempt = ++operation.current
     try {
       const picture = await current.capture()
@@ -393,7 +398,7 @@ export function Scan({
       setHeld(true)
       onNotice('cameraHeld')
     } catch {
-      if (operation.current === attempt) onNotice('cameraUnavailable')
+      if (operation.current === attempt) setCameraFailure({ notice: 'cameraUnavailable' })
     } finally {
       if (operation.current === attempt) busy.current = false
     }
@@ -477,6 +482,7 @@ export function Scan({
     setLive(false)
     setHeld(false)
     setWorking(false)
+    setCameraFailure(null)
     onNotice('errorRegion')
   }
 
@@ -489,9 +495,10 @@ export function Scan({
         <div ref={host} />
       </div>
       <div className="scan-controls">
-      {!live ? <p>{t('scanWaiting')}</p> : null}
+      {!live && !cameraFailure ? <p>{t('scanWaiting')}</p> : null}
       {held ? <p>{t('cameraHeld')}</p> : null}
       {working ? <p role="status">{t(openStatus)}</p> : null}
+      {cameraFailure ? <CameraFeedback failure={cameraFailure} t={t} /> : null}
       <div className="actions">
         {live ? (
           <>
@@ -560,6 +567,7 @@ export function Create({
   const [stamp, setStamp] = useState(0)
   const [live, setLive] = useState(false)
   const [pictured, setPictured] = useState(false)
+  const [cameraFailure, setCameraFailure] = useState<CameraFailure | null>(null)
   const [createStep, setCreateStep] = useState<'content' | 'composition' | 'postcard'>('content')
   const abort = useRef<AbortController | null>(null)
   const musicAbort = useRef<AbortController | null>(null)
@@ -733,6 +741,7 @@ export function Create({
     host.current?.replaceChildren()
     setLive(false)
     setPictured(false)
+    setCameraFailure(null)
   }, [bound])
 
   useEffect(() => {
@@ -839,6 +848,7 @@ export function Create({
   }
 
   function closeCamera() {
+    setCameraFailure(null)
     invalidateSend()
     abort.current?.abort()
     fpAttempt.current += 1
@@ -874,6 +884,8 @@ export function Create({
 
   async function openCamera() {
     if (busy || !confirmed) return
+    setCameraFailure(null)
+    onNotice('errorRegion')
     abort.current?.abort()
     const controller = new AbortController()
     abort.current = controller
@@ -888,7 +900,7 @@ export function Create({
       onNotice('errorRegion')
     } catch (error) {
       if (controller.signal.aborted || (error instanceof ScanError && error.code === 'CANCELLED')) return
-      onNotice(error instanceof ScanError && error.code === 'CAMERA_DENIED' ? 'cameraDenied' : 'cameraUnavailable')
+      setCameraFailure({ notice: error instanceof ScanError && error.code === 'CAMERA_DENIED' ? 'cameraDenied' : 'cameraUnavailable' })
     } finally {
       if (abort.current === controller) setBusy(false)
     }
@@ -947,6 +959,7 @@ export function Create({
   async function takeFront() {
     const snapshot = recipient.confirmed()
     if (!snapshot || busy) return
+    setCameraFailure(null)
     invalidateSend()
     // Capture the full current visit BEFORE the camera await: the sender
     // tuple, session generation/phase, and the confirmed recipient identity.
@@ -1008,7 +1021,7 @@ export function Create({
       // cannot surface a misleading cameraUnavailable.
       if (!visitOk(null)) return
       if (error instanceof ScanError && error.code === 'CANCELLED') return
-      onNotice('cameraUnavailable')
+      setCameraFailure({ notice: 'cameraUnavailable' })
     } finally {
       if (mounted.current && fpAttempt.current === my) setBusy(false)
     }
@@ -1359,6 +1372,7 @@ export function Create({
             {pictured && fpState === 'working' && sendPhase === 'idle' ? <p role="status">{t('frontWorking')}</p> : null}
             {pictured && fpState === 'ready' && sendPhase === 'idle' ? <p role="status">{t('frontReady')}</p> : null}
             {pictured && fpState === 'failed' ? <p role="alert">{t('frontScanFailed')}</p> : null}
+            {cameraFailure ? <CameraFeedback failure={cameraFailure} t={t} /> : null}
             <div className="actions">
               {live ? <>
                 <button type="button" className="primary" disabled={busy || sendPhase === 'working'} onClick={() => { void takeFront() }}>{t('takePicture')}</button>

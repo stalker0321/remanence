@@ -72,6 +72,9 @@ input,textarea { min-width:0; }
 .notice,.shell>.status { padding:1rem; border-inline-start:3px solid var(--lilac-deep); background:var(--bridge); margin:1rem 0; overflow-wrap:anywhere; border-radius:.2rem .5rem .5rem .2rem; }
 .notice--warning { background:#efe4cf; border-color:#8d7141; }
 .notice p,.shell>.status p { margin:0; }
+.camera-feedback { scroll-margin-block-start:1rem; }
+.camera-feedback:focus { outline:2px solid var(--lilac-deep); outline-offset:3px; }
+.camera-feedback .camera-feedback-title { font-weight:600; margin-bottom:.5rem; }
 .status { margin:1rem 0 0; }
 .step-trail { display:flex; flex-wrap:wrap; gap:.75rem 1.4rem; margin:0 0 2.5rem; padding:0; list-style:none; font-size:.8rem; color:var(--muted); }
 .step-trail li { display:flex; align-items:center; gap:.5rem; max-width:100%; }

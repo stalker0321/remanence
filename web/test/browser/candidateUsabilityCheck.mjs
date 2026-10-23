@@ -65,6 +65,8 @@ try {
     await shot('composition-mobile')
     await page.setViewportSize({ width: 1280, height: 900 }); await shot('composition-desktop')
     await page.setViewportSize({ width: 360, height: 700 })
+    await page.evaluate(() => { document.documentElement.style.fontSize = '36px' }); await shot('composition-text200')
+    await page.evaluate(() => { document.documentElement.style.fontSize = '' })
     await page.locator('.creator-adjust summary').click()
     await page.locator('[data-testid=creator-zoom-in]').click()
     await shot('composition-adjust')

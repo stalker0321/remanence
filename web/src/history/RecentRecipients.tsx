@@ -38,7 +38,7 @@ export function RecentRecipients({ store, transport, t, disabled, onSelect }: {
     }
   }
   return <aside className="recent" data-testid="recent-recipients">
-    <button type="button" aria-expanded={open} disabled={disabled} onClick={() => {
+    <button type="button" aria-label={t('recentTitle')} aria-expanded={open} disabled={disabled} onClick={() => {
       setOpen(!open)
       if (!open && rows === null && !loading) void load()
     }}>{t('recentTitle')}</button>

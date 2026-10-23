@@ -99,27 +99,20 @@ class AstraContextArrivalProgressTest {
     }
 
     @Test
-    fun fullRegimeTravelsSmoothlyThenSettles() {
+    fun fullRegimeRisesFromTheBackgroundThenSettles() {
         mount(AstraMotionSpec.Resolved.FULL)
         composeRule.mainClock.advanceTimeBy(16)
         val y0 = probeY()
         val o0 = probeOpacity()
-        // Changed behavior: the arrival starts soft, well below opaque.
-        assertTrue("arrival starts near-opaque ($o0)", o0 > 0.60f && o0 < 0.80f)
-        composeRule.mainClock.advanceTimeBy(260)
-        val y1 = probeY()
+        // Rises from the background, on the fade-through beat.
+        assertTrue("arrival starts nearly transparent ($o0)", o0 < 0.25f)
+        composeRule.mainClock.advanceTimeBy(80)
         val o1 = probeOpacity()
-        // Mid-flight: travel easing is strictly monotonic and inferred
-        // opacity is strictly between the soft start and fully opaque.
-        assertTrue("no mid-flight travel ($y0 -> $y1)", y1 < y0)
         assertTrue("no mid-flight opacity progress ($o0 -> $o1)", o1 > o0 && o1 < 1f)
         composeRule.mainClock.advanceTimeBy(5_000)
-        val y2 = probeY()
-        assertTrue("no continued progress ($y1 -> $y2)", y2 != y1)
         assertEquals(1f, probeOpacity(), 0f)
-        composeRule.mainClock.advanceTimeBy(30_000)
-        // Settled: the finished animation issues no further frames.
-        assertEquals(y2, probeY(), 0f)
+        // No travel at any point.
+        assertEquals(y0, probeY(), 0f)
         composeRule.onNodeWithTag("arrival_probe").assertIsDisplayed()
     }
 

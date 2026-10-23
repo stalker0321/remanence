@@ -76,8 +76,8 @@ fun RootScreen(
             val leavingSession = from is AppDestination && to !is AppDestination
             // Scan -> Capsule carries the postcard itself; a dissolve on top
             // would double the movement.
-            val carried = from == AppDestination.Scan && to is AppDestination.Capsule
-            !leavingSession && !carried
+            val carried = from == AppDestination.Scan && (to is AppDestination.Capsule)
+            !(leavingSession || carried)
         },
     ) {
         RootSurface(

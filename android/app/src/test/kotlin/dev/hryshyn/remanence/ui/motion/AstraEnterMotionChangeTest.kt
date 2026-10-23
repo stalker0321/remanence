@@ -53,7 +53,11 @@ class AstraEnterMotionChangeTest {
         }
         rule.mainClock.advanceTimeBy(32)
         assertEquals(1f, opacity(), .01f)
-        rule.runOnUiThread { step.value = 1 }
+        rule.runOnUiThread {
+            step.value = 1
+            // Paused clock with nothing animating: flush the write explicitly.
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+        }
         rule.mainClock.advanceTimeBy(AstraMotionSpec.CROSSFADE_MS / 2L)
         val mid = opacity()
         assertTrue("mid-dissolve opacity $mid", mid > .05f && mid < .95f)
@@ -81,7 +85,10 @@ class AstraEnterMotionChangeTest {
             // Steps cross-dissolve from the last drawn frame: identical frames
             // never dim mid-transition, whatever the motion preference does.
             rule.mainClock.advanceTimeBy(32)
-            rule.runOnUiThread { step.value++ }
+            rule.runOnUiThread {
+                step.value++
+                androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            }
             rule.mainClock.advanceTimeBy(32)
             assertEquals(1f, opacity(), .01f)
             rule.runOnUiThread { motion.value = AstraMotionSpec.Resolved.INSTANT }

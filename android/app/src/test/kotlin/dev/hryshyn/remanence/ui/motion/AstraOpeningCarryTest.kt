@@ -286,7 +286,12 @@ class AstraOpeningCarryTest {
         // pixel visibility is pinned by ghostsExistDuringOpeningAndAreGoneWhenItEnds.
         // Frozen clock does not pump the write's recomposition on idle, so
         // step exactly one frame instead of a blind wait.
-        composeRule.runOnIdle { destination.value = AppDestination.Capsule("grant-1") }
+        // Nothing is animating on Scan, so no frame is pending to flush the
+        // write: publish it explicitly under the paused clock.
+        composeRule.runOnIdle {
+            destination.value = AppDestination.Capsule("grant-1")
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+        }
         composeRule.mainClock.advanceTimeByFrame()
         composeRule.waitForIdle()
         composeRule.onAllNodesWithTag("astra_opening_front").assertCountEquals(1)

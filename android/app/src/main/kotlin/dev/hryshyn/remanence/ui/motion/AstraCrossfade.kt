@@ -1,6 +1,9 @@
 package dev.hryshyn.remanence.ui.motion
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -14,12 +17,13 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 
 /**
- * Calm cross-dissolve between two states of one surface.
+ * Calm fade-through between two states of one surface.
  *
  * The outgoing composable is disposed immediately, as before: only the last
- * frame it drew survives, as a recorded display list that fades out on top
- * of the live incoming content. Nothing outgoing stays composed or
- * interactive, and the incoming content takes input from its first frame.
+ * frame it drew survives, as a recorded display list that fades out quickly
+ * on top; the live incoming content then rises from the background. Nothing
+ * outgoing stays composed or interactive, and the incoming content takes
+ * input from its first frame.
  *
  * The host must sit at a stable position above whatever [contentKey]
  * switches, otherwise it is recreated with the content and has nothing to
@@ -38,7 +42,7 @@ fun AstraCrossfade(
     val first = rememberGraphicsLayer()
     val second = rememberGraphicsLayer()
     val state = remember { CrossfadeHolder(contentKey) }
-    val outgoing = remember { Animatable(0f) }
+    val progress = remember { Animatable(1f) }
     val currentAnimate by rememberUpdatedState(animate)
 
     // Plain (non-snapshot) bookkeeping: the swap must take effect before the
@@ -58,30 +62,34 @@ fun AstraCrossfade(
 
     LaunchedEffect(contentKey) {
         if (!state.fadePending) {
-            outgoing.snapTo(0f)
+            progress.snapTo(1f)
             return@LaunchedEffect
         }
         state.fadePending = false
-        outgoing.snapTo(1f)
-        outgoing.animateTo(0f, astraTween(AstraMotionSpec.crossfadeMs(motion), AstraDissolveEasing))
+        progress.snapTo(0f)
+        progress.animateTo(1f, astraTween(AstraMotionSpec.crossfadeMs(motion), LinearEasing))
     }
 
     Box(modifier.drawWithContent {
         val recording = if (state.recordingFirst) first else second
         val frozen = if (state.recordingFirst) second else first
-        recording.alpha = 1f
+        // Always read the animation so this draw is invalidated by it.
+        val p = if (state.fadePending) 0f else progress.value
+        val fading = state.frozenDirty && p < 1f
+        // Fade through: the old frame leaves first, then the new one rises
+        // from the background. The two never share the screen at strength.
+        recording.alpha = if (fading) FastOutSlowInEasing.transform(((p - OUT_SHARE) / (1f - OUT_SHARE)).coerceIn(0f, 1f)) else 1f
         recording.record { this@drawWithContent.drawContent() }
         drawLayer(recording)
         state.hasFrame = true
-        // Until the effect starts, a pending fade shows the old frame whole.
-        // Always read the animation so this draw is invalidated by it.
-        val animated = outgoing.value
-        val fade = if (state.fadePending) 1f else animated
-        if (fade > 0f && state.frozenDirty) {
-            frozen.alpha = fade
-            drawLayer(frozen)
+        if (fading) {
+            val out = 1f - LinearOutSlowInEasing.transform((p / OUT_SHARE).coerceIn(0f, 1f))
+            if (out > 0f) {
+                frozen.alpha = out
+                drawLayer(frozen)
+            }
         } else if (state.frozenDirty) {
-            // Fade finished (or was cancelled): drop the old frame's pixels.
+            // Transition finished (or was cancelled): drop the old frame's pixels.
             frozen.clear()
             state.frozenDirty = false
         }
@@ -89,6 +97,9 @@ fun AstraCrossfade(
         content()
     }
 }
+
+/** Share of the transition spent fading the old frame out. */
+private const val OUT_SHARE = 0.32f
 
 private class CrossfadeHolder(var key: Any?) {
     var recordingFirst = true

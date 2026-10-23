@@ -82,14 +82,14 @@ class AstraEnterMotionChangeTest {
             }
         }
         if (surface == "step") {
-            // Steps cross-dissolve from the last drawn frame: identical frames
-            // never dim mid-transition, whatever the motion preference does.
+            // Steps fade through; once settled, a motion preference change must
+            // not replay the transition.
             rule.mainClock.advanceTimeBy(32)
             rule.runOnUiThread {
                 step.value++
                 androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
             }
-            rule.mainClock.advanceTimeBy(32)
+            rule.mainClock.advanceTimeBy(AstraMotionSpec.CROSSFADE_MS * 2L)
             assertEquals(1f, opacity(), .01f)
             rule.runOnUiThread { motion.value = AstraMotionSpec.Resolved.INSTANT }
             rule.mainClock.advanceTimeByFrame()

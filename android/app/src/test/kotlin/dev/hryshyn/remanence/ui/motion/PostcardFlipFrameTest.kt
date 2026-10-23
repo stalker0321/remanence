@@ -18,7 +18,7 @@ class PostcardFlipFrameTest {
     }
 
     @Test fun turnsOverMidwayAndEndsFullScreenAndDeveloped() {
-        assertTrue(flipFrame(0.30f, card, null, screen).angle in 60f..150f)
+        assertTrue(flipFrame(0.20f, card, null, screen).angle in 60f..150f)
         val end = flipFrame(1f, card, null, screen)
         assertEquals(180f, end.angle, 0f)
         assertEquals(Rect(0f, 0f, 1080f, 2200f), end.rect)

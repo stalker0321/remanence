@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.ui.motion
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,14 +37,14 @@ fun AstraContextArrival(
     val density = LocalDensity.current
 
     LaunchedEffect(motion, contentKey) {
-        val duration = AstraMotionSpec.routineMs(motion)
+        val duration = AstraMotionSpec.arrivalMs(motion)
         if (motion != AstraMotionSpec.Resolved.FULL) offset.snapTo(0f)
         if (duration <= 0) {
             alpha.snapTo(1f)
             offset.snapTo(0f)
         } else {
             // Both start in the same frame; no blank interstitial or second beat.
-            launch { alpha.animateTo(1f, astraTween(duration, AstraDissolveEasing)) }
+            launch { alpha.animateTo(1f, astraTween(duration, FastOutSlowInEasing)) }
             launch { offset.animateTo(0f, astraTween(duration, AstraTravelEasing)) }
         }
     }

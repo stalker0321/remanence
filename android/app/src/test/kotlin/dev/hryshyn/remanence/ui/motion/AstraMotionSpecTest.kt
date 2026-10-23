@@ -103,10 +103,10 @@ class AstraMotionSpecTest {
     }
 
     @Test
-    fun arrivalStartsSoftWithModestTravel() {
-        // Soft continuity, not a pop: arrivals begin well below opaque
-        // and settle over the authored duration with 4 dp travel.
-        assertEquals(0.70f, AstraMotionSpec.ARRIVAL_ALPHA, 0f)
-        assertEquals(4f, AstraMotionSpec.ARRIVAL_OFFSET_DP, 0f)
+    fun arrivalRisesFromTheBackgroundWithoutTravel() {
+        // Same beat as the second half of the screen fade-through.
+        assertEquals(0f, AstraMotionSpec.ARRIVAL_ALPHA, 0f)
+        assertEquals(0f, AstraMotionSpec.ARRIVAL_OFFSET_DP, 0f)
+        assertEquals(200, AstraMotionSpec.arrivalMs(AstraMotionSpec.Resolved.FULL))
     }
 }

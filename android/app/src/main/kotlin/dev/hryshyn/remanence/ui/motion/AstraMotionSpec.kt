@@ -45,15 +45,13 @@ object AstraMotionSpec {
     const val OPENING_MS = 820
 
     /**
-     * Arrival start opacity for routine context/step Carries. Starts soft
-     * enough that the 520 ms dissolve reads as continuity rather than a
-     * pop: at .85 the new route appeared almost fully opaque on its first
-     * frame, so the duration settled an already-visible surface instead
-     * of arriving it. Travel stays modest (4 dp) and the dissolve easing
-     * keeps its slow start; durations are untouched.
+     * In-screen arrivals (result states, pending steps, auth panels) rise
+     * from the background like the second half of the screen fade-through:
+     * no head start, no travel, same short beat.
      */
-    const val ARRIVAL_ALPHA = .70f
-    const val ARRIVAL_OFFSET_DP = 4f
+    const val ARRIVAL_ALPHA = 0f
+    const val ARRIVAL_OFFSET_DP = 0f
+    const val ARRIVAL_MS = 200
 
     /**
      * Reduced-motion replacement: a single short crossfade, no travel, no
@@ -104,7 +102,14 @@ object AstraMotionSpec {
         else -> Resolved.FULL
     }
 
-    /** Cross-dissolve duration for a regime. */
+    /** In-screen arrival duration for a regime. */
+    fun arrivalMs(resolved: Resolved): Int = when (resolved) {
+        Resolved.FULL -> ARRIVAL_MS
+        Resolved.REDUCED_SHORT -> REDUCED_CROSSFADE_MS
+        Resolved.INSTANT -> 0
+    }
+
+    /** Fade-through duration for a regime. */
     fun crossfadeMs(resolved: Resolved): Int = when (resolved) {
         Resolved.FULL -> CROSSFADE_MS
         Resolved.REDUCED_SHORT -> REDUCED_CROSSFADE_MS

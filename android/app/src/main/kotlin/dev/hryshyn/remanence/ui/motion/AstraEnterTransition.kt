@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.ui.motion
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -29,11 +30,11 @@ fun AstraEnterTransition(
         Animatable(if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else AstraMotionSpec.ARRIVAL_ALPHA)
     }
     LaunchedEffect(motion) {
-        val durationMs = AstraMotionSpec.routineMs(motion)
+        val durationMs = AstraMotionSpec.arrivalMs(motion)
         if (durationMs <= 0) {
             entry.snapTo(1f)
         } else {
-            entry.animateTo(1f, astraTween(durationMs, AstraGentleEasing))
+            entry.animateTo(1f, astraTween(durationMs, FastOutSlowInEasing))
         }
     }
     Box(

@@ -79,9 +79,11 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     REGISTRATION_ADMISSION_CLOSED: 'atomicUnavailable', WRONG_CREDENTIAL: 'wrongPasskey', WRONG_ACCOUNT: 'wrongPasskey',
   } as Record<string, MessageKey>)[state.error] ?? 'atomicFailure'
   const unsupported = state.error === 'PRF_UNAVAILABLE'
-  const title: MessageKey = unsupported ? 'atomicUnsupportedTitle' : unlocked ? 'accountReadyTitle' : signedIn ? 'accountLockedTitle' : choosing ? 'accountHandleTitle'
+  const unreadableCreation = state.error === 'PASSKEY_CREATION_UNRESOLVED'
+  const stopped = unsupported || unreadableCreation
+  const title: MessageKey = unreadableCreation ? 'atomicUnreadableTitle' : unsupported ? 'atomicUnsupportedTitle' : unlocked ? 'accountReadyTitle' : signedIn ? 'accountLockedTitle' : choosing ? 'accountHandleTitle'
     : creating ? 'atomicCreateTitle' : verifying || pendingCredential ? 'atomicCreatedTitle' : state.phase === 'unknown' ? 'atomicCheck' : 'atomicSignInTitle'
-  const body: MessageKey = unsupported ? 'atomicUnsupportedBody' : signedIn ? unlocked ? 'accountVisitHint' : 'authBody' : choosing ? 'atomicHandleBody'
+  const body: MessageKey = unreadableCreation ? 'atomicUnreadableBody' : unsupported ? 'atomicUnsupportedBody' : signedIn ? unlocked ? 'accountVisitHint' : 'authBody' : choosing ? 'atomicHandleBody'
     : creating ? 'atomicCreateBody' : pendingCredential ? 'atomicPendingBody' : verifying ? 'atomicVerifyBody' : 'atomicSignInBody'
   return <section className="card atomic-account" data-atomic-phase={state.phase}>
     {!signedIn ? <StepTrail labels={['stepAccount', 'stepHandle', 'atomicStepCreate', 'atomicStepVerify']} current={state.phase === 'idle' || state.phase === 'google' ? 0 : choosing ? 1 : creating || pendingCredential ? 2 : 3} t={t} /> : null}
@@ -94,7 +96,7 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     </div>
     <div className="account-controls" aria-busy={busy}>
     {unlocked ? <p className="account-ready" role="status"><Icon name="check" />{t('atomicReady')}</p> : phaseMessage ? <p className="notice" role="status">{t(phaseMessage)}</p> : null}
-    {errorMessage ? <p className="notice notice--warning" role="alert" data-capability-stop={unsupported || undefined}>{t(errorMessage)}</p> : null}
+    {errorMessage && !unreadableCreation ? <p className="notice notice--warning" role="alert" data-capability-stop={unsupported || undefined}>{t(unsupported ? 'atomicUnsupportedHint' : errorMessage)}</p> : null}
     {restoreNotice ? <p className="notice" role="alert">{t(restoreNotice)}</p> : null}
     {!signedIn && choosing ? <form onSubmit={(event) => { event.preventDefault(); if (state.phase === 'handle-conflict') void controller.save(handle); else controller.chooseHandle(handle) }}>
       <label htmlFor="atomic-handle">{t('handleLabel')}</label>
@@ -103,11 +105,12 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
       <p id="handle-help" className="field-hint">{t('atomicHandleHint')}</p>
       <div className="actions"><button type="submit" className="primary" aria-disabled={busy}>{t(state.phase === 'handle-conflict' ? 'atomicFinishHandle' : 'atomicContinue')}<Icon name="arrow" /></button></div>
     </form> : null}
-    {!signedIn && !choosing && handle && (creating || verifying || pendingCredential) ? <p className="setup-handle"><span>{t('atomicHandleSummary')}</span><strong>@{handle.replace(/^@/, '').toLowerCase()}</strong></p> : null}
+    {!signedIn && !choosing && !stopped && handle && (creating || verifying || pendingCredential) ? <p className="setup-handle"><span>{t('atomicHandleSummary')}</span><strong>@{handle.replace(/^@/, '').toLowerCase()}</strong></p> : null}
     <div className="actions">
+      {stopped ? <a className="button primary" href={href('home')} onClick={leave}>{t('atomicLeave')}</a> : null}
       {!signedIn && start ? <button className="primary google-button" aria-disabled={busy} onClick={() => { void controller.begin() }}>{t('continueGoogle')}</button> : null}
       {!signedIn && creating ? <button className="primary" aria-disabled={busy} onClick={() => { void controller.createPasskey() }}><Icon name="key" />{t('atomicCreate')}</button> : null}
-      {!signedIn && pendingCredential ? <button className="primary" aria-disabled={busy} onClick={() => { void controller.createPasskey() }}>{t('atomicLink')}</button> : null}
+      {!signedIn && pendingCredential && !unreadableCreation ? <button className="primary" aria-disabled={busy} onClick={() => { void controller.createPasskey() }}>{t('atomicLink')}</button> : null}
       {!signedIn && verifying ? <button className={unsupported ? undefined : 'primary'} aria-disabled={busy} onClick={() => { void controller.save(handle) }}><Icon name="key" />{t(unsupported ? 'atomicVerifyAgain' : 'atomicVerify')}</button> : null}
       {state.phase === 'unknown' && !busy ? <>
         <button className="primary" aria-disabled={busy} onClick={() => { void controller.resolve() }}>{t('atomicCheck')}</button>
@@ -116,7 +119,7 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
       {!signedIn && state.phase === 'terminal' ? <button aria-disabled={busy} onClick={() => { void controller.restart() }}>{t('atomicRestart')}</button> : null}
       {signedIn && !unlocked ? <button className="primary" aria-disabled={busy} onClick={() => { void open() }}>{t('openWithPasskey')}</button> : null}
     </div>
-    {!signedIn && verifying && !busy ? <p className="field-hint">{t('atomicVerifyHint')}</p> : null}
+    {!signedIn && verifying && !busy && !unsupported ? <p className="field-hint">{t('atomicVerifyHint')}</p> : null}
     {busy && !phaseMessage ? <p role="status">{t('accountWorking')}</p> : null}
     {signedIn && (unlocked || returnTo === 'history') ? <div className="account-next">
       {returnTo ? <div className="actions"><a className="button primary" href={href(returnTo)}>{t(returnTo === 'create' ? 'returnMake' : returnTo === 'scan' ? 'returnOpen' : 'returnHistory')}<Icon name="arrow" /></a></div>

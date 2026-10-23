@@ -1151,7 +1151,7 @@ export function Create({
     <section className={`card create-page${confirmed ? '' : ' recipient-picker'}`}>
       {!confirmed ? <StepTrail labels={['stepRecipient', 'stepCompose', 'stepPostcard']} current={0} t={t} /> : <nav className="workspace-nav" aria-label={t('createSteps')}>
         {(['content', 'composition', 'postcard'] as const).map((step, index) => <button key={step} type="button" aria-current={createStep === step ? 'step' : undefined}
-          disabled={sendPhase !== 'idle' || busy || (step === 'composition' && (accepted === null || !noteFits || photoIntakePending || creatorImages === null)) || (step === 'postcard' && frozenRef.current === null)}
+          disabled={sendPhase !== 'idle' || busy || (step === 'composition' && (accepted === null || !noteFits || !note.accepted()?.trim() || photoIntakePending || creatorImages === null)) || (step === 'postcard' && frozenRef.current === null)}
           onClick={() => showCreateStep(step)}><span aria-hidden="true">{index + 1}</span>{t(step === 'content' ? 'createContent' : step === 'composition' ? 'createComposition' : 'stepPostcard')}</button>)}
       </nav>}
       <header className="page-heading"><h1 ref={recipientHeading} tabIndex={-1}>{t(confirmed ? createStep === 'composition' ? 'createCompositionTitle' : createStep === 'postcard' ? 'createPostcardTitle' : 'createDetailsTitle' : pending ? 'recipientConfirmTitle' : 'recipientTitle')}</h1>
@@ -1262,9 +1262,9 @@ export function Create({
                 <li key={photo.id}>
                   <img src={urls.current.get(photo.id)} alt="" />
                   <div className="actions">
-                    <button type="button" disabled={index === 0} onClick={() => { invalidateSend(); photos.move(photo.id, -1); setStamp((value) => value + 1) }}>{t('photoEarlier')}</button>
-                    <button type="button" disabled={index === photos.photos().length - 1} onClick={() => { invalidateSend(); photos.move(photo.id, 1); setStamp((value) => value + 1) }}>{t('photoLater')}</button>
-                    <button type="button" onClick={() => { invalidateSend(); photos.remove(photo.id); rememberPhotos(); setStamp((value) => value + 1) }}>{t('removePhoto')}</button>
+                    <button type="button" aria-label={t('photoEarlier')} title={t('photoEarlier')} disabled={index === 0} onClick={() => { invalidateSend(); photos.move(photo.id, -1); setStamp((value) => value + 1) }}><span aria-hidden="true">←</span></button>
+                    <button type="button" aria-label={t('photoLater')} title={t('photoLater')} disabled={index === photos.photos().length - 1} onClick={() => { invalidateSend(); photos.move(photo.id, 1); setStamp((value) => value + 1) }}><span aria-hidden="true">→</span></button>
+                    <button type="button" aria-label={t('removePhoto')} title={t('removePhoto')} onClick={() => { invalidateSend(); photos.remove(photo.id); rememberPhotos(); setStamp((value) => value + 1) }}><span aria-hidden="true">×</span></button>
                   </div>
                 </li>
               ))}
@@ -1273,7 +1273,6 @@ export function Create({
             {sendPhase === 'idle' ? <p>{t('photoCount')}</p> : null}
           </div>
           </div>
-          <div className="workspace-next"><p className="field-hint">{t('createContentHint')}</p><button type="button" className="primary" disabled={accepted === null || !noteFits || photoIntakePending || creatorImages === null || sendPhase !== 'idle'} onClick={() => showCreateStep('composition')}>{t('createChooseComposition')}<Icon name="arrow" /></button></div>
           </div>
           <div hidden={createStep !== 'composition'} className="composition-workspace">
           {accepted !== null && noteFits ? (
@@ -1292,6 +1291,7 @@ export function Create({
                   session={store}
                   lang={view.language}
                   measurer={measurer}
+                  chooseLabel={t('createContinuePostcard')}
                   onFrozenChange={(frozen) => {
                     frozenRef.current = frozen
                     // Freeze readiness is owned by the child composer; make it
@@ -1300,15 +1300,16 @@ export function Create({
                     // the same visit without extra parent state updates.
                     invalidateSend()
                     setStamp((value) => value + 1)
+                    if (frozen !== null) showCreateStep('postcard')
                   }}
                 />
               </div>
             ) : null
           ) : null}
-          <div className="workspace-next"><button type="button" className="quiet" onClick={() => showCreateStep('content')}>{t('createEditContent')}</button><button type="button" className="primary" disabled={frozenRef.current === null || sendPhase !== 'idle'} onClick={() => showCreateStep('postcard')}>{t('createContinuePostcard')}<Icon name="arrow" /></button></div>
+          <div className="workspace-next"><button type="button" className="quiet" onClick={() => showCreateStep('content')}>{t('createEditContent')}</button></div>
           </div>
           <details className="music-draft" hidden={createStep !== 'content'}>
-            <summary>{t('musicLabel')}</summary>
+            <summary>{t('createMusicTitle')}</summary>
             <label className="handle-form">
               {t('musicLabel')}
               <input
@@ -1347,6 +1348,7 @@ export function Create({
             </ul>
               {sendPhase === 'idle' ? <p>{t('musicNotSent')}</p> : null}
             </details>
+          <div hidden={createStep !== 'content'} className="workspace-next"><p className="field-hint">{t('createContentHint')}</p><button type="button" className="primary" disabled={accepted === null || !noteFits || !note.accepted()?.trim() || photoIntakePending || creatorImages === null || sendPhase !== 'idle'} onClick={() => showCreateStep('composition')}>{t('createChooseComposition')}<Icon name="arrow" /></button></div>
           <div hidden={createStep !== 'postcard'} className="postcard-workspace">
           <section className="front-section">
             <h2>{t('createFrontTitle')}</h2><p>{t('createFrontHint')}</p>

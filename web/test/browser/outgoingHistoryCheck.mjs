@@ -77,6 +77,7 @@ async function click(page, key) { await (await button(page, key)).click() }
 async function scenario(name, run, route = 'history') {
   mode = 'normal'; rows = fresh(); requests = []; held = []
   const page = await host.browser.newPage({ viewport: { width: 320, height: 740 } })
+  page.setDefaultTimeout(8000)
   page.on('pageerror', (error) => errors.push({ name, error: String(error) }))
   try {
     if (name.startsWith('hold-')) mode = name
@@ -100,8 +101,8 @@ async function scenario(name, run, route = 'history') {
 }
 async function loaded(page) { await page.locator('[data-history-key]').first().waitFor() }
 async function openRow(page, key) {
-  const detail = page.locator(`[data-history-key="${key}"] details`)
-  await detail.locator('summary').click()
+  const detail = page.locator(`[data-history-key="${key}"] > details`)
+  await detail.locator(':scope > summary').click()
   return detail
 }
 async function recents(page) {
@@ -128,7 +129,7 @@ try {
       await page.screenshot({ path: join(proof, `states-${language}-${width}.png`), fullPage: true })
       check(`layout ${language}/${width}`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
     }
-    await page.locator('.history a[href="#/"]').click()
+    await page.locator('.mark').click()
     await page.locator('a[href="#/history"]').waitFor()
     await page.goBack()
     await loaded(page)
@@ -179,7 +180,7 @@ try {
     await page.getByText('Could not copy. You can select the code instead.', { exact: true }).waitFor()
     for (const failure of ['old-server', 'malformed']) {
       mode = failure; await click(page, 'historyRefresh')
-      await page.getByText('History is unavailable.', { exact: false }).waitFor()
+      await page.getByText(await page.evaluate(() => window.sendFeedbackFixture.messages('en').historyUnavailable), { exact: true }).waitFor()
       check(`${failure}: not fabricated empty`, await page.locator('[data-testid=history-empty]').count() === 0)
       mode = 'normal'; await click(page, 'historyRetry'); await loaded(page)
     }

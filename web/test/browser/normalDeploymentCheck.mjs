@@ -149,7 +149,15 @@ async function fresh(path = '/') {
 }
 const phase = (page, value) => page.waitForFunction(value => document.querySelector('[data-atomic-phase]')?.getAttribute('data-atomic-phase') === value && !document.querySelector('.atomic-account [aria-disabled=true]'), value)
 const begin = async page => { await page.getByRole('button', { name: 'continue with Google', exact: true }).click(); await phase(page, 'handle') }
-const save = async page => { await page.locator('#atomic-handle').fill('ada'); await page.getByRole('button', { name: 'Save and verify keys', exact: true }).click() }
+const create = async (page, wait = true) => {
+  await page.locator('#atomic-handle').fill('ada'); await page.getByRole('button', { name: 'continue', exact: true }).click(); await phase(page, 'passkey')
+  await page.getByRole('button', { name: 'Create passkey', exact: true }).click()
+  if (wait) {
+    await phase(page, 'verify')
+    check('normal PWA Create returns before GET or commit', commits === 0 && await page.evaluate(() => window.__t428Providers.create === 1 && window.__t428Providers.get === 0))
+  }
+}
+const save = async page => { await create(page); await page.getByRole('button', { name: 'Verify passkey', exact: true }).click() }
 const reset = () => { saved = null; commits = 0; verifiedCredential = false; wrongRp = false; badClient = false; admissionClosed = false; holdRecord = false }
 const shot = async (page, name) => { await page.evaluate(() => window.scrollTo(0, 0)); await page.screenshot({ path: join(proof, `${name}.png`), fullPage: true }); images.push(name) }
 const poll = async (fn, label) => {
@@ -229,12 +237,14 @@ try {
   await shot(page, 'offline-failclosed')
   await page.context().close(); configMode = 'valid'
   for (const kind of ['noPrf', 'cancel']) {
-    reset(); page = await fresh(); await control(page); await begin(page); await page.evaluate(kind => { window.__t428Providers[kind] = true }, kind); await save(page); await phase(page, 'handle')
-    const expected = kind === 'noPrf' ? /this passkey manager cannot open/ : /passkey step did not finish/i
+    reset(); page = await fresh(); await control(page); await begin(page); await create(page)
+    await page.evaluate(kind => { window.__t428Providers[kind] = true }, kind)
+    await page.getByRole('button', { name: 'Verify passkey', exact: true }).click(); await phase(page, 'verify')
+    const expected = kind === 'noPrf' ? /Retrying may not help/ : /passkey step did not finish/i
     check(kind + ': provider failure cannot commit or become READY', commits === 0 && saved === null && await page.locator('.atomic-account [role=alert]').filter({ hasText: expected }).count() === 1)
     await shot(page, kind); await page.context().close()
   }
-  reset(); wrongRp = true; page = await fresh(); await control(page); await begin(page); await save(page); await phase(page, 'handle')
+  reset(); wrongRp = true; page = await fresh(); await control(page); await begin(page); await create(page, false); await phase(page, 'passkey')
   check('backend RP mismatch fails before native credential create', await page.locator('[data-deployment-unavailable]').count() === 1 && await page.evaluate(() => window.__t428Providers.create === 0) && commits === 0)
   await page.context().close()
   reset(); badClient = true; page = await fresh(); await page.getByRole('button', { name: 'continue with Google', exact: true }).click(); await phase(page, 'idle')

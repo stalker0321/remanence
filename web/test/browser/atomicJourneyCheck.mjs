@@ -15,7 +15,24 @@ const button = async (key, language = 'en') => page.getByRole('button', { name: 
 const phase = (value) => page.waitForFunction((value) => window.atomic.state().setup === value && !document.querySelector('[aria-disabled=true]'), value)
 async function fresh() { await page.goto(`${host.url}#/account`); await page.reload(); await page.waitForFunction(() => window.atomic) }
 async function begin(language = 'en') { await (await button('continueGoogle', language)).click(); await phase('handle') }
-async function save(language = 'en', handle = 'ada') { await page.locator('#atomic-handle').fill(handle); await (await button('atomicSave', language)).click() }
+async function create(language = 'en', handle = 'ada', held = false) {
+  await page.locator('#atomic-handle').fill(handle)
+  await (await button('atomicContinue', language)).click(); await phase('passkey')
+  check(`${language}: choosing handle does not invoke provider`, (await state()).creates === 0 && (await state()).assertions === 0)
+  await (await button('atomicCreate', language)).click()
+  if (held) return
+  await phase('verify')
+  check(`${language}: Create stops before GET and key generation`, (await state()).creates === 1 && (await state()).assertions === 0 && (await state()).attempts === 0 && !(await state()).keys)
+}
+async function save(language = 'en', handle = 'ada', boundary = '') {
+  if ((await state()).setup === 'handle') {
+    await create(language, handle, boundary === 'passkey/create')
+    if (boundary === 'passkey/create') return
+  }
+  if ((await state()).setup === 'handle-conflict') {
+    await page.locator('#atomic-handle').fill(handle); await (await button('atomicFinishHandle', language)).click()
+  } else await (await button('atomicVerify', language)).click()
+}
 async function shot(name) {
   await page.screenshot({ path: join(proof, `${name}.png`), fullPage: true })
   const geometry = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth,
@@ -28,6 +45,13 @@ async function shot(name) {
   } else check(`${name}: no horizontal overflow`, geometry.scroll <= geometry.width)
 }
 try {
+  for (const [route, gate, next] of [['create', 'signInToMake', 'returnMake'], ['scan', 'signInToOpen', 'returnOpen'], ['history', 'signInToHistory', 'returnHistory']]) {
+    await fresh(); await page.locator(`.main-nav a[href="#/${route}"]`).click()
+    await page.getByRole('link', { name: await page.evaluate(key => window.atomic.messages.en[key], gate), exact: true }).click()
+    await begin(); await save(); await phase('ready')
+    const intended = page.getByRole('link', { name: await page.evaluate(key => window.atomic.messages.en[key], next), exact: true })
+    check(`${route}: successful onboarding retains original destination`, await intended.getAttribute('href') === `#/${route}`)
+  }
   for (const language of ['en', 'ru', 'uk']) {
     await fresh(); await call('language', language); await begin(language)
     check(`${language}: handle gets focus after Google`, await page.locator('#atomic-handle').evaluate((el) => el === document.activeElement))
@@ -42,8 +66,8 @@ try {
     check(`${language}: original committed account restored once`, (await state()).creates === 1 && (await state()).commits === 1 && (await state()).wiped)
     await shot(`ready-${language}-large`)
   }
-  await fresh(); await begin(); await call('hold', 'passkey/get'); await page.locator('#atomic-handle').fill('ada')
-  const trigger = await button('atomicSave'); await trigger.focus(); await page.keyboard.press('Enter')
+  await fresh(); await begin(); await create(); await call('hold', 'passkey/get')
+  const trigger = await button('atomicVerify'); await trigger.focus(); await page.keyboard.press('Enter')
   await page.waitForFunction(() => window.atomic.reached() === 'passkey/get'); await page.keyboard.press('Enter')
   check('duplicate Enter does not repeat provider/commit', (await state()).creates === 1 && (await state()).assertions === 1 && (await state()).attempts === 0)
   await call('release'); await phase('ready')
@@ -53,10 +77,17 @@ try {
   await (await button('openWithPasskey')).click(); await page.waitForFunction(() => window.atomic.state().keys)
   check('new document restores original key and decrypts prior ciphertext without generation', await call('prove', saved.encrypted) && (await state()).creates === 0 && (await state()).attempts === 0)
 
-  for (const [config, expected] of [[{ noPrf: true }, 'handle'], [{ cancelProvider: true }, 'handle'], [{ finalMode: 'handle' }, 'handle-conflict'], [{ finalMode: 'expired-grant' }, 'assertion-required']]) {
+  for (const [config, expected] of [[{ noPrf: true }, 'verify'], [{ cancelProvider: true }, 'verify'], [{ finalMode: 'handle' }, 'handle-conflict'], [{ finalMode: 'expired-grant' }, 'assertion-required']]) {
     await fresh(); await call('mode', config); await begin(); await save(); await phase(expected)
     check(`${JSON.stringify(config)}: no local readiness`, !(await state()).keys && (await state()).phase === 'signed-out')
-    await call('mode', { noPrf: false, cancelProvider: false, finalMode: 'ok' }); await save('en', 'corrected'); await phase('ready')
+    if (config.noPrf) {
+      check('missing PRF is a visible capability stop, not READY', await page.locator('[data-capability-stop=true]').count() === 1)
+      check('capability stop offers a visible exit; retry is secondary', await page.getByRole('link', { name: await page.evaluate(() => window.atomic.messages.en.atomicLeave), exact: true }).isVisible() && !await (await button('atomicVerifyAgain')).evaluate(el => el.classList.contains('primary')))
+      await shot('saved-without-encryption-support')
+    }
+    await call('mode', { noPrf: false, cancelProvider: false, finalMode: 'ok' })
+    if (config.noPrf) await (await button('atomicVerifyAgain')).click(); else await save('en', 'corrected')
+    await phase('ready')
     check(`${expected}: retry reuses verified credential`, (await state()).creates === 1)
   }
   for (const mode of ['wrong-account', 'wrong-bundle', 'wrong-credential', 'wrong-anchor', 'corrupt', 'offline']) {
@@ -69,7 +100,7 @@ try {
     await page.evaluate(() => { history.replaceState(null, '', '#/'); history.pushState(null, '', '#/account') })
     await call('hold', boundary)
     if (boundary.startsWith('google/')) await (await button('continueGoogle')).click()
-    else { await begin(); await save() }
+    else { await begin(); await save('en', 'ada', boundary) }
     await page.waitForFunction((point) => window.atomic.reached() === point, boundary)
     await call('releaseOnBack'); await page.evaluate(() => history.back())
     await page.waitForURL('**/#/'); await page.waitForTimeout(60)
@@ -80,6 +111,7 @@ try {
   await fresh(); await call('mode', { terminal: true }); await (await button('continueGoogle')).click(); await phase('terminal')
   check('terminal has no implicit restart', !(await state()).calls.includes('restart'))
   await (await button('atomicRestart')).click(); await phase('handle')
+  await page.locator('.account-footer summary').click()
   await (await button('cancelRegistration')).click(); await phase('reauthenticate')
   check('cancel is explicit and distinct from Back/leave', (await state()).calls.includes('cancel'))
   check('no durable storage/raw identity persistence', await page.evaluate(async () => localStorage.length === 0 && sessionStorage.length === 0 && (await indexedDB.databases()).length === 0 && (await caches.keys()).length === 0))

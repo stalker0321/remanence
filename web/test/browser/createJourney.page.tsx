@@ -442,30 +442,38 @@ async function runChecks(h: Harness, files: File[], spare: File, status: HTMLEle
   await pickThree()
   assert('capture-ready frame shows the mounted connected composer', canvasState() === 'ready')
 
+  // Content and composition are distinct visible workspaces. Inspect each
+  // through its real navigation, not zero-sized nodes in a hidden panel.
+  h.setNote('Probe note text.')
+  const steps = () => [...document.querySelectorAll<HTMLButtonElement>('.workspace-nav button')]
+  steps()[0]!.click()
+  await waitFor(() => document.querySelector<HTMLElement>('.content-workspace')?.hidden === false, 'visible content')
+  const thumbHeight = document.querySelector('.photo-draft img')?.getBoundingClientRect().height ?? null
+  await waitFor(() => steps()[1]?.disabled === false, 'composition step ready')
+  steps()[1]!.click()
+  await waitFor(() => document.querySelector<HTMLElement>('.composition-workspace')?.hidden === false, 'visible composition')
+
   // 11. Styled/responsive acceptance at the intended viewport: production
   //     tokens.css is applied, photo controls are constrained, the connected
   //     composer fits, and the page has no horizontal overflow.
   const rootStyle = getComputedStyle(document.documentElement)
-  // Production `tokens.css` sets `:root { font-size: 18px }` and
-  // `.photo-draft img { max-height: 12rem }`, so the constrained thumbnail cap
-  // is 12rem = 12 × root font size (216px) — not a 16px-root assumption.
+  // Bound against the real root size; thumbnails are now 7rem.
   const rootFont = Number.parseFloat(rootStyle.fontSize) || 16
-  const thumb = document.querySelector('.photo-draft img') as HTMLImageElement | null
   const composer = document.querySelector('[data-testid="creator-composer"]') as HTMLElement | null
   const freeze = document.querySelector('[data-testid="creator-freeze"]') as HTMLElement | null
   const freezeRect = freeze?.getBoundingClientRect() ?? null
   const layoutFact: LayoutFact = {
     tokenColumn: rootStyle.getPropertyValue('--column').trim(),
     tokenLilac: rootStyle.getPropertyValue('--lilac').trim(),
-    thumbHeight: thumb ? Math.round(thumb.getBoundingClientRect().height) : null,
+    thumbHeight: thumbHeight === null ? null : Math.round(thumbHeight),
     scrollWidth: document.documentElement.scrollWidth,
     innerWidth: window.innerWidth,
     composerWidth: composer ? Math.round(composer.getBoundingClientRect().width) : null,
     freezeRight: freezeRect ? Math.round(freezeRect.right) : null,
   }
   layoutFacts.push(layoutFact)
-  assert('production tokens.css is applied (design token present)', layoutFact.tokenColumn === '28rem' && layoutFact.tokenLilac === '#d6cce9', JSON.stringify(layoutFact))
-  assert('photo controls are constrained by production styles', layoutFact.thumbHeight !== null && layoutFact.thumbHeight > 0 && layoutFact.thumbHeight <= 12 * rootFont + 1, JSON.stringify(layoutFact))
+  assert('production tokens.css is applied (design token present)', layoutFact.tokenColumn === '70rem' && layoutFact.tokenLilac === '#dcd9ee', JSON.stringify(layoutFact))
+  assert('photo controls are constrained by production styles', layoutFact.thumbHeight !== null && layoutFact.thumbHeight > 0 && layoutFact.thumbHeight <= 7 * rootFont + 1, JSON.stringify(layoutFact))
   assert('no horizontal overflow at the intended viewport', layoutFact.scrollWidth <= layoutFact.innerWidth + 1, JSON.stringify(layoutFact))
   assert('connected composer fits the intended viewport width', layoutFact.composerWidth !== null && layoutFact.composerWidth <= layoutFact.innerWidth + 1, JSON.stringify(layoutFact))
   assert('critical composer controls are reachable in the viewport', layoutFact.freezeRight !== null && layoutFact.freezeRight > 0 && layoutFact.freezeRight <= layoutFact.innerWidth + 1, JSON.stringify(layoutFact))

@@ -47,6 +47,8 @@ export interface CreatorComposerProps {
   measurer: TextMeasurer
   /** Parent-visible freeze lifecycle: snapshot on freeze, null on every invalidation/teardown/unmount. */
   onFrozenChange?: (frozen: CreatorFreeze | null) => void
+  /** Optional journey label; choosing still captures the exact rendered plan. */
+  chooseLabel?: string
 }
 
 interface Copy {
@@ -686,7 +688,8 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       <canvas ref={canvasRef} data-testid="creator-canvas" role="img" aria-label={t.preview} width={360} height={640} />
       </div>
       <div className="creator-controls">
-      <h2>{t.adjustTitle}</h2><p>{t.adjustHint}</p>
+      <details className="creator-adjust">
+      <summary>{t.adjustTitle}</summary><p>{t.adjustHint}</p>
       <div className="creator-slots" role="group" aria-label={t.preview}>
         {view.slots.map((slot, index) => (
           <button
@@ -736,9 +739,10 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         </button>
         <span data-testid="creator-transform-readout">{t.transform(activeTransform.z, activeTransform.xPercent, activeTransform.yPercent)}</span>
       </div>
+      </details>
       {freezeBlocked.reason !== null ? <p data-testid="creator-freeze-blocked">{freezeBlocked.reason}</p> : null}
       <button type="button" data-testid="creator-freeze" disabled={freezeBlocked.disabled} onClick={handleFreeze}>
-        {t.freeze}
+        {props.chooseLabel ?? t.freeze}
       </button>
       {frozen !== null ? (
         <p data-testid="creator-frozen">{t.frozen(frozen.branchId)}</p>

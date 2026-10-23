@@ -22,6 +22,13 @@ export interface PasskeyPort {
   create(options: unknown, signal?: AbortSignal): Promise<PasskeyAssertion>
 }
 
+/** Native CREATE returned a credential, but its public result could not be
+ * normalized. This is not permission to create another provider credential. */
+export class PasskeyCreationUnresolved extends Error {
+  readonly code = 'PASSKEY_CREATION_UNRESOLVED'
+  constructor() { super('PASSKEY_CREATION_UNRESOLVED'); this.name = 'PasskeyCreationUnresolved' }
+}
+
 export function browserPasskey(): PasskeyPort {
   return {
     canAuthenticate() {
@@ -55,12 +62,18 @@ async function credential(options: unknown, signal: AbortSignal | undefined, kin
     if (named(error, 'NotAllowedError') || named(error, 'AbortError')) throw new AuthError('PASSKEY_CANCELLED')
     throw new AuthError('PASSKEY_UNAVAILABLE')
   }
-  if (!created || created.type !== 'public-key') throw new AuthError('PASSKEY_UNAVAILABLE')
-  const published = publicCredential(created as PublicKeyCredential)
-  return {
-    id: published.id,
-    publicResponse: published as PublicAssertion,
-    prf: copyPrf(extensionPrf(created)),
+  if (!created) throw new AuthError('PASSKEY_UNAVAILABLE')
+  try {
+    if (created.type !== 'public-key') throw new AuthError('PASSKEY_UNAVAILABLE')
+    const published = publicCredential(created as PublicKeyCredential)
+    return {
+      id: published.id,
+      publicResponse: published as PublicAssertion,
+      prf: copyPrf(extensionPrf(created)),
+    }
+  } catch (error) {
+    if (kind === 'create') throw new PasskeyCreationUnresolved()
+    throw error
   }
 }
 

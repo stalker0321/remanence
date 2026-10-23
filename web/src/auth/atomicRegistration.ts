@@ -8,7 +8,7 @@ import type { GoogleIdentityPort } from './google'
 import { normalizeHandle } from './handle'
 import type { ApiTransport } from './http'
 import type { MemoryKeys } from './memoryKeys'
-import type { PasskeyAssertion, PasskeyPort, PublicAssertion } from './passkey'
+import { PasskeyCreationUnresolved, type PasskeyAssertion, type PasskeyPort, type PublicAssertion } from './passkey'
 import { AtomicError, binary, login, object, outcome, recoveryReply, reservation, setupReply, string, success, uuid,
   type AtomicPort, type AtomicRequest, type FinalIntent, type Reservation, type SetupAction, type SetupBodies, type SetupReply } from './atomicWire'
 
@@ -209,11 +209,17 @@ export class AtomicRegistration {
       return
     }
     if (!owner.created) {
-      if (owner.creationUnresolved) throw new AtomicError('SETUP_REJECTED')
+      if (owner.creationUnresolved) throw new AtomicError('PASSKEY_CREATION_UNRESOLVED')
       const begin = await this.#post(owner, 'credential/options', { epoch })
       const flow = uuid(begin.flow)
       if (object(object(begin.options).user).id !== b64(uuidToBytes(owner.setup!.reservation.account_id))) throw new AtomicError('WRONG_ACCOUNT')
-      const created = await this.ports.passkeys.create(begin.options, owner.controller.signal)
+      let created: PasskeyAssertion
+      try { created = await this.ports.passkeys.create(begin.options, owner.controller.signal) }
+      catch (error) {
+        this.#check(owner)
+        if (error instanceof PasskeyCreationUnresolved) owner.creationUnresolved = true
+        throw error
+      }
       try {
         this.#check(owner)
         owner.creationUnresolved = true

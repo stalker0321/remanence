@@ -17,7 +17,10 @@ const button = async (key, lang = 'en') => page.getByRole('button', { name: awai
 async function fresh() { await page.goto(`${host.url}#/account`); await page.reload(); await page.waitForFunction(() => window.atomic) }
 async function candidate(lang = 'en') {
   await call('mode', { finalMode: 'handle' }); await (await button('continueGoogle', lang)).click(); await phase('handle')
-  await page.locator('#atomic-handle').fill('taken'); await (await button('atomicSave', lang)).click(); await phase('handle-conflict')
+  await page.locator('#atomic-handle').fill('taken'); await (await button('atomicContinue', lang)).click(); await phase('passkey')
+  await (await button('atomicCreate', lang)).click(); await phase('verify')
+  await (await button('atomicVerify', lang)).click(); await phase('handle-conflict')
+  await page.locator('.account-footer summary').click()
 }
 async function shot(name) {
   await page.screenshot({ path: join(proof, `${name}.png`), fullPage: true }); images.push(name)

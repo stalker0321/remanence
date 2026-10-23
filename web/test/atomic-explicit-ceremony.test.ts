@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { AtomicRegistration } from '../src/auth/atomicRegistration'
 import { MemoryKeys } from '../src/auth/memoryKeys'
 import { SessionStore } from '../src/session/session'
 import { AtomicFixture, CREDENTIAL } from './atomicFixture'
+import { browserPasskey } from '../src/auth/passkey'
 
 function fixture() {
   const f = new AtomicFixture(), session = new SessionStore(), keys = new MemoryKeys()
@@ -12,6 +13,31 @@ function fixture() {
 }
 
 describe('explicit create, then verify ceremony', () => {
+  it.each(['getTransports', 'getClientExtensionResults'] as const)('native CREATE succeeds but %s throws: adapter preserves creation uncertainty', async reader => {
+    const { f, controller, session, keys } = fixture()
+    const nativeCreate = vi.fn(async () => ({
+      id: CREDENTIAL, rawId: new Uint8Array(16).fill(9).buffer, type: 'public-key',
+      response: { clientDataJSON: new Uint8Array([123, 125]).buffer, attestationObject: new Uint8Array([1]).buffer,
+        getTransports() { if (reader === 'getTransports') throw new Error('unreadable transport metadata'); return [] } },
+      getClientExtensionResults() { if (reader === 'getClientExtensionResults') throw new Error('unreadable extension metadata'); return {} },
+    }))
+    vi.stubGlobal('navigator', { credentials: { create: nativeCreate } })
+    f.passkeys.create = (options, signal) => browserPasskey().create({ ...(options as object), challenge: 'AQ' }, signal)
+    try {
+      await controller.begin(); controller.chooseHandle('ada'); await controller.createPasskey()
+      expect(controller.getSnapshot()).toMatchObject({ phase: 'credential-pending', error: 'PASSKEY_CREATION_UNRESOLVED' })
+      f.reservation.credential_ids = ['AQ']
+      await controller.createPasskey(); await controller.save('ada')
+      expect(nativeCreate).toHaveBeenCalledTimes(1)
+      expect(f.assertions).toBe(0)
+      expect(f.intents).toHaveLength(0)
+      expect(f.calls.filter(call => call === 'credential/options')).toHaveLength(1)
+      expect(controller.getSnapshot()).toMatchObject({ phase: 'credential-pending', error: 'PASSKEY_CREATION_UNRESOLVED' })
+      expect(session.getSnapshot().phase).toBe('signed-out')
+      expect(keys.capabilities(session.getSnapshot())).toBeNull()
+    } finally { controller.dispose(); keys.drop(); vi.unstubAllGlobals() }
+  })
+
   it('handle opens no provider; creation returns without GET, crypto generation or READY', async () => {
     const { f, controller, session, keys } = fixture()
     try {

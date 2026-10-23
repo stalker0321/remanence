@@ -1,5 +1,6 @@
 /** Presentation copy only; no new capabilities or persisted preferences. */
 export const uxEn = {
+  createMusicTitle: 'a song · not sent yet',
   createSteps: 'making your remanence', createContent: 'content', createComposition: 'composition',
   createCompositionTitle: 'which feels right?', createPostcardTitle: 'now, the postcard',
   createContentHint: 'Add a note and 3–5 photographs. You’ll choose how they come together next.',
@@ -34,6 +35,7 @@ export const uxEn = {
   settingsAccountHint: 'Your public handle stays with this account.', languageHint: 'Choose the language for this browser.',
 } as const
 export const uxRu: Record<keyof typeof uxEn, string> = {
+  createMusicTitle: 'песня · пока не отправляется',
   createSteps: 'создание remanence', createContent: 'содержание', createComposition: 'композиция',
   createCompositionTitle: 'какой вариант ближе?', createPostcardTitle: 'теперь — открытка',
   createContentHint: 'Добавьте заметку и 3–5 фотографий. Затем выберите, как они будут собраны вместе.',
@@ -66,6 +68,7 @@ export const uxRu: Record<keyof typeof uxEn, string> = {
   settingsAccountHint: 'Ваше публичное имя остаётся с этим аккаунтом.', languageHint: 'Выберите язык для этого браузера.',
 }
 export const uxUk: Record<keyof typeof uxEn, string> = {
+  createMusicTitle: 'пісня · поки не надсилається',
   createSteps: 'створення remanence', createContent: 'вміст', createComposition: 'композиція',
   createCompositionTitle: 'який варіант ближчий?', createPostcardTitle: 'тепер — листівка',
   createContentHint: 'Додайте нотатку й 3–5 фотографій. Потім оберіть, як вони будуть зібрані разом.',

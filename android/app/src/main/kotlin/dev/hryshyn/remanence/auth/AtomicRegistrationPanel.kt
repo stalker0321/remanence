@@ -8,7 +8,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -39,10 +38,9 @@ internal fun AtomicRegistrationPanel(model: AtomicRegistrationViewModel, view: A
     val activity = LocalContext.current as Activity
     val google = remember(activity) { AndroidGoogleCredentials(activity) }
     val passkeys = remember(activity) { AndroidRecoveryCredentials(activity) }
-    var handle by rememberSaveable { mutableStateOf(view.handle) }
-    LaunchedEffect(view.phase) { if (view.phase == AtomicPhase.GOOGLE) handle = "" }
+    val handle = view.handle
     // Rotation keeps the ViewModel ceremony. Explicit exits and onCleared retire its owner.
-    AtomicRegistrationContent(view, handle, { if (it.length <= 31) handle = it },
+    AtomicRegistrationContent(view, handle, model::editHandle,
         { model.begin(google) }, { model.save(view.handle, passkeys) }, model::restart, model::resolve,
         model::retry, model::cancelReservation, model::leave, recoveryBusy,
         onChooseHandle = { model.chooseHandle(handle) },

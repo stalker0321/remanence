@@ -351,7 +351,8 @@ class AtomicRegistrationControllerTest {
         assertEquals(AtomicPhase.CREDENTIAL_UNKNOWN, c.state.value.phase)
         f.reservationState = "EXPIRED"; f.freshTerminal = true; c.resolve(); c.restart()
         assertEquals("", c.state.value.handle); assertEquals(AtomicPhase.HANDLE, c.state.value.phase)
-        c.chooseHandle("fresh"); c.begin(f.google)
+        c.editHandle("unfinished draft"); assertEquals("unfinished draft", c.state.value.handle)
+        c.begin(f.google)
         assertEquals("", c.state.value.handle); assertEquals(AtomicPhase.HANDLE, c.state.value.phase)
     }
 

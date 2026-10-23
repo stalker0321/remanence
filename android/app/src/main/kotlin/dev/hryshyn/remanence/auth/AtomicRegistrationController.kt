@@ -90,6 +90,11 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         }
     }
 
+    fun editHandle(rawHandle: String) {
+        if (state.value.busy || state.value.phase !in setOf(AtomicPhase.HANDLE, AtomicPhase.HANDLE_CONFLICT) || rawHandle.length > 31) return
+        mutable.value = state.value.copy(handle = rawHandle, error = null)
+    }
+
     fun chooseHandle(rawHandle: String) {
         val current = owner ?: return
         if (state.value.busy || state.value.phase !in setOf(AtomicPhase.HANDLE, AtomicPhase.HANDLE_CONFLICT)) return

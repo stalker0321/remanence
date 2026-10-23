@@ -34,6 +34,8 @@ sealed interface ProcessedStill {
         val serializedBytes: ByteArray,
         /** Redacted, transient telemetry; never serialized into the fingerprint. */
         val advisoryQualityReasons: Set<QualityReason> = emptySet(),
+        /** Scan only: the photographed card, kept to stage the capsule opening. */
+        val openingPostcard: CapturedPostcard? = null,
     ) : ProcessedStill
 
     data class Rejected(

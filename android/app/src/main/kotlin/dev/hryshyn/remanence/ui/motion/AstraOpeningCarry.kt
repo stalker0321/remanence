@@ -137,8 +137,26 @@ class AstraCarryFront {
         rect = value
     }
 
+    /** The photographed card shown at [rect], when the scan captured one. */
+    var face: dev.hryshyn.remanence.capture.CapturedPostcard? by mutableStateOf(null)
+        private set
+
+    fun publishFace(value: dev.hryshyn.remanence.capture.CapturedPostcard?) {
+        if (face !== value) face = value
+    }
+
     fun clear() {
         rect = null
+        face = null
+    }
+
+    /** Takes the published face together with its rect; see [consumeIf]. */
+    fun consumeFaceIf(active: Boolean): dev.hryshyn.remanence.capture.CapturedPostcard? {
+        val current = face
+        if (active && current != null) {
+            face = null
+        }
+        return if (active) current else null
     }
 
     /**

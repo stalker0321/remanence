@@ -81,6 +81,7 @@ fun ScanWaitingGroup(
     motion: AstraMotionSpec.Resolved,
     onStopScanning: () -> Unit,
     modifier: Modifier = Modifier,
+    openingPostcard: dev.hryshyn.remanence.capture.CapturedPostcard? = null,
 ) {
     if (state !is ScanMatchUiState.Matching &&
         state !is ScanMatchUiState.Accepted &&
@@ -110,7 +111,11 @@ fun ScanWaitingGroup(
             }
 
             val fullMotion = motion == AstraMotionSpec.Resolved.FULL
-            AstraPostcard(
+            // The recipient's own card when the scan found its outline;
+            // otherwise the drawn stand-in carries the wait.
+            if (openingPostcard != null) {
+                CapturedPostcardStage(openingPostcard, motion, Modifier.fillMaxWidth())
+            } else AstraPostcard(
                 Modifier
                     // Final portrait waiting
                     // (`validation.css:.wait-presentation .postcard-portrait

@@ -29,6 +29,8 @@ import dev.hryshyn.remanence.core.recognition.SiftRootSiftFingerprintExtractor
 import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
 import dev.hryshyn.remanence.core.recognition.StillCapturePipeline
 import dev.hryshyn.remanence.core.recognition.V2LinePostcardLocator
+import dev.hryshyn.remanence.capture.CapturedPostcard
+import dev.hryshyn.remanence.capture.OpeningQuad
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
@@ -54,6 +56,8 @@ class RealStillFingerprintProcessor(
     private val captureDiagnosticObserver: ((CaptureLocalizationEvent) -> Unit)? =
         CaptureLocalizationDiagnostics::report,
     fingerprintExtractor: ((IntArray, Int, Int) -> SiftRootSiftFingerprint)? = null,
+    /** Scan: also return the photographed card for the opening animation. */
+    private val captureOpeningPostcard: Boolean = false,
 ) : StillProcessor {
 
     private val pipeline = StillCapturePipeline()
@@ -100,6 +104,7 @@ class RealStillFingerprintProcessor(
         working.use {
             val pixels = it.copyArgbPixels()
 
+            var lineCandidates: List<QuadCandidate>? = null
             val attempts = try {
                 val legacyCandidates = detectContours(pixels, it.width, it.height)
                 val primaryCandidates = if (localizationConfig.usesV2LineLocator) {
@@ -115,6 +120,7 @@ class RealStillFingerprintProcessor(
                 } else {
                     null
                 }
+                lineCandidates = primaryCandidates
                 proposalSelector.orderedAttempts(
                     primaryCandidates = primaryCandidates,
                     legacyCandidates = legacyCandidates,
@@ -251,12 +257,42 @@ class RealStillFingerprintProcessor(
                     profileId = profileId,
                     serializedBytes = serialized,
                     advisoryQualityReasons = reasons,
+                    openingPostcard = if (captureOpeningPostcard) {
+                        openingPostcard(pixels, it.width, it.height, selection, lineCandidates)
+                    } else {
+                        null
+                    },
                 )
             } finally {
                 fingerprint?.wipe()
             }
         }
     }
+
+    /** Bounded copy of the working frame plus the card outline, or null. */
+    private fun openingPostcard(
+        pixels: IntArray,
+        width: Int,
+        height: Int,
+        selection: dev.hryshyn.remanence.core.recognition.PostcardCropSelection,
+        lineCandidates: List<QuadCandidate>?,
+    ): CapturedPostcard? = runCatching {
+        val quad = OpeningQuad.select(selection.candidate, selection.usedGuideFallback, lineCandidates, width, height)
+            ?: return null
+        val scale = minOf(1.0, OPENING_PHOTO_EDGE_PX / maxOf(width, height).toDouble())
+        val full = android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
+        val photo = if (scale < 1.0) {
+            android.graphics.Bitmap.createScaledBitmap(
+                full,
+                kotlin.math.round(width * scale).toInt().coerceAtLeast(1),
+                kotlin.math.round(height * scale).toInt().coerceAtLeast(1),
+                true,
+            ).also { full.recycle() }
+        } else {
+            full
+        }
+        CapturedPostcard(photo, quad.map { dev.hryshyn.remanence.core.recognition.PointD(it.x * scale, it.y * scale) })
+    }.getOrNull()
 
     private fun rejected(
         reasons: Set<dev.hryshyn.remanence.core.recognition.QualityReason>,
@@ -364,3 +400,6 @@ class RealStillFingerprintProcessor(
     }
 
 }
+
+/** Long edge of the photo kept for the opening; the card fills ~20-40% of it. */
+private const val OPENING_PHOTO_EDGE_PX = 1280.0

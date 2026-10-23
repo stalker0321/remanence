@@ -197,7 +197,21 @@ private fun RootSurface(
                 val front = remember(destination) {
                     carryFront.consumeIf(destination is AppDestination.Capsule)
                 }
-                if (front != null) {
+                val face = remember(destination) {
+                    carryFront.consumeFaceIf(destination is AppDestination.Capsule)
+                }
+                val openingMotion = rememberAstraMotion()
+                if (front != null && face != null && openingMotion == dev.hryshyn.remanence.ui.motion.AstraMotionSpec.Resolved.FULL) {
+                    // The recipient's own card turns over; its back is the capsule.
+                    dev.hryshyn.remanence.ui.motion.AstraPostcardFlip(
+                        front = front,
+                        face = face,
+                        backdropColor = MaterialTheme.colorScheme.background,
+                        modifier = modifier.fillMaxSize(),
+                    ) {
+                        capsuleContent(destination.grantId)
+                    }
+                } else if (front != null) {
                     AstraOpeningCarry(
                         motion = rememberAstraMotion(),
                         modifier = modifier.fillMaxSize(),

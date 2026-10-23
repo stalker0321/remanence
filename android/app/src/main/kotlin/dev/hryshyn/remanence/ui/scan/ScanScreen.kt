@@ -124,6 +124,7 @@ fun ScanScreen(
     // in-Scan transitions, after the root arrival is done, so they keep
     // their own entries. The camera lifecycle below is untouched.
     val entryMotion = rememberScanEntryMotion(rememberAstraMotion())
+    val openingPostcard by viewModel.openingPostcard.collectAsStateWithLifecycle()
 
     BoxWithConstraints(modifier.fillMaxSize()) {
     val previewBudget = (maxHeight - 160.dp).coerceAtLeast(64.dp)
@@ -195,6 +196,7 @@ fun ScanScreen(
             is ScanMatchUiState.MaterialPending -> ScanWaitingGroup(
                 state = current,
                 motion = rememberAstraMotion(),
+                openingPostcard = openingPostcard,
                 // Real recovery: reset the whole flow, same as recapture.
                 onStopScanning = viewModel::resetSession,
                 modifier = Modifier.fillMaxWidth(),

@@ -89,6 +89,7 @@ fun AstraPostcard(modifier: Modifier = Modifier) {
             .testTag("astra_postcard")
             .onGloballyPositioned { coordinates ->
                 carryFront?.publish(coordinates.boundsInRoot().toOpeningRect())
+                carryFront?.publishFace(null)
             }
             .semantics(mergeDescendants = true) {
                 contentDescription = "graphic postcard front"

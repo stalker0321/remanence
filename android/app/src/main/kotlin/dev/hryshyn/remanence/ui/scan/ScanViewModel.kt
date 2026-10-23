@@ -151,7 +151,7 @@ class ScanViewModel internal constructor(
      */
     private val presentationGrants: PresentationGrantAuthority,
     frontProcessor: dev.hryshyn.remanence.capture.StillProcessor =
-        RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
+        RealStillFingerprintProcessor(profile, FingerprintSide.FRONT, captureOpeningPostcard = true),
     /**
      * Capture-once display frame: decodes a bounded in-memory still for the
      * Processing surface. The recognition pipeline keeps using the delivered
@@ -228,6 +228,14 @@ class ScanViewModel internal constructor(
      */
     private val _frontDisplayStill = MutableStateFlow<Bitmap?>(null)
     val frontDisplayStill: StateFlow<Bitmap?> = _frontDisplayStill.asStateFlow()
+
+    /**
+     * The recipient's own photo of the accepted card, staged for the capsule
+     * opening. Lives from an accepted capture until the next capture, reset
+     * or teardown; never stored or sent anywhere.
+     */
+    private val _openingPostcard = MutableStateFlow<dev.hryshyn.remanence.capture.CapturedPostcard?>(null)
+    val openingPostcard: StateFlow<dev.hryshyn.remanence.capture.CapturedPostcard?> = _openingPostcard.asStateFlow()
 
     private val _matchState = MutableStateFlow<ScanMatchUiState>(ScanMatchUiState.AwaitingCapture)
     val matchState: StateFlow<ScanMatchUiState> = _matchState.asStateFlow()
@@ -457,6 +465,7 @@ class ScanViewModel internal constructor(
             if (!deliveryIsCurrent(generation)) {
                 untransferredAccepted?.fill(0)
                 untransferredAccepted = null
+                (processed as? ProcessedStill.Accepted)?.openingPostcard?.clear()
                 // Our frame only (compare-and-set): a newer delivery may
                 // have published since — never wipe its frame, only erase
                 // our own superseded pixels.
@@ -495,6 +504,7 @@ class ScanViewModel internal constructor(
                     // The attempt is terminal: the display frame must not
                     // survive into Matching/MaterialPending/Capsule.
                     clearDisplayStill()
+                    setOpeningPostcard(processed.openingPostcard)
                     true
                 }
             }
@@ -542,6 +552,12 @@ class ScanViewModel internal constructor(
      * recycles (see [clearCaptureDisplayStill]): the frame may still be
      * composed while its terminal transition lands.
      */
+    private fun setOpeningPostcard(next: dev.hryshyn.remanence.capture.CapturedPostcard?) {
+        val previous = _openingPostcard.value
+        _openingPostcard.value = next
+        if (previous !== next) previous?.clear()
+    }
+
     private fun clearDisplayStill() {
         val still = _frontDisplayStill.value
         _frontDisplayStill.value = null
@@ -568,6 +584,7 @@ class ScanViewModel internal constructor(
      * result can never overwrite the fresh capture sequence.
      */
     fun resetSession() {
+        setOpeningPostcard(null)
         cancelPendingWatcher()
         cancelIncomingSyncSchedule()
         matchGeneration++
@@ -1558,6 +1575,7 @@ class ScanViewModel internal constructor(
     }
 
     override fun onCleared() {
+        setOpeningPostcard(null)
         cancelPendingWatcher()
         cancelIncomingSyncSchedule()
         unregisterSessionBoundary?.invoke()

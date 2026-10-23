@@ -9,6 +9,19 @@ class AppNavigationTest {
     private val owner = "1f0a1234-5678-4abc-9def-aabbccdd1001"
 
     @Test
+    fun historyIsAuthenticatedMetadataAndItsRowIsNeverAnOpeningGrant() {
+        for (auth in listOf(AuthUiState.SignedOut, AuthUiState.RecoveryRequired, AuthUiState.Resolving)) {
+            assertEquals(AppDestination.Authentication, RouteGuard.resolve(auth, AppDestination.History))
+        }
+        val controller = authenticatedController()
+        controller.navigate(AppDestination.History)
+        assertEquals(AppDestination.History, controller.current)
+        assertEquals(CapsuleAccess.None, controller.capsuleAccess)
+        controller.navigate(AppDestination.Capsule("20000000-0000-4000-8000-000000000001"))
+        assertEquals(AppDestination.Home, controller.current)
+    }
+
+    @Test
     fun signedOutStartsOnAuthenticationSurface() {
         val controller = AppNavigationController(AuthUiState.SignedOut)
         assertEquals(AppDestination.Authentication, controller.current)
@@ -75,8 +88,8 @@ class AppNavigationTest {
     @Test
     fun destinationInventoryAllowsOnlyAuthHomeCreateScanAndGrantGatedCapsule() {
         val inventory = RouteGuard.allDestinations().map { it.javaClass.simpleName }.toSet()
-        assertEquals(setOf("Authentication", "Home", "Settings", "Create", "Scan", "Capsule"), inventory)
-        for (forbidden in listOf("Gallery", "Inbox", "History", "Feed", "DeepLink")) {
+        assertEquals(setOf("Authentication", "Home", "Settings", "History", "Create", "Scan", "Capsule"), inventory)
+        for (forbidden in listOf("Gallery", "Inbox", "Feed", "DeepLink")) {
             org.junit.Assert.assertFalse("forbidden route type: $forbidden", forbidden in inventory.joinToString())
         }
     }
@@ -110,7 +123,7 @@ class AppNavigationTest {
             ),
         )
         for (next in boundaries) {
-            for (flow in listOf(AppDestination.Create, AppDestination.Scan)) {
+            for (flow in listOf(AppDestination.Create, AppDestination.Scan, AppDestination.History)) {
                 val controller = authenticatedController()
                 controller.navigate(flow)
                 controller.updateAuth(next)

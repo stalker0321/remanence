@@ -2,6 +2,17 @@ package dev.hryshyn.remanence.ui.create
 
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.foundation.layout.fillMaxSize
+import dev.hryshyn.remanence.ui.hold.HoldTheme
+import dev.hryshyn.remanence.session.*
+import dev.hryshyn.remanence.auth.AtomicRegistrationContent
+import dev.hryshyn.remanence.auth.AtomicPhase
+import dev.hryshyn.remanence.auth.AtomicView
+import dev.hryshyn.remanence.ui.auth.AccessPage
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -67,7 +78,7 @@ private fun synthetic(side: FingerprintSide): ProcessedStill.Accepted {
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35])
+@Config(sdk = [35], qualifiers = "w390dp-h844dp-mdpi")
 class CreateUiHappyPathTest {
 
     @get:Rule
@@ -86,6 +97,7 @@ class CreateUiHappyPathTest {
     private lateinit var testWrapper: SenderRetryKeysetWrapper
 
     private val bridge = dev.hryshyn.remanence.create.MemoryGeneratorBridge()
+    private val ownedViewModels = androidx.lifecycle.ViewModelStore()
 
     @Before
     fun setUp() {
@@ -100,6 +112,7 @@ class CreateUiHappyPathTest {
 
     @After
     fun tearDown() {
+        ownedViewModels.clear()
         Dispatchers.resetMain()
         if (::database.isInitialized) database.close()
     }
@@ -228,19 +241,61 @@ class CreateUiHappyPathTest {
             collageSourceFactory = testCollageSourceFactory(),
         )
         vm.beginSession(1L, userUuid.toString())
+        ownedViewModels.put("create", vm)
+
+        // Real route controller carries Make through a synthetic successful setup.
+        // This is routing/Compose evidence, not provider or server acceptance.
+        var resolved: SessionState = SessionState.SignedOut
+        val root = RootViewModel(object : SessionStateResolver {
+            override suspend fun bootstrap() = resolved
+            override suspend fun logout() = SessionState.SignedOut
+        })
+        ownedViewModels.put("root", root)
+        root.requestHomeIntent(HomeIntent.MAKE)
+        var verifications = 0
+        lateinit var rendered: android.view.View
 
         val live = AtomicReference<FakeStillCameraAdapter?>(null)
         composeRule.setContent {
-            MaterialTheme {
-                CreateScreen(
+            rendered = LocalView.current.rootView
+            val auth by root.authState.collectAsState()
+            val destination by root.destination.collectAsState()
+            HoldTheme { Surface(Modifier.fillMaxSize()) {
+            RootScreen(auth, destination, authenticationContent = {
+                AccessPage(onBack = root::cancelHomeIntent) {
+                    AtomicRegistrationContent(AtomicView(AtomicPhase.VERIFY_REQUIRED, handle = "mykola"), "mykola",
+                        {}, {}, {}, {}, {}, {}, {}, {}, false, onVerify = {
+                            verifications++
+                            resolved = SessionState.Active(userUuid.toString(), "mykola", true, true)
+                            root.onSessionEstablished()
+                        }) { _, _ -> }
+                }
+            }, homeContent = {}, createContent = { CreateScreen(
                     viewModel = vm,
                     adapterFactory = {
                         FakeStillCameraAdapter().also { live.set(it) }
                     },
                     requestPermissionOnAttach = false,
-                )
+                ) }, onExitFlow = root::returnToHome)
+            } }
+        }
+
+        fun capture(name: String) {
+            composeRule.mainClock.advanceTimeBy(300)
+            composeRule.waitForIdle()
+            composeRule.runOnIdle {
+                val bitmap = android.graphics.Bitmap.createBitmap(rendered.width, rendered.height, android.graphics.Bitmap.Config.ARGB_8888)
+                rendered.draw(android.graphics.Canvas(bitmap))
+                val target = java.io.File("build/t454-pixels/$name.png"); target.parentFile?.mkdirs()
+                target.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                bitmap.recycle()
             }
         }
+        capture("en-make-setup")
+        composeRule.onNodeWithTag("atomic_verify").performClick()
+        assertEquals(1, verifications)
+        assertEquals(dev.hryshyn.remanence.ui.navigation.AppDestination.Create, root.destination.value)
+        capture("en-make-handoff-recipient")
 
         fun readyCamera() {
             composeRule.waitForIdle()
@@ -263,6 +318,7 @@ class CreateUiHappyPathTest {
         composeRule.waitForIdle()
 
         // 2) Explicit confirmation of the resolved snapshot.
+        capture("en-recipient-confirmation")
         composeRule.onNodeWithTag("confirm_button").performClick()
         composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.FRONT }
 
@@ -284,6 +340,7 @@ class CreateUiHappyPathTest {
         composeRule.waitForIdle()
 
         // 5) Candidates are prepared while the content remains visible.
+        capture("en-compose-content")
         // Crossing Next must land on an already drawable expression.
         scroll("create_next")
         composeRule.onNodeWithTag("create_next")
@@ -298,9 +355,11 @@ class CreateUiHappyPathTest {
             vm.collageChoices.candidates.isNotEmpty(),
         )
         composeRule.runOnIdle { assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value) }
+        capture("en-compose-choices")
         composeRule.onNodeWithTag("collage_select").assertIsDisplayed().performClick()
         composeRule.runOnIdle { assertTrue(vm.frozenCollageSelection != null) }
         composeRule.onNodeWithTag("create_compose_continue").assertIsDisplayed().performClick()
+        capture("en-compose-confirmed")
 
         // 6) Publish the frozen choice. On the bounded COMPOSE viewport the
         // footer is reachable without scrolling (B1 fit requirement).

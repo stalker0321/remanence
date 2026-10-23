@@ -90,6 +90,10 @@ fun PendingSenderSheet(
                         )
                         Spacer(Modifier.height(8.dp))
                     }
+                    val finalizationStopped = current is PendingSenderViewModel.State.Failed &&
+                        current.message in setOf(PendingSenderViewModel.Message.SEND_LIMIT_REACHED,
+                            PendingSenderViewModel.Message.SEND_ACCESS_UNAVAILABLE, PendingSenderViewModel.Message.FINALIZE_UNKNOWN)
+                    if (finalizationStopped) Text(stringResource(R.string.send_publication_pending_recovery))
                     Row(modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(
                             onClick = { viewModel.onKindChange("email") },
@@ -119,6 +123,7 @@ fun PendingSenderSheet(
                     Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = viewModel::send,
+                        enabled = !finalizationStopped,
                         modifier = Modifier.testTag("pending_sender_send"),
                     ) { Text(stringResource(R.string.pending_sender_send)) }
                 }
@@ -194,6 +199,9 @@ fun PendingSenderSheet(
 }
 
 private fun PendingSenderViewModel.Message.stringRes(): Int = when (this) {
+    PendingSenderViewModel.Message.SEND_LIMIT_REACHED -> R.string.send_publication_limit
+    PendingSenderViewModel.Message.SEND_ACCESS_UNAVAILABLE -> R.string.send_publication_unavailable
+    PendingSenderViewModel.Message.FINALIZE_UNKNOWN -> R.string.send_publication_unknown
     PendingSenderViewModel.Message.NETWORK -> R.string.pending_sender_network
     PendingSenderViewModel.Message.SESSION_CHANGED -> R.string.pending_sender_session
     PendingSenderViewModel.Message.CONFLICT -> R.string.pending_sender_conflict

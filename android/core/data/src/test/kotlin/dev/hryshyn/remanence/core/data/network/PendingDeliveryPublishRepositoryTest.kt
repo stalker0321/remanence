@@ -17,6 +17,141 @@ import mockwebserver3.MockWebServer
  */
 class PendingDeliveryPublishRepositoryTest {
 
+    @Test fun transportFailureRemainsRetryableAndCancellationIsNotAProblemFallback() = runTest {
+        withServer { server ->
+            val baseUrl = ApiBaseUrl.parse(server.url("/").toString())
+            val offline = HttpClientFactory.create().newBuilder()
+                .addInterceptor { throw java.io.IOException("synthetic offline") }.build()
+            val failure = assertIs<PendingFinalizeResult.Failure>(PendingDeliveryPublishRepository(offline, baseUrl)
+                .finalize("d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic"))
+            assertEquals(PendingPublishFailure.NETWORK, failure.reason)
+            assertTrue(failure.retryable)
+            assertFinalizeTransportCancellation { client ->
+                PendingDeliveryPublishRepository(client, baseUrl)
+                    .finalize("d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic")
+            }
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test fun malformed409ProblemsReturnGenericFailureWithoutThrowing() = malformedAccessProblems(409)
+    @Test fun malformed503ProblemsReturnGenericRetryableFailureWithoutThrowing() = malformedAccessProblems(503)
+
+    private fun malformedAccessProblems(status: Int) = runTest {
+        withServer { server ->
+            val code = if (status == 409) "SEND_LIMIT_REACHED" else "SEND_ACCESS_UNAVAILABLE"
+            val repository = repository(server)
+            var expectedRequests = 0
+            for (valid in listOf(minimalProblemJson(code, status), problemJson(code, status, status == 503))) {
+                for (mime in listOf("application/json", "application/problem+json")) {
+                    for ((label, body) in malformedFinalizeProblems(valid)) {
+                        server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", mime).body(body).build())
+                        val result = assertIs<PendingFinalizeResult.Failure>(repository.finalize(
+                            "d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic"), label)
+                        assertEquals(PendingPublishFailure.HTTP, result.reason, label)
+                        assertEquals(status, result.httpStatus, label)
+                        assertEquals(status == 503, result.retryable, label)
+                        assertFalse(result.toString().contains("private detail"), label)
+                        val sent = server.takeRequest()
+                        assertEquals("POST", sent.method, label)
+                        assertEquals("/v2/pending-deliveries/d/finalize", sent.url.encodedPath, label)
+                        expectedRequests++
+                    }
+                }
+            }
+            assertEquals(expectedRequests, server.requestCount)
+        }
+    }
+
+    @Test fun validFullAndMinimalAccessProblemsKeepExactMimeAndStatusAuthority() = runTest {
+        withServer { server ->
+            for ((status, code) in listOf(409 to "SEND_LIMIT_REACHED", 503 to "SEND_ACCESS_UNAVAILABLE")) {
+                for (valid in listOf(minimalProblemJson(code, status), problemJson(code, status, status == 503))) {
+                    for (mime in listOf("application/json", "application/problem+json")) {
+                        server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", mime).body(valid).build())
+                        val accepted = assertIs<PendingFinalizeResult.Failure>(repository(server).finalize(
+                            "d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic"))
+                        assertEquals(code, accepted.reason.name)
+                        assertEquals(status == 503, accepted.retryable)
+                    }
+                    server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", "text/plain").body(valid).build())
+                    val wrongMime = assertIs<PendingFinalizeResult.Failure>(repository(server).finalize(
+                        "d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic"))
+                    assertEquals(PendingPublishFailure.HTTP, wrongMime.reason)
+                    assertEquals(status == 503, wrongMime.retryable)
+                    server.enqueue(MockResponse.Builder().code(if (status == 409) 503 else 409)
+                        .setHeader("Content-Type", "application/json").body(valid).build())
+                    val wrongStatus = assertIs<PendingFinalizeResult.Failure>(repository(server).finalize(
+                        "d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic"))
+                    assertEquals(PendingPublishFailure.HTTP, wrongStatus.reason)
+                    assertEquals(status == 409, wrongStatus.retryable)
+                }
+            }
+        }
+    }
+
+    @Test fun validQuotaProblemNeverGainsAuthorityAtPendingDraftOrBlob() = runTest {
+        withServer { server ->
+            for ((status, code) in listOf(409 to "SEND_LIMIT_REACHED", 503 to "SEND_ACCESS_UNAVAILABLE")) {
+                for (body in listOf(minimalProblemJson(code, status), problemJson(code, status, status == 503))) {
+                    server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", "application/problem+json").body(body).build())
+                    val draft = assertIs<PendingDraftResult.Failure>(repository(server).draft(
+                        "route", "11111111-2222-3333-4444-555555555555", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        "email", "synthetic@example.test", ByteArray(32), 1814317432L, artifacts, "same-draft", "synthetic"))
+                    assertEquals(PendingPublishFailure.HTTP, draft.reason)
+                    assertEquals(status == 503, draft.retryable)
+                    server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", "application/problem+json").body(body).build())
+                    val blob = assertIs<PendingBlobResult.Failure>(repository(server).uploadBlob(
+                        "d", artifacts.single().blobId, "body".toByteArray(), 4L,
+                        artifacts.single().ciphertextSha256Hex, "synthetic"))
+                    assertEquals(PendingPublishFailure.HTTP, blob.reason)
+                    assertEquals(status == 503, blob.retryable)
+                }
+            }
+            assertEquals(8, server.requestCount)
+        }
+    }
+
+    @Test fun sendLimitFinalizeIsTypedWithoutChangingRequest() = accessOutcome(409, "SEND_LIMIT_REACHED", false)
+    @Test fun sendAccessUnavailableFinalizeIsTypedWithoutChangingRequest() = accessOutcome(503, "SEND_ACCESS_UNAVAILABLE", true)
+
+    private fun accessOutcome(status: Int, code: String, retryable: Boolean) = runTest {
+        withServer { server ->
+            server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", "application/json")
+                .body("""{"type":"about:blank","title":"$code","status":$status,"code":"$code"}""").build())
+            val result = assertIs<PendingFinalizeResult.Failure>(repository(server).finalize(
+                "d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic"))
+            assertEquals(code, result.reason.name)
+            assertEquals(retryable, result.retryable)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test fun quotaIsFinalizerOnlyAndRequiresExactPendingOrFullShape() = runTest {
+        withServer { server ->
+            val valid = """{"type":"about:blank","title":"SEND_LIMIT_REACHED","status":409,"code":"SEND_LIMIT_REACHED"}"""
+            for (body in listOf(valid.replace("about:blank", "unknown"),
+                valid.replace("\"title\":\"SEND_LIMIT_REACHED\"", "\"title\":\"other\""),
+                valid.replace("\"status\":409", "\"status\":503"),
+                valid.replace("\"status\":409", "\"status\":\"409\""),
+                valid.replace("\"code\":", "\"extra\":0,\"code\":"),
+                valid.replace("\"code\":", "\"retryable\":false,\"code\":"))) {
+                server.enqueue(MockResponse.Builder().code(409).setHeader("Content-Type", "application/json").body(body).build())
+                assertEquals(PendingPublishFailure.HTTP, assertIs<PendingFinalizeResult.Failure>(
+                    repository(server).finalize("d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic")).reason)
+            }
+            server.enqueue(MockResponse.Builder().code(409).setHeader("Content-Type", "application/json").body(valid).build())
+            val draft = repository(server).draft("route", "11111111-2222-3333-4444-555555555555",
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "email", "synthetic@example.test", ByteArray(32),
+                1814317432L, artifacts, "same-draft", "synthetic")
+            assertEquals(PendingPublishFailure.HTTP, assertIs<PendingDraftResult.Failure>(draft).reason)
+            server.enqueue(MockResponse.Builder().code(503).setHeader("Content-Type", "application/problem+json")
+                .body(problemJson("SEND_ACCESS_UNAVAILABLE", 503, true)).build())
+            assertEquals(PendingPublishFailure.SEND_ACCESS_UNAVAILABLE,
+                assertIs<PendingFinalizeResult.Failure>(repository(server).finalize("d", "Uw==", "Ux==", "RXNj", "same-operation", "synthetic")).reason)
+        }
+    }
+
     private suspend fun <T> withServer(block: suspend (MockWebServer) -> T): T {
         val server = MockWebServer()
         server.start()

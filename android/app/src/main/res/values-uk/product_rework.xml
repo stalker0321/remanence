@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="rework_setup_step">Крок %1$d з %2$d</string>
+    <string name="rework_welcome_title">дещо особисто для вас</string>
+    <string name="rework_welcome_detail">Почніть із Google, щоб надіслати листівку або відкрити адресовану вам.</string>
+    <string name="rework_existing_account">Уже маєте обліковий запис? Увійти з ключем доступу</string>
+    <string name="rework_new_account">Створити обліковий запис</string>
+    <string name="rework_signin_title">З поверненням</string>
+    <string name="rework_signin_detail">Поверніться до листівок зі своїм ключем Remanence.</string>
+    <string name="rework_signin_action">Увійти з ключем доступу</string>
+    <string name="rework_handle_detail">За цим ім’ям вас знайдуть у Remanence.</string>
+    <string name="rework_create_key_title">Ваші спогади — лише ваші</string>
+    <string name="rework_create_key_detail">Виберіть, де зберегти ключ. Потім перевіримо, чи може його провайдер захистити ваші листівки.</string>
+    <string name="rework_key_create_note">Потрібен менеджер ключів із підтримкою зашифрованого відновлення. Спочатку збережемо ключ, а потім перевіримо, чи може він захистити ваші спогади.</string>
+    <string name="rework_create_key">Створити ключ доступу</string>
+    <string name="rework_verify_title">Ключ доступу збережено</string>
+    <string name="rework_verify_detail">Виберіть той самий ключ, щоб перевірити захист і завершити налаштування.</string>
+    <string name="rework_key_saved">Ключ збережено у провайдера. Доступ до спогадів буде готовий після перевірки.</string>
+    <string name="rework_verify_key">Перевірити ключ доступу</string>
+    <string name="rework_verify_retry">Повторна перевірка використовує збережений ключ, не створюючи нового.</string>
+    <string name="rework_capability_title">Цей ключ не завершить налаштування</string>
+    <string name="rework_navigation">Вибрати розділ</string>
+    <string name="rework_creation_unknown_title">Перевірмо, що збереглося</string>
+    <string name="rework_creation_unknown_detail">Можливо, провайдер зберіг ключ, але підтвердження не завершилося. Перевірте налаштування перед продовженням; не створюйте ще один ключ.</string>
+    <string name="rework_finishing_title">Завершуємо налаштування</string>
+    <string name="rework_nav_home">головна</string>
+    <string name="rework_nav_sent">надіслано</string>
+    <string name="rework_history_empty_title">Тут почнеться нова листівка</string>
+    <string name="rework_history_empty_detail">Після надсилання тут з’являться відомості про доставку й відкриття листівки.</string>
+    <string name="rework_history_make">Створити листівку</string>
+    <string name="rework_settings_detail">Ваш обліковий запис. Ваші налаштування.</string>
+    <string name="rework_preferences">налаштування</string>
+    <string name="rework_optional_feedback">Необов’язковий зворотний зв’язок</string>
+    <string name="rework_optional_feedback_detail">Виберіть, чим ділитися для поліпшення Remanence</string>
+    <string name="rework_leave_title">Поки вийти з налаштування?</string>
+    <string name="rework_leave_detail">Ключ залишиться у провайдера. Поверніться з тим самим обліковим записом Google, щоб перевірити налаштування. Якщо збереження не підтвердилося, може знадобитися допомога.</string>
+    <string name="rework_keep_setup">Продовжити налаштування</string>
+</resources>

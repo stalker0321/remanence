@@ -1,0 +1,16 @@
+<resources>
+    <string name="media_collage_description">Postcard composition</string>
+    <string name="media_crop_photo">Crop photo %1$d of %2$d</string>
+    <string name="media_crop_position">Crop at %1$d%% across, %2$d%% down; width %3$d%%, height %4$d%%</string>
+    <string name="media_crop_left">Move crop left</string>
+    <string name="media_crop_right">Move crop right</string>
+    <string name="media_crop_up">Move crop up</string>
+    <string name="media_crop_down">Move crop down</string>
+    <string name="media_crop_zoom_in">Zoom in</string>
+    <string name="media_crop_zoom_out">Zoom out</string>
+    <string name="media_crop_hint">Drag the frame or pinch to resize. You can also use crop actions, arrow keys and + / −.</string>
+    <string name="media_photo_previous">Previous photo</string>
+    <string name="media_photo_next">Next photo</string>
+    <string name="media_photo_position">Photo %1$d of %2$d</string>
+    <string name="media_export_interrupted">Saving was interrupted. Keep the capsule open and choose Save image again.</string>
+</resources>

@@ -2,9 +2,12 @@ package dev.hryshyn.remanence.ui.motion
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -27,6 +30,25 @@ class AstraStepArrivalTest {
 
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test fun animationKeyDoesNotRemountTheRetainedPreparer() {
+        val step = mutableStateOf("content")
+        var mounts = 0
+        var disposals = 0
+        composeRule.setContent {
+            AstraStepArrival(AstraMotionSpec.Resolved.FULL, step.value) {
+                remember { mounts++ }
+                DisposableEffect(Unit) { onDispose { disposals++ } }
+                Text(step.value, Modifier.testTag("retained_preparer"))
+            }
+        }
+        composeRule.runOnIdle { step.value = "composition" }
+        composeRule.runOnIdle { step.value = "crop" }
+        composeRule.runOnIdle { step.value = "composition" }
+        composeRule.onNodeWithTag("retained_preparer").assertTextEquals("composition")
+        org.junit.Assert.assertEquals(1, mounts)
+        org.junit.Assert.assertEquals(0, disposals)
+    }
 
     @Test
     fun fullRegimeRendersFirstMountWithoutAdvancingClock() {

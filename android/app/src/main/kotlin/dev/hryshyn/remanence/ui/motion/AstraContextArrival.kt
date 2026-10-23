@@ -30,12 +30,14 @@ fun AstraContextArrival(
     contentKey: Any? = null,
     content: @Composable () -> Unit,
 ) {
-    val alpha = remember(motion, contentKey) { Animatable(if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else AstraMotionSpec.ARRIVAL_ALPHA) }
-    val offset = remember(motion, contentKey) { Animatable(if (motion == AstraMotionSpec.Resolved.FULL) AstraMotionSpec.ARRIVAL_OFFSET_DP else 0f) }
+    // A preference update settles the current arrival; it is not a new route.
+    val alpha = remember(contentKey) { Animatable(if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else AstraMotionSpec.ARRIVAL_ALPHA) }
+    val offset = remember(contentKey) { Animatable(if (motion == AstraMotionSpec.Resolved.FULL) AstraMotionSpec.ARRIVAL_OFFSET_DP else 0f) }
     val density = LocalDensity.current
 
     LaunchedEffect(motion, contentKey) {
         val duration = AstraMotionSpec.routineMs(motion)
+        if (motion != AstraMotionSpec.Resolved.FULL) offset.snapTo(0f)
         if (duration <= 0) {
             alpha.snapTo(1f)
             offset.snapTo(0f)
@@ -47,8 +49,8 @@ fun AstraContextArrival(
     }
 
     Box(modifier.graphicsLayer {
-        this.alpha = alpha.value
-        translationY = with(density) { offset.value.dp.toPx() }
+        this.alpha = if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else alpha.value
+        translationY = if (motion == AstraMotionSpec.Resolved.FULL) with(density) { offset.value.dp.toPx() } else 0f
     }) {
         content()
     }

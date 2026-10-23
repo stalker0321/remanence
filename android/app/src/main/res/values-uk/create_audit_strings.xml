@@ -34,4 +34,5 @@
     <string name="create_audit_capture_timeout">Камера не відповіла вчасно. Перезніми листівку.</string>
     <string name="create_audit_crop_grid">Сітка кадрування</string>
     <string name="create_audit_handle_rule">3–30 символів: a–z, 0–9, _ або .</string>
+    <string name="create_audit_recent_identity">Не вдалося підтвердити цього недавнього одержувача. Перевір нік і знайди одержувача вручну.</string>
 </resources>

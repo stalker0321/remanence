@@ -36,6 +36,13 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
+import androidx.lifecycle.viewModelScope
+import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import dev.hryshyn.remanence.ui.hold.HoldTheme
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -60,8 +67,10 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 class CreatePendingBoundaryPublishTest {
+    @get:org.junit.Rule val compose = createComposeRule()
 
     private val testDispatcher = UnconfinedTestDispatcher()
+    private val owned = CreateTestViewModels(testDispatcher.scheduler)
 
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var stagingDir: File
@@ -172,6 +181,7 @@ class CreatePendingBoundaryPublishTest {
 
     @After
     fun tearDown() {
+        runBlocking { withTimeout(10_000) { owned.clearAndJoin() } }
         Dispatchers.resetMain()
         if (::database.isInitialized) database.close()
         stagingDir.deleteRecursively()
@@ -190,12 +200,13 @@ class CreatePendingBoundaryPublishTest {
         gate: SwitchingGate,
         drafts: MutableList<String> = mutableListOf(),
         onBlob: (() -> Unit)? = null,
+        finalizer: (suspend (String) -> PendingFinalizeResult)? = null,
     ): CreateViewModel {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(
             dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir),
         )
-        return CreateViewModel(
+        return owned.own(CreateViewModel(
             directory = RecipientDirectoryPort { DirectoryLookupResult.NotFound },
             accessTokenProvider = { "token" },
             identityProvider = { senderIdentity() },
@@ -238,7 +249,7 @@ class CreatePendingBoundaryPublishTest {
                     PendingBlobResult.Uploaded(blobId, 11L)
                 },
                 finalize = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _ ->
-                    PendingFinalizeResult.Finalized(
+                    finalizer?.invoke(deliveryId) ?: PendingFinalizeResult.Finalized(
                         deliveryId, "AB3DE", 1814317432L, "a•••@•••",
                     )
                 },
@@ -246,7 +257,7 @@ class CreatePendingBoundaryPublishTest {
                 account = { ProofAccount(gate.owner, bundleUuid.toString()) },
                 pin = { testPin() },
             ),
-        )
+        ))
     }
 
     /** Drives a frozen route to COMPOSE through the real capture + picks. */
@@ -266,13 +277,55 @@ class CreatePendingBoundaryPublishTest {
     }
 
     private fun awaitTerminalPublish(vm: CreateViewModel) {
-        val deadline = System.currentTimeMillis() + 10_000
-        while (vm.step.value == CreateViewModel.Step.PUBLISHING) {
-            if (System.currentTimeMillis() > deadline) {
-                error("publishing never reached a terminal step; publishError=" + vm.publishError.value)
-            }
-            Thread.sleep(20)
-        }
+        runBlocking { withTimeout(10_000) { vm.step.first { it != CreateViewModel.Step.PUBLISHING } } }
+    }
+
+    @Test fun quotaDenialBlocksNewPendingInvocationAndKeepsHonestTypedState() = pendingStopped(
+        dev.hryshyn.remanence.core.data.network.PendingPublishFailure.SEND_LIMIT_REACHED,
+        CreateViewModel.PublicationIssueKind.LIMIT, 409, false)
+    @Test fun accessUnavailableBlocksNewCryptoInvocationAfterFinalizer() = pendingStopped(
+        dev.hryshyn.remanence.core.data.network.PendingPublishFailure.SEND_ACCESS_UNAVAILABLE,
+        CreateViewModel.PublicationIssueKind.ACCESS_UNAVAILABLE, 503, true)
+    @Test fun lostReplyBlocksNewCryptoInvocationWithoutClaimingFailure() = pendingStopped(
+        dev.hryshyn.remanence.core.data.network.PendingPublishFailure.NETWORK,
+        CreateViewModel.PublicationIssueKind.UNKNOWN, null, true)
+
+    private fun pendingStopped(reason: dev.hryshyn.remanence.core.data.network.PendingPublishFailure,
+        expected: CreateViewModel.PublicationIssueKind, status: Int?, retryable: Boolean) = runBlocking {
+        val gate = SwitchingGate()
+        val drafts = mutableListOf<String>()
+        var finalizations = 0
+        val vm = viewModel(gate, drafts, finalizer = {
+            finalizations++
+            PendingFinalizeResult.Failure(reason, status, retryable)
+        })
+        authorToCompose(vm)
+        val capsule = vm.capsuleId
+        val root = requireNotNull(vm.viewModelScope.coroutineContext[Job])
+        val previous = root.children.toSet()
+        vm.startPublishing()
+        val launched = root.children.filter { it !in previous }.toList()
+        awaitTerminalPublish(vm)
+        withTimeout(10_000) { launched.forEach { it.join() } }
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertEquals(CreateViewModel.CreateUploadStatus.PublicationIssue(expected, false), vm.uploadStatus.value)
+        assertNull(vm.pendingPublication.value); assertNull(vm.publishError.value)
+        compose.setContent { HoldTheme { CreateScreen(vm) } }
+        compose.onNodeWithTag("create_upload_pending").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("create_publication_recovery").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("create_retry_upload").assertDoesNotExist()
+        compose.onNodeWithTag("create_terminal_home").performScrollTo().assertIsDisplayed()
+        vm.startPublishing(); vm.retryUpload()
+        assertEquals(capsule, vm.capsuleId)
+        assertEquals(1, finalizations); assertEquals(listOf(capsule), drafts)
+        assertEquals(CreateViewModel.CreateUploadStatus.PublicationIssue(expected, false), vm.uploadStatus.value)
+        // Authored plaintext belongs to the completed invocation and was cleaned.
+        assertTrue(stagingDir.walkTopDown().none { it.isFile && it.extension in setOf("jpg", "jpeg", "bin") })
+        vm.beginSession(2L, "9d111111-2222-4333-8444-555555555555")
+        assertEquals(CreateViewModel.CreateUploadStatus.NotStarted, vm.uploadStatus.value)
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        vm.startPublishing()
+        assertEquals(1, finalizations)
     }
 
     @Test

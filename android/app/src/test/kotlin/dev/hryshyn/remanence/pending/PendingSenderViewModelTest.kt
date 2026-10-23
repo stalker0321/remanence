@@ -91,6 +91,7 @@ class PendingSenderViewModelTest {
         capsuleIdProvider: (() -> String)? = null,
         freezeSeen: ((String) -> Unit)? = null,
         draftSeen: ((String) -> Unit)? = null,
+        finalizer: (suspend () -> PendingFinalizeResult)? = null,
     ): PendingSenderViewModel {
         TinkPrimitives.ensureRegistered()
         val signing = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
@@ -136,7 +137,7 @@ class PendingSenderViewModelTest {
                         PendingBlobResult.Uploaded(blobId, 11L)
                     },
                     finalizePort = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _ ->
-                        PendingFinalizeResult.Finalized(
+                        finalizer?.invoke() ?: PendingFinalizeResult.Finalized(
                             deliveryId, "AB3DE", 1814317432L, "a•••@•••",
                         )
                     },
@@ -160,6 +161,29 @@ class PendingSenderViewModelTest {
             capsuleIdProvider = capsuleIdProvider ?: { java.util.UUID.randomUUID().toString() },
             scope = scope,
         )
+    }
+
+    @Test fun bothAccessOutcomesAndUnknownBlockSameCapsuleEvenAfterReset() = runTest {
+        for ((failure, expected) in listOf(
+            dev.hryshyn.remanence.core.data.network.PendingPublishFailure.SEND_LIMIT_REACHED to PendingSenderViewModel.Message.SEND_LIMIT_REACHED,
+            dev.hryshyn.remanence.core.data.network.PendingPublishFailure.SEND_ACCESS_UNAVAILABLE to PendingSenderViewModel.Message.SEND_ACCESS_UNAVAILABLE,
+            dev.hryshyn.remanence.core.data.network.PendingPublishFailure.NETWORK to PendingSenderViewModel.Message.FINALIZE_UNKNOWN,
+        )) {
+            var drafts = 0
+            var finalizes = 0
+            var freezes = 0
+            val model = vm(capsuleIdProvider = { "11111111-2222-3333-4444-555555555555" },
+                freezeSeen = { freezes++ }, onDraft = { drafts++ }, finalizer = {
+                    finalizes++
+                    PendingFinalizeResult.Failure(failure, if (failure.name == "SEND_LIMIT_REACHED") 409 else 503,
+                        failure.name != "SEND_LIMIT_REACHED")
+                })
+            model.onDestinationChange("a42@example.test"); model.send()
+            assertEquals(PendingSenderViewModel.State.Failed(expected), model.state.value)
+            model.reset(); model.onDestinationChange("another@example.test"); model.send()
+            assertEquals(PendingSenderViewModel.State.Failed(expected), model.state.value)
+            assertEquals(1, freezes); assertEquals(1, drafts); assertEquals(1, finalizes)
+        }
     }
 
     @Test

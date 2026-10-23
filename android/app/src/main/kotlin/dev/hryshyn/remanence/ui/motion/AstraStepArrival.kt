@@ -39,38 +39,39 @@ fun AstraStepArrival(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    // Latched on the first frame of this Create mount. Rotation does not
-    // reset it (not keyed by configuration), so rotation never replays.
+    // First mount (including recreation) is already at rest under its parent.
     var firstMount by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) { firstMount = false }
-    // A step change disposes the old content synchronously and starts the
-    // incoming arrival from its initial values — nothing is retained.
-    key(stepKey) {
-        StepArrivalContent(
+    // Key only animation state, NEVER the content subtree. The composition
+    // chooser and provider operations keep their own state/lifetime. Their
+    // actual conditional branches still dispose outgoing content immediately.
+    StepArrivalContent(
             motion = motion,
             snapFirst = firstMount,
+            stepKey = stepKey,
             modifier = modifier,
             content = content,
         )
-    }
 }
 
 @Composable
 private fun StepArrivalContent(
     motion: AstraMotionSpec.Resolved,
     snapFirst: Boolean,
+    stepKey: Any?,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     val atRest = snapFirst || motion == AstraMotionSpec.Resolved.INSTANT
-    val alpha = remember(motion) { Animatable(if (atRest) 1f else AstraMotionSpec.ARRIVAL_ALPHA) }
-    val offset = remember(motion) {
+    val alpha = remember(stepKey) { Animatable(if (atRest) 1f else AstraMotionSpec.ARRIVAL_ALPHA) }
+    val offset = remember(stepKey) {
         Animatable(if (!snapFirst && motion == AstraMotionSpec.Resolved.FULL) AstraMotionSpec.ARRIVAL_OFFSET_DP else 0f)
     }
     val density = LocalDensity.current
 
-    LaunchedEffect(motion) {
+    LaunchedEffect(motion, stepKey) {
         val duration = AstraMotionSpec.routineMs(motion)
+        if (motion != AstraMotionSpec.Resolved.FULL) offset.snapTo(0f)
         if (duration <= 0) {
             alpha.snapTo(1f)
             offset.snapTo(0f)
@@ -82,8 +83,8 @@ private fun StepArrivalContent(
     }
 
     Box(modifier.graphicsLayer {
-        this.alpha = alpha.value
-        translationY = with(density) { offset.value.dp.toPx() }
+        this.alpha = if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else alpha.value
+        translationY = if (motion == AstraMotionSpec.Resolved.FULL) with(density) { offset.value.dp.toPx() } else 0f
     }) {
         content()
     }

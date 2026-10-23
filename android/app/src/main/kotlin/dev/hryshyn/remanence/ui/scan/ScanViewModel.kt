@@ -727,14 +727,12 @@ class ScanViewModel internal constructor(
                     candidate.front.wipe()
                 }
             }
-            loadedIncoming.candidates.forEach(::retain)
-            loadedRoom.candidates.forEach(::retain)
-            val distinctIds = merged.map { it.capsuleId }.distinct()
+            val indexedIds = (loadedIncoming.candidates + loadedRoom.candidates).map { it.capsuleId }.distinct()
             // Incoming-claimed candidates only, bounded by the shared proof
             // cap (fail-closed overflow inside). Only this bounded set feeds
             // any proof work below.
             val proofIds = boundDualProofIds(
-                distinctIds.filter { loadedIncoming.presentationSources[it] != null },
+                indexedIds.filter { loadedIncoming.presentationSources[it] != null },
             ).toHashSet()
             // Storage membership is independent of recognition validity. Probe
             // the owner-scoped OUTBOX plane in explicit bounded pages - never
@@ -743,7 +741,17 @@ class ScanViewModel internal constructor(
             // Rows for proof candidates are retained for the self proof.
             val outboxSources = LinkedHashMap<UUID, CapsulePresentationSource>()
             val outboxRows = LinkedHashMap<UUID, OutboxCapsuleEntity>()
-            for (page in distinctIds.chunked(MAX_SELF_PROOF_DUAL_IDS)) {
+            val incomingMembership = HashSet<UUID>()
+            for (page in indexedIds.chunked(MAX_SELF_PROOF_DUAL_IDS)) {
+                // Admission asks whether a durable row exists, not whether it
+                // appears in the narrower READY/index-cached scan projection.
+                // This never supplies a presentation source or a grant.
+                database.incomingCapsuleDao().getByCapsuleIdsAndOwner(
+                    page.map { it.toString() }, owner.toRestString(),
+                ).forEach { row ->
+                    val id = runCatching { UUID.fromString(row.capsuleId) }.getOrNull()
+                    if (row.ownerUserId == owner.toRestString() && id in page) incomingMembership += requireNotNull(id)
+                }
                 val rowsById = database.outboxCapsuleDao().getByCapsuleIdsAndOwner(
                     page.map { it.toString() },
                     owner.toRestString(),
@@ -759,6 +767,21 @@ class ScanViewModel internal constructor(
                     if (candidateId in proofIds) outboxRows[candidateId] = row
                 }
             }
+            // A captured FRONT is durable before CONTENT/design/sealing. It is
+            // not itself a capsule. Admit Room baselines only with owner-bound
+            // storage membership, never on hint/UNKNOWN/READY/readability.
+            // Incoming membership includes unreadable bundles and pending
+            // entries. Ambiguous duals remain candidates and fail closed later.
+            val incomingIds = incomingMembership + loadedIncoming.presentationSources.keys + loadedIncoming.candidates.map { it.capsuleId }
+            val admittedRoom = loadedRoom.candidates.filter { it.capsuleId in outboxSources || it.capsuleId in incomingIds }
+            // Transfer ownership before wiping excluded decoded values: a later
+            // load failure must not wipe an excluded model a second time.
+            room = loadedRoom.copy(candidates = admittedRoom)
+            loadedRoom.candidates.filterNot { it.capsuleId in outboxSources || it.capsuleId in incomingIds }
+                .forEach { it.front.wipe() }
+            loadedIncoming.candidates.forEach(::retain)
+            admittedRoom.forEach(::retain)
+            val distinctIds = merged.map { it.capsuleId }.distinct()
             val dualIds = distinctIds.filter { it in proofIds && outboxSources[it] != null }
             // One owner-scoped batch for the incoming side of the proof;
             // never per-ID, never unscoped, never on empty input.

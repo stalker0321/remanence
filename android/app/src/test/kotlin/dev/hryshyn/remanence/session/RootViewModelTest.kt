@@ -57,6 +57,25 @@ class RootViewModelTest {
         override suspend fun logout(): SessionState = SessionState.SignedOut
     }
 
+    @Test fun historyEntryUsesExistingAuthGateAndNeverCreatesAnOpeningGrant() = runTest {
+        val signedOut = RootViewModel(SignedOutResolver())
+        signedOut.openHistory()
+        assertEquals(AppDestination.Authentication, signedOut.destination.value)
+        val vm = RootViewModel(FixedOutcomeResolver(SessionState.Active(
+            "10000000-0000-4000-8000-000000000001", "sender_qa", true, true)))
+        vm.openHistory()
+        assertEquals(AppDestination.History, vm.destination.value)
+        assertFalse(vm.openCapsuleWithGrant("20000000-0000-4000-8000-000000000001", null))
+        vm.returnToHome()
+        assertEquals(AppDestination.Home, vm.destination.value)
+        vm.openHistory()
+        vm.logout()
+        advanceUntilIdle()
+        assertEquals(AppDestination.Authentication, vm.destination.value)
+        signedOut.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
     @Test fun incompleteOnboardingBlocksFlowsAndDoesNotScheduleAccountWork() = runTest {
         var scheduled = 0
         val pending = SessionState.RecoverySetupRequired("0198f0a0-0000-7000-8000-00000000a001", "permanent", "00000000-0000-4000-8000-000000000001")
@@ -68,6 +87,19 @@ class RootViewModelTest {
         vm.openCreate(); vm.openScan(); vm.openSettings()
         assertEquals(AppDestination.Authentication, vm.destination.value)
         assertEquals(0, scheduled)
+    }
+
+    @Test fun utilitiesNavigateBetweenEachOtherWithoutOpeningTransientRoutes() = runTest {
+        val vm = RootViewModel(FixedOutcomeResolver(SessionState.Active(
+            "10000000-0000-4000-8000-000000000001", "sender_qa", true, true)))
+        vm.openSettings(); assertEquals(AppDestination.Settings, vm.destination.value)
+        vm.openHistory(); assertEquals(AppDestination.History, vm.destination.value)
+        vm.openSettings(); assertEquals(AppDestination.Settings, vm.destination.value)
+        vm.openHistory(); vm.requestHomeIntent(HomeIntent.MAKE)
+        assertEquals(AppDestination.Create, vm.destination.value)
+        vm.openSettings(); vm.openHistory()
+        assertEquals(AppDestination.Create, vm.destination.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 
     private class FixedOutcomeResolver(private val state: SessionState) : SessionStateResolver {

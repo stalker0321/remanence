@@ -11,6 +11,7 @@ import dev.hryshyn.remanence.core.data.network.DirectoryFailure
 import dev.hryshyn.remanence.core.data.network.DirectoryLookupResult
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.model.NormalizedHandle
+import dev.hryshyn.remanence.core.model.UserId
 
 /** Port over the authenticated handle-directory endpoint. */
 fun interface RecipientDirectoryPort {
@@ -28,7 +29,7 @@ sealed interface RecipientLookupUiState {
 
     data object NotFound : RecipientLookupUiState
 
-    enum class Failure { NETWORK, SIGN_IN, LOOKUP, SERVER, UNEXPECTED }
+    enum class Failure { NETWORK, SIGN_IN, LOOKUP, SERVER, UNEXPECTED, RECENT_IDENTITY }
     /** Diagnostic copy retained for older tests; UI renders only [reason]. */
     data class Failed(val message: String, val reason: Failure = Failure.UNEXPECTED) : RecipientLookupUiState
 }
@@ -96,18 +97,44 @@ class RecipientPickerViewModel(
         _state.value = RecipientLookupUiState.Idle
     }
 
-    fun lookup() {
-        val token = accessTokenProvider()
-        if (token == null) {
-            // BUG-014: a transient outage can empty the in-memory token while
-            // the local session is intact. Cancel any in-flight attempt, run
-            // exactly one bounded recovery, then re-read the provider and
-            // perform that same lookup only if recovery succeeded.
-            lookupJob?.cancel()
-            if (_state.value is RecipientLookupUiState.LookingUp) {
-                _state.value = RecipientLookupUiState.Idle
+    fun lookup() = startLookup(expectedRecipient = null)
+
+    /** A recent is an identity suggestion, never a cached directory/key result. */
+    fun lookupRecent(expectedUserId: String) {
+        if (!canLookup) return
+        val expected = runCatching { UserId.parseRest(expectedUserId) }.getOrNull()
+        if (expected == null) {
+            _state.value = recentIdentityFailure()
+            return
+        }
+        startLookup(expected)
+    }
+
+    private fun recentIdentityFailure() = RecipientLookupUiState.Failed(
+        "Recent recipient identity could not be verified.", RecipientLookupUiState.Failure.RECENT_IDENTITY,
+    )
+
+    private fun startLookup(expectedRecipient: UserId?) {
+        if (!canLookup) return
+        val rawHandle = _handle.value
+        val lookupGeneration = ++generation
+        val boundaryEpoch = sessionBoundaryEpoch()
+        lookupJob?.cancel()
+        // Recovery and directory lookup are one user attempt. Mark it busy
+        // before launching so a second tap cannot cancel/restart recovery.
+        _state.value = RecipientLookupUiState.LookingUp
+        lookupJob = scope.launch {
+            fun isCurrent(): Boolean {
+                if (generation != lookupGeneration || _handle.value != rawHandle) return false
+                if (sessionBoundaryEpoch() != boundaryEpoch) {
+                    _state.value = RecipientLookupUiState.Idle
+                    return false
+                }
+                return true
             }
-            lookupJob = scope.launch {
+            if (accessTokenProvider() == null) {
+                // One bounded recovery; its result belongs to the same input
+                // and session boundary even when the provider ignores cancel.
                 val recovery = try {
                     sessionRefresh()
                 } catch (cancelled: CancellationException) {
@@ -115,50 +142,51 @@ class RecipientPickerViewModel(
                 } catch (_: Exception) {
                     SessionRecovery.NETWORK_FAILED
                 }
+                if (!isCurrent()) return@launch
                 val fresh = accessTokenProvider()
-                if (recovery == SessionRecovery.RECOVERED && fresh != null) {
-                    startLookup()
-                } else if (recovery == SessionRecovery.NETWORK_FAILED) {
-                    _state.value = RecipientLookupUiState.Failed("Network unreachable. Try again later.", RecipientLookupUiState.Failure.NETWORK)
-                } else {
-                    _state.value = RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+                if (recovery != SessionRecovery.RECOVERED || fresh == null) {
+                    _state.value = if (recovery == SessionRecovery.NETWORK_FAILED) {
+                        RecipientLookupUiState.Failed("Network unreachable. Try again later.", RecipientLookupUiState.Failure.NETWORK)
+                    } else {
+                        RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+                    }
+                    return@launch
                 }
             }
-            return
-        }
-        startLookup()
-    }
-
-    private fun startLookup() {
-        if (!canLookup) return
-        val rawHandle = _handle.value
-        val lookupGeneration = ++generation
-        val boundaryEpoch = sessionBoundaryEpoch()
-        lookupJob?.cancel()
-        _state.value = RecipientLookupUiState.LookingUp
-        lookupJob = scope.launch {
-            val expectedOwner = sessionOwnerProvider() ?: run {
-                if (generation == lookupGeneration) {
-                    _state.value = RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+            try {
+                val expectedOwner = sessionOwnerProvider() ?: run {
+                    if (isCurrent()) {
+                        _state.value = RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+                    }
+                    return@launch
                 }
-                return@launch
-            }
-            val result = try {
-                mapResult(directory.lookup(rawHandle))
+                if (!isCurrent()) return@launch
+                val result = try {
+                    mapResult(directory.lookup(rawHandle))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    RecipientLookupUiState.Failed("Unexpected error. Try again later.")
+                }
+                if (!isCurrent()) return@launch
+                val currentOwner = sessionOwnerProvider()
+                if (isCurrent()) {
+                    _state.value = when {
+                        currentOwner != expectedOwner ->
+                            RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+                        expectedRecipient != null && result is RecipientLookupUiState.Resolved &&
+                            result.snapshot.userId != expectedRecipient -> recentIdentityFailure()
+                        else -> result
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                RecipientLookupUiState.Failed("Unexpected error. Try again later.")
-            }
-            val currentOwner = sessionOwnerProvider()
-            if (generation == lookupGeneration &&
-                _handle.value == rawHandle &&
-                sessionBoundaryEpoch() == boundaryEpoch
-            ) {
-                _state.value = if (currentOwner == expectedOwner) {
-                    result
-                } else {
-                    RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
+                // Owner-store reads are part of the same bounded attempt as
+                // directory IO. Never expose storage details or bind a result
+                // whose owner could not be freshly checked; allow a retry.
+                if (isCurrent()) {
+                    _state.value = RecipientLookupUiState.Failed("Unexpected error. Try again later.")
                 }
             }
         }

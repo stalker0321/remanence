@@ -3,13 +3,13 @@ package dev.hryshyn.remanence.ui.create.music
 import dev.hryshyn.remanence.core.data.network.MusicSearchResult
 import dev.hryshyn.remanence.core.data.network.MusicTrackHit
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
@@ -46,7 +46,6 @@ sealed interface MusicPickerUiState {
     data object Error : MusicPickerUiState
 }
 
-@OptIn(FlowPreview::class)
 class MusicPickerStateMachine(
     private val search: suspend (query: String, limit: Int, offset: Int) -> MusicSearchResult,
     scope: CoroutineScope,
@@ -62,7 +61,8 @@ class MusicPickerStateMachine(
     private val queryFlow = MutableStateFlow("")
     val query: StateFlow<String> = queryFlow
 
-    private val retryTicks = MutableStateFlow(0L)
+    private data class SearchRequest(val query: String, val revision: Long)
+    private val requests = MutableStateFlow(SearchRequest("", 0))
 
     private val mutableUiState = MutableStateFlow<MusicPickerUiState>(MusicPickerUiState.Idle)
     val uiState: StateFlow<MusicPickerUiState> = mutableUiState
@@ -71,21 +71,23 @@ class MusicPickerStateMachine(
     val selection: StateFlow<MusicTrackHit?> = mutableSelection
 
     private val collector: Job = scope.launch {
-        combine(queryFlow, retryTicks) { query, _ -> query }
-            .debounce(debounceMs)
-            .mapLatest { query ->
-                if (query.isBlank()) {
-                    MusicPickerUiState.Idle
-                } else {
-                    mutableUiState.value = MusicPickerUiState.Loading
-                    executeSearch(query)
-                }
+        requests.collectLatest { request ->
+            if (request.query.isBlank()) return@collectLatest
+            // Delay the next request, not cancellation of the previous one.
+            // Old results must never be selectable beneath a new query.
+            delay(debounceMs)
+            val result = executeSearch(request.query)
+            currentCoroutineContext().ensureActive()
+            if (requests.value == request) {
+                mutableUiState.value = result
             }
-            .collect { mutableUiState.value = it }
+        }
     }
 
     fun onQueryChange(query: String) {
+        if (queryFlow.value == query) return
         queryFlow.value = query
+        requestSearch(query)
     }
 
     fun onSelect(hit: MusicTrackHit) {
@@ -97,12 +99,18 @@ class MusicPickerStateMachine(
     }
 
     fun onClear() {
-        queryFlow.value = ""
+        onQueryChange("")
         mutableSelection.value = null
     }
 
     fun retry() {
-        retryTicks.value += 1
+        if (mutableUiState.value == MusicPickerUiState.Loading || queryFlow.value.isBlank()) return
+        requestSearch(queryFlow.value)
+    }
+
+    private fun requestSearch(query: String) {
+        mutableUiState.value = if (query.isBlank()) MusicPickerUiState.Idle else MusicPickerUiState.Loading
+        requests.value = SearchRequest(query, requests.value.revision + 1)
     }
 
     fun close() {

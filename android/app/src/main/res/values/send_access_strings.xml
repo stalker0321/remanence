@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="send_access_title">sending access</string>
+    <string name="send_access_loading">Checking sending access…</string>
+    <string name="send_access_unavailable">Sending access is unavailable right now. No balance is confirmed.</string>
+    <string name="send_access_sign_in">Sign in again to check sending access.</string>
+    <string name="send_access_return">Return home</string>
+    <string name="send_access_refresh">Refresh access</string>
+    <string name="send_access_beta">Beta sends are unrestricted. Free allowances are not used in this mode.</string>
+    <string name="send_access_lifetime">Lifetime access: unlimited sends to yourself and others.</string>
+    <string name="send_access_self">To yourself: %1$d of 2 free sends remaining</string>
+    <string name="send_access_other">To others: %1$d of 2 free sends remaining</string>
+    <string name="send_access_advisory">Access is checked when sending. These details do not reserve a send.</string>
+    <string name="send_publication_limit">The server declined this send because its sending allowance is exhausted.</string>
+    <string name="send_publication_unavailable">Sending access could not be checked. Publication is not confirmed.</string>
+    <string name="send_publication_unknown">Publication is not confirmed. Check sending history before starting another send.</string>
+    <string name="send_publication_saved">The same encrypted request is retained. A retry still needs server approval; it does not create a new send.</string>
+    <string name="send_publication_pending_recovery">This send cannot be safely retried from this screen. Check sending history; a missing entry does not confirm failure.</string>
+</resources>

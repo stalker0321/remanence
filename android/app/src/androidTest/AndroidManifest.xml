@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Test-host declaration reused narrowly from reviewed T287 R2 (30309a12).
+     Compose v2 launches ComponentActivity from the TEST package. The pinned
+     ui-test-manifest AAR is not merged into that APK; declare its exact activity
+     and system theme here. This changes no production activity or admission. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name="androidx.activity.ComponentActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    </application>
+</manifest>

@@ -8,11 +8,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,19 +24,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.capsule.music.StreamingService
 import dev.hryshyn.remanence.ui.capsule.music.TrackServicePicker
-import dev.hryshyn.remanence.ui.capsule.music.openTrackUrl
+import dev.hryshyn.remanence.ui.capsule.music.rememberTrackServiceAction
 import dev.hryshyn.remanence.ui.create.GeneratorBer1Preview
 import dev.hryshyn.remanence.ui.create.GeneratorBer1Renderer
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
@@ -108,53 +111,62 @@ internal fun Ber1PresentationHost(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     validateExport: () -> Unit = {},
+    openTrackUrl: ((String) -> Boolean)? = null,
+    exportFactory: @Composable (() -> Unit) -> CapsuleImageExport = { rememberCapsuleImageExport(it) },
 ) {
     if (!state.isOpen) return
     var exportReady by remember(state) { mutableStateOf(false) }
     var originalPhoto by remember(state) { mutableStateOf<String?>(null) }
     val photoLabel = stringResource(R.string.capsule_view_original)
-    val export = rememberCapsuleImageExport { check(state.isOpen && exportReady); validateExport() }
+    val export = exportFactory { check(state.isOpen && exportReady); validateExport() }
+    val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
     CapsuleSheetFrame(export, enabled = state.isOpen && exportReady, ratio = 360f / 640f,
-        onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_ber1_close") { sheetModifier ->
-      Box(sheetModifier) {
-        val result = GeneratorBer1Preview(
-            expression = state.expression,
-            sources = state.bitmaps,
-            modifier = Modifier.fillMaxSize().testTag("capsule_ber1_canvas"),
-        )
-        SideEffect { exportReady = result is GeneratorBer1Renderer.SceneResult.Ready }
-        if (result is GeneratorBer1Renderer.SceneResult.Ready) BoxWithConstraints(Modifier.fillMaxSize()) {
-            val scene = result.scene
-            val scale = minOf(maxWidth.value / scene.canvasWidth, maxHeight.value / scene.canvasHeight)
-            val dx = (maxWidth.value - scene.canvasWidth * scale) / 2f
-            val dy = (maxHeight.value - scene.canvasHeight * scale) / 2f
-            scene.photos.forEachIndexed { index, photo ->
-                val rect = photo.contentRect
-                Box(Modifier.absoluteOffset((dx + rect.x * scale).dp, (dy + rect.y * scale).dp)
-                    .size((rect.width * scale).dp, (rect.height * scale).dp)
-                    .clickable(role = Role.Button, onClickLabel = photoLabel) {
-                        try { check(state.isOpen && exportReady); validateExport(); originalPhoto = photo.contentId }
-                        catch (_: Exception) { state.close(); onClose() }
-                    }.semantics { contentDescription = photoLabel }.testTag("capsule_photo_region_$index"))
+        onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_ber1_close",
+        actions = { if (exportReady) CapsuleListenAction(state.track, musicAction) }) { sheetModifier ->
+        BoxWithConstraints(sheetModifier) {
+            val captionScale = maxWidth.value / 360f
+            val density = LocalDensity.current.density
+            Column(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxWidth().weight(1f)) {
+                    val result = GeneratorBer1Preview(
+                        expression = state.expression,
+                        sources = state.bitmaps,
+                        modifier = Modifier.fillMaxSize().testTag("capsule_ber1_canvas"),
+                    )
+                    SideEffect { exportReady = result is GeneratorBer1Renderer.SceneResult.Ready }
+                    if (result is GeneratorBer1Renderer.SceneResult.Ready) BoxWithConstraints(Modifier.fillMaxSize()) {
+                        val scene = result.scene
+                        val scale = minOf(maxWidth.value / scene.canvasWidth, maxHeight.value / scene.canvasHeight)
+                        val dx = (maxWidth.value - scene.canvasWidth * scale) / 2f
+                        val dy = (maxHeight.value - scene.canvasHeight * scale) / 2f
+                        scene.photos.forEachIndexed { index, photo ->
+                            val rect = photo.contentRect
+                            Box(Modifier.absoluteOffset((dx + rect.x * scale).dp, (dy + rect.y * scale).dp)
+                                .size((rect.width * scale).dp, (rect.height * scale).dp)
+                                .clickable(role = Role.Button, onClickLabel = photoLabel) {
+                                    try { check(state.isOpen && exportReady); validateExport(); originalPhoto = photo.contentId }
+                                    catch (_: Exception) { state.close(); onClose() }
+                                }.semantics { contentDescription = photoLabel }.testTag("capsule_photo_region_$index"))
+                        }
+                    }
+                    if (result !is GeneratorBer1Renderer.SceneResult.Ready) {
+                        Text(
+                            text = stringResource(R.string.capsule_route_failure),
+                            modifier = Modifier.align(Alignment.Center).testTag("capsule_ber1_blocked"),
+                        )
+                    }
+                }
+                // Supplemental exported metadata scales with the reference sheet,
+                // just like its photos. The separate Listen action keeps the full
+                // accessible label and follows the user's system font size.
+                state.track?.takeIf { exportReady }?.let { track ->
+                    CompositionLocalProvider(LocalDensity provides Density(density, captionScale)) {
+                        TrackSnapshotCard(track = track,
+                            modifier = Modifier.fillMaxWidth().padding((16 * captionScale).dp))
+                    }
+                }
             }
         }
-        if (result !is GeneratorBer1Renderer.SceneResult.Ready) {
-            Text(
-                text = stringResource(R.string.capsule_route_failure),
-                modifier = Modifier.align(Alignment.Center).testTag("capsule_ber1_blocked"),
-            )
-        }
-        state.track?.takeIf { result is GeneratorBer1Renderer.SceneResult.Ready }?.let { track ->
-            val context = LocalContext.current
-            TrackSnapshotCard(
-                track = track,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
-                onOpenService = { service ->
-                    context.openTrackUrl(service.searchUrl(track.title, track.artistDisplay))
-                },
-            )
-        }
-      }
     }
     originalPhoto?.let { id ->
         CapsulePhotoDialog(state.expression.input.photos.sortedBy { it.ordinal }.map { it.contentId }, state.bitmaps, id,
@@ -204,7 +216,7 @@ internal fun TrackSnapshotCard(
             HoldTextButton(
                 onClick = { pickerOpen = true; noHandler = false },
                 modifier = Modifier.testTag("capsule_track_open"),
-            ) { Text(stringResource(R.string.track_open_action)) }
+            ) { Text(stringResource(R.string.track_open_action, track.title, track.artistDisplay)) }
         }
         if (noHandler) {
             Text(

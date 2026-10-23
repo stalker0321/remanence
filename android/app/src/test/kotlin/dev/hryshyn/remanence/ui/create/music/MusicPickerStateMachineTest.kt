@@ -183,4 +183,45 @@ class MusicPickerStateMachineTest {
         (state.uiState.value as? MusicPickerUiState.Results ?: error("expected Results"))
         assertEquals(2, calls)
     }
+
+    @Test
+    fun editingQueryImmediatelyRemovesSelectableOldResults() = runTest {
+        val state = machine()
+        state.onQueryChange("505")
+        advanceTimeBy(400)
+        runCurrent()
+        assertTrue(state.uiState.value is MusicPickerUiState.Results)
+        state.onQueryChange("another")
+        assertEquals(MusicPickerUiState.Loading, state.uiState.value)
+    }
+
+    @Test
+    fun oldSearchCannotPublishDuringNewQueryDebounce() = runTest {
+        val state = machine(search = { query, _, _ ->
+            if (query == "old") delay(100)
+            hitsResult()
+        })
+        state.onQueryChange("old")
+        advanceTimeBy(400)
+        runCurrent()
+        state.onQueryChange("new")
+        advanceTimeBy(100)
+        runCurrent()
+        assertEquals(MusicPickerUiState.Loading, state.uiState.value)
+        advanceTimeBy(300)
+        runCurrent()
+        assertTrue(state.uiState.value is MusicPickerUiState.Results)
+    }
+
+    @Test
+    fun clearingQueryImmediatelyRemovesResultsWithoutClearingSelection() = runTest {
+        val state = machine()
+        state.onQueryChange("505")
+        advanceTimeBy(400)
+        runCurrent()
+        state.onSelect(hit())
+        state.onQueryChange("")
+        assertEquals(MusicPickerUiState.Idle, state.uiState.value)
+        assertEquals(hit(), state.selection.value)
+    }
 }

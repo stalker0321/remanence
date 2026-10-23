@@ -102,7 +102,10 @@ class PendingSenderViewModel(
      * under R3 (the server requires equality). Defaults to a random
      * uuid (unit surfaces).
      */
-    private val capsuleIdProvider: () -> String = { java.util.UUID.randomUUID().toString() },
+    private val capsuleIdProvider: () -> String = run {
+        val id = java.util.UUID.randomUUID().toString();
+        { id }
+    },
     scope: CoroutineScope? = null,
 ) : ViewModel() {
 
@@ -141,6 +144,9 @@ class PendingSenderViewModel(
     }
 
     enum class Message {
+        SEND_LIMIT_REACHED,
+        SEND_ACCESS_UNAVAILABLE,
+        FINALIZE_UNKNOWN,
         NETWORK,
         SESSION_CHANGED,
         CONFLICT,
@@ -152,6 +158,8 @@ class PendingSenderViewModel(
     }
 
     private val launchScope: CoroutineScope = scope ?: viewModelScope
+    private var finalizedAttempt: Pair<String, String>? = null
+    private var finalizationMessage = Message.FINALIZE_UNKNOWN
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
@@ -249,6 +257,7 @@ class PendingSenderViewModel(
         val txn = beginTxn() ?: return State.Failed(Message.SESSION_CHANGED)
         if (!checkTxn(txn)) return State.Failed(Message.SESSION_CHANGED)
         val capsuleId = capsuleIdProvider()
+        if (finalizedAttempt == (txn.ownerId to capsuleId)) return State.Failed(finalizationMessage)
         val draftKey = java.util.UUID.randomUUID().toString()
         val freezeToken = txnBearer(txn) ?: return State.Failed(Message.SESSION_CHANGED)
         val routeFlow = PendingSendRouteFlow(freezePort)
@@ -424,11 +433,22 @@ class PendingSenderViewModel(
                 frozen, capsuleId,
                 java.util.UUID.randomUUID().toString(), finalizeKey,
                 txnLease = txn.lease,
+                onFinalizeStarted = {
+                    finalizedAttempt = txn.ownerId to capsuleId
+                    finalizationMessage = Message.FINALIZE_UNKNOWN
+                },
             )
         ) {
             is PendingPublishFlow.State.Published ->
                 State.Published(published.deliveryId, published.locatorCode, published.hint)
-            is PendingPublishFlow.State.Failed -> State.Failed(mapPublishReason(published.reason))
+            is PendingPublishFlow.State.Failed -> {
+                val message = if (finalizedAttempt == (txn.ownerId to capsuleId) &&
+                    published.reason !in setOf(PendingPublishFlow.Reason.SEND_LIMIT_REACHED,
+                        PendingPublishFlow.Reason.SEND_ACCESS_UNAVAILABLE)) Message.FINALIZE_UNKNOWN
+                    else mapPublishReason(published.reason)
+                if (finalizedAttempt == (txn.ownerId to capsuleId)) finalizationMessage = message
+                State.Failed(message)
+            }
             else -> State.Failed(Message.GENERIC)
         }
     }
@@ -446,6 +466,9 @@ class PendingSenderViewModel(
     }
 
     private fun mapPublishReason(reason: PendingPublishFlow.Reason): Message = when (reason) {
+        PendingPublishFlow.Reason.SEND_LIMIT_REACHED -> Message.SEND_LIMIT_REACHED
+        PendingPublishFlow.Reason.SEND_ACCESS_UNAVAILABLE -> Message.SEND_ACCESS_UNAVAILABLE
+        PendingPublishFlow.Reason.FINALIZE_UNKNOWN -> Message.FINALIZE_UNKNOWN
         PendingPublishFlow.Reason.NETWORK -> Message.NETWORK
         PendingPublishFlow.Reason.SESSION_CHANGED -> Message.SESSION_CHANGED
         PendingPublishFlow.Reason.CONFLICT -> Message.CONFLICT

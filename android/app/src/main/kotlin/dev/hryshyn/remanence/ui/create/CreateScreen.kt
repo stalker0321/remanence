@@ -96,6 +96,7 @@ fun CreateScreen(
     requestPermissionOnAttach: Boolean = true,
     onScreenDispose: () -> Unit = {},
     onExit: () -> Unit = {},
+    recentRecipientsContent: @Composable () -> Unit = {},
 ) {
     val step by viewModel.step.collectAsStateWithLifecycle()
     val uploadStatus by viewModel.uploadStatus.collectAsStateWithLifecycle()
@@ -200,7 +201,7 @@ fun CreateScreen(
                     Spacer(Modifier.height(if (step == CreateViewModel.Step.FRONT) 16.dp else 24.dp))
                 }
                 when (step) {
-                    CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel)
+                    CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel, recentRecipientsContent)
                     CreateViewModel.Step.RECIPIENT_CONFIRM -> RecipientConfirmContent(viewModel)
                     CreateViewModel.Step.FRONT -> Column(Modifier.weight(1f).fillMaxWidth()) {
                         // T186 M14a: pending-gated recipient return (a
@@ -263,12 +264,20 @@ fun CreateScreen(
                             modifier = Modifier.testTag("create_upload_pending"),
                         )
                     }
+                    val publicationIssue = uploadStatus as? CreateViewModel.CreateUploadStatus.PublicationIssue
+                    if (publicationIssue != null) {
+                        Text(stringResource(if (publicationIssue.durable) R.string.send_publication_saved
+                            else R.string.send_publication_pending_recovery),
+                            modifier = Modifier.testTag("create_publication_recovery"))
+                    }
                     if (uploadStatus !is CreateViewModel.CreateUploadStatus.TerminalFailure &&
-                        (uploadStatus is CreateViewModel.CreateUploadStatus.RetryableFailure || publishError != null)) {
+                        (uploadStatus is CreateViewModel.CreateUploadStatus.RetryableFailure || publishError != null ||
+                            (publicationIssue?.durable == true && publicationIssue.kind != CreateViewModel.PublicationIssueKind.ACCESS_UNAVAILABLE))) {
                         Spacer(Modifier.height(16.dp))
                         ForwardAction(stringResource(R.string.create_audit_retry), "create_retry_upload",
                             viewModel::retryUpload, enabled = !uploadRetrying, busy = uploadRetrying)
-                    } else if (uploadStatus is CreateViewModel.CreateUploadStatus.TerminalFailure) {
+                    } else if (uploadStatus is CreateViewModel.CreateUploadStatus.TerminalFailure ||
+                        publicationIssue?.durable == false) {
                         Spacer(Modifier.height(16.dp))
                         Button(onClick = onExit, modifier = Modifier.testTag("create_terminal_home")) {
                             Text(stringResource(R.string.create_audit_return_home))
@@ -389,7 +398,7 @@ fun CreateScreen(
 }
 
 @Composable
-private fun RecipientLookupContent(viewModel: CreateViewModel) {
+private fun RecipientLookupContent(viewModel: CreateViewModel, recentRecipientsContent: @Composable () -> Unit) {
     val handle by viewModel.pickerVm.handle.collectAsStateWithLifecycle()
     val state by viewModel.pickerVm.state.collectAsStateWithLifecycle()
     val selfAccount by viewModel.selfRecipientAccount.collectAsStateWithLifecycle()
@@ -410,37 +419,35 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.testTag("create_handle_rule"))
             }
+            Spacer(Modifier.height(16.dp))
+            ForwardAction(
+                stringResource(if (state is RecipientLookupUiState.LookingUp) R.string.hold_looking_up else R.string.hold_find),
+                "create_lookup_button", viewModel::lookupRecipient, enabled = viewModel.pickerVm.canLookup,
+            )
             selfAccount?.let { account ->
                 Text(stringResource(R.string.recipient_design_or),
                     color = HoldColors.Muted, style = MaterialTheme.typography.bodySmall,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
                         .testTag("create_recipient_or"))
-                HoldActionObject(
-                    title = stringResource(R.string.recipient_design_self_title),
-                    detail = "\u2068@" + account.handle + "\u2069",
-                    action = stringResource(R.string.recipient_design_self_action),
-                    onClick = viewModel::lookupPostcardForMyself,
-                    modifier = Modifier.fillMaxWidth().testTag("create_self_recipient"),
+                dev.hryshyn.remanence.ui.hold.HoldTextButton(onClick = viewModel::lookupPostcardForMyself,
                     enabled = state !is RecipientLookupUiState.LookingUp,
-                    compact = true,
-                )
+                    modifier = Modifier.fillMaxWidth().testTag("create_self_recipient")) {
+                    Text(stringResource(R.string.recipient_design_self_action), style = MaterialTheme.typography.bodyMedium)
+                }
             }
             Spacer(Modifier.height(8.dp))
+            recentRecipientsContent()
             if (selfRejected) Text(stringResource(R.string.recipient_design_self_unavailable),
                 color = HoldColors.Error, modifier = Modifier.testTag("create_self_recipient_error"))
             when (val current = state) {
-                is RecipientLookupUiState.Resolved -> LaunchedEffect(current.snapshot) { viewModel.onResolved(current.snapshot) }
+                is RecipientLookupUiState.Resolved -> LaunchedEffect(current) { viewModel.onPickerResolved(current) }
                 RecipientLookupUiState.NotFound -> Text(stringResource(R.string.hold_no_handle))
                 is RecipientLookupUiState.Failed -> Text(stringResource(createLookupFailureCopy(current.reason)), color = MaterialTheme.colorScheme.error)
                 else -> Unit
             }
         }
         Spacer(Modifier.height(16.dp))
-        ForwardAction(
-            stringResource(if (state is RecipientLookupUiState.LookingUp) R.string.hold_looking_up else R.string.hold_find),
-            "create_lookup_button", viewModel::lookupRecipient, enabled = viewModel.pickerVm.canLookup,
-        )
         // T186 M12: secondary pending sender entry (isolated EMAIL/PHONE
         // → R1 freeze → R3/R4/R5 → handwritten code). Renders nothing
         // unless the pending build flag is ON; the handle flow above is
@@ -536,17 +543,17 @@ private fun ContentStepContent(
         recipient?.let { PersonChip(it.handle.toDisplayString()) }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
             .testTag("create_content_scroll")) {
-            if (error != null) {
-                Text(error, color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 16.dp).testTag("create_error"))
-            }
             Text(stringResource(R.string.create_for_one_person), color = HoldColors.Muted,
                 style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(16.dp))
             Text(stringResource(R.string.hold_content_title), style = MaterialTheme.typography.headlineLarge,
                 modifier = Modifier.testTag("create_step_label"))
             Spacer(Modifier.height(16.dp))
+            if (error != null) {
+                Text(error, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 16.dp).testTag("create_error"))
+            }
             Text(stringResource(R.string.create_choose_photographs), color = HoldColors.Muted,
                 style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(14.dp))
@@ -732,7 +739,10 @@ private fun ContentAndCompositionFlow(
     BackHandler(onBack = back)
     Column(modifier.fillMaxSize().testTag("create_screen_scroll")) {
         HoldFlowHeader(onBack = back, onClose = onExit)
-        Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal =
+        // Animation is keyed, the content is not: retain the preparer/choice
+        // while the ready first sheet replaces the content form.
+        AstraStepArrival(rememberAstraMotion(), listOf(step, cropSlot, reviewing, frozen != null),
+            Modifier.weight(1f).fillMaxWidth().padding(horizontal =
             if (step == CreateViewModel.Step.COMPOSE) 18.dp else HoldSpace.pageGutter())
             .padding(bottom = 16.dp)) {
             if (step == CreateViewModel.Step.CONTENT) {
@@ -773,7 +783,7 @@ private fun ContentAndCompositionFlow(
                                         style = MaterialTheme.typography.bodyMedium, color = HoldColors.Muted,
                                         modifier = Modifier.padding(vertical = 16.dp))
                                     ForwardAction(stringResource(R.string.create_attach_capsule), "create_publish",
-                                        viewModel::startPublishing, enabled = frozen != null)
+                                        viewModel::startPublishing, enabled = viewModel.isFrozenCollageDrawable)
                                     TextButton(onClick = { reviewing = false }, modifier = Modifier.fillMaxWidth()
                                         .testTag("create_review_back")) { Text(stringResource(R.string.create_back_to_expression)) }
                                 } else {
@@ -789,7 +799,7 @@ private fun ContentAndCompositionFlow(
                                             else if (viewModel.selectCollageCandidate(session.displayIndex))
                                                 viewModel.freezeCollageSelection()
                                         },
-                                        enabled = !session.isPreparing && session.displayed != null,
+                                        enabled = !session.isPreparing && viewModel.isDisplayedCollageDrawable,
                                     )
                                 }
                                 val error = flowError ?: publishError
@@ -898,6 +908,7 @@ internal fun createLookupFailureCopy(reason: RecipientLookupUiState.Failure): In
     RecipientLookupUiState.Failure.NETWORK -> R.string.create_audit_lookup_network
     RecipientLookupUiState.Failure.SIGN_IN -> R.string.create_audit_lookup_signin
     RecipientLookupUiState.Failure.SERVER -> R.string.create_audit_lookup_server
+    RecipientLookupUiState.Failure.RECENT_IDENTITY -> R.string.create_audit_recent_identity
     else -> R.string.create_audit_lookup_failed
 }
 
@@ -909,6 +920,11 @@ internal fun createLookupFailureCopy(reason: RecipientLookupUiState.Failure): In
 @StringRes
 internal fun createUploadPendingCopy(status: CreateViewModel.CreateUploadStatus): Int =
     when (status) {
+        is CreateViewModel.CreateUploadStatus.PublicationIssue -> when (status.kind) {
+            CreateViewModel.PublicationIssueKind.LIMIT -> R.string.send_publication_limit
+            CreateViewModel.PublicationIssueKind.ACCESS_UNAVAILABLE -> R.string.send_publication_unavailable
+            CreateViewModel.PublicationIssueKind.UNKNOWN -> R.string.send_publication_unknown
+        }
         is CreateViewModel.CreateUploadStatus.RetryableFailure -> R.string.create_audit_upload_retry
         is CreateViewModel.CreateUploadStatus.TerminalFailure -> R.string.create_audit_upload_terminal
         else -> R.string.create_audit_upload_pending

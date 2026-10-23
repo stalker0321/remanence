@@ -223,6 +223,8 @@ class CapsuleUploadResumerTest {
     }
 
     private class FailingCapsuleDao : dev.hryshyn.remanence.core.data.db.OutboxCapsuleDao() {
+        override suspend fun releaseParkedFinalizeForOwner(capsuleId: String, ownerUserId: String): Int =
+            error("resumer must never release a quota denial")
         override suspend fun clearForOwner(ownerUserId: String) = Unit
 
         override suspend fun getByCapsuleIdAndOwner(

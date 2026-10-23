@@ -190,8 +190,15 @@ private fun RootSurface(
     }
     val loginViewModel: LoginViewModel = viewModel(factory = factory)
     val registrationViewModel: RegistrationViewModel = viewModel(factory = factory)
+    val historyViewModel: dev.hryshyn.remanence.ui.history.HistoryViewModel = viewModel(factory = factory)
+    val sendAccessViewModel: dev.hryshyn.remanence.ui.settings.SendAccessViewModel = viewModel(factory = factory)
     val googleViewModel: dev.hryshyn.remanence.auth.GoogleAuthViewModel = viewModel(factory = factory)
     val googleState by googleViewModel.state.collectAsStateWithLifecycle()
+    val atomicViewModel: dev.hryshyn.remanence.auth.AtomicRegistrationViewModel = viewModel(factory = factory)
+    val atomicState by atomicViewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(atomicState.sessionEstablished) {
+        if (BuildConfig.REMANENCE_ATOMIC_REGISTRATION && atomicState.sessionEstablished) rootViewModel.onSessionEstablished()
+    }
     val activity = androidx.compose.ui.platform.LocalContext.current as android.app.Activity
     val googleCredentials = remember(activity) { dev.hryshyn.remanence.auth.AndroidGoogleCredentials(activity) }
     LaunchedEffect(googleState) {
@@ -240,6 +247,8 @@ private fun RootSurface(
     LaunchedEffect(authState) {
         capabilityViewModel.onAuthStateChanged(authState)
         setupViewModel.onAuthChanged()
+        if (authState == AuthUiState.SignedOut) registrationViewModel.onSignedOut()
+        historyViewModel.bind((authState as? AuthUiState.Authenticated)?.userId)
     }
     val accountCapability by capabilityViewModel.capability.collectAsStateWithLifecycle()
 
@@ -247,7 +256,22 @@ private fun RootSurface(
     var registering by rememberSaveable { mutableStateOf(false) }
     var showLegacyAuth by rememberSaveable { mutableStateOf(!BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) }
     var logoutRequested by remember { mutableStateOf(false) }
+    var atomicExitRequested by remember { mutableStateOf(false) }
+    var atomicExistingAccount by rememberSaveable { mutableStateOf(false) }
+    val atomicBack: () -> Unit = {
+        if (!atomicState.busy && !recoveryBusy) {
+            if (atomicExistingAccount) atomicExistingAccount = false
+            else if (!atomicViewModel.backToHandle()) {
+                if (atomicState.phase != dev.hryshyn.remanence.auth.AtomicPhase.IDLE) atomicExitRequested = true
+                else { atomicViewModel.leave(); rootViewModel.cancelHomeIntent() }
+            }
+        }
+    }
     BackHandler(authState == AuthUiState.SignedOut && homeIntent != null) {
+        if (BuildConfig.REMANENCE_ATOMIC_REGISTRATION) {
+            atomicBack()
+            return@BackHandler
+        }
         // Consume Back while a provider request owns this surface; otherwise
         // the activity may finish and silently cancel its composition scope.
         if (!recoveryBusy && googleState != dev.hryshyn.remanence.auth.GoogleAuthState.Working) {
@@ -261,6 +285,8 @@ private fun RootSurface(
     }
 
     RootScreen(
+        onOpenSettings = rootViewModel::openSettings,
+        onOpenHistory = rootViewModel::openHistory,
         showPublicHome = homeIntent == null,
         authState = authState,
         destination = destination,
@@ -288,6 +314,17 @@ private fun RootSurface(
                         HoldTextButton(enabled = !recoveryBusy, onClick = { logoutRequested = true }) {
                             Text(stringResource(R.string.hold_logout), color = dev.hryshyn.remanence.ui.hold.HoldColors.Destructive)
                         }
+                    }
+                }
+            } else if (BuildConfig.REMANENCE_ATOMIC_REGISTRATION && authState == AuthUiState.SignedOut) {
+                AccessPage(onBack = atomicBack,
+                    backEnabled = !recoveryBusy && !atomicState.busy,
+                    footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) }) {
+                    dev.hryshyn.remanence.auth.AtomicRegistrationPanel(atomicViewModel, atomicState, recoveryBusy,
+                        atomicExistingAccount, { atomicExistingAccount = it }, { atomicExitRequested = true }) { enabled, beforeSignIn ->
+                        dev.hryshyn.remanence.recovery.RecoveryActions(container, hasIdentity = false, recoveryRequired = false,
+                            onRecovered = rootViewModel::onSessionEstablished, onBusyChange = { recoveryBusy = it },
+                            enabled = enabled, onBeforeSignIn = beforeSignIn)
                     }
                 }
             } else {
@@ -414,23 +451,48 @@ private fun RootSurface(
                     showRecoveryNote = showRecoveryNote,
                 )
             }
-            if (authenticated != null) {
-                AuthenticatedHomeChrome(authenticated.handle, { logoutRequested = true }, home,
-                    onSettings = rootViewModel::openSettings)
-            } else {
-                home()
+            home()
+        },
+        historyContent = {
+            val owner = (authState as? AuthUiState.Authenticated)?.userId
+            val state by historyViewModel.state.collectAsStateWithLifecycle()
+            LaunchedEffect(owner) {
+                historyViewModel.bind(owner)
+                historyViewModel.refresh()
             }
+            dev.hryshyn.remanence.ui.history.HistoryScreen(
+                state = if (state.owner == owner) state else dev.hryshyn.remanence.ui.history.HistoryUiState(),
+                onBack = {
+                    rootViewModel.returnToHome()
+                    if (state.error == dev.hryshyn.remanence.core.data.network.HistoryFailure.SIGN_IN)
+                        rootViewModel.onAppForegrounded()
+                },
+                onSelect = historyViewModel::select, onBackToList = historyViewModel::backToList,
+                onRefresh = historyViewModel::refresh, onMore = historyViewModel::loadMore,
+                canCancel = historyViewModel::canCancel, onRequestCancel = historyViewModel::requestCancel,
+                onDismissCancel = historyViewModel::dismissCancel, onConfirmCancel = historyViewModel::confirmCancel,
+                copyCode = historyViewModel::codeForCopy,
+                onCreate = { rootViewModel.requestHomeIntent(HomeIntent.MAKE) },
+                showHeader = false,
+            )
         },
         settingsContent = {
             val signedIn = authState as? AuthUiState.Authenticated
-            if (signedIn != null) dev.hryshyn.remanence.ui.settings.SettingsScreen(signedIn.handle, appLocale,
+            if (signedIn != null) {
+            dev.hryshyn.remanence.ui.settings.SettingsScreen(signedIn.handle, appLocale,
                 onLocaleSelected, signedIn.activeKeyBundleId?.let { container.recoveryReadiness.isReady(signedIn.userId, it) } == true,
                 rootViewModel::returnToHome, rootViewModel::logout,
                 telemetryContent = { dev.hryshyn.remanence.ui.settings.TelemetryPreferences(container.telemetry) },
                 safetyContent = {
                     if (BuildConfig.REMANENCE_PLAY_BETA) dev.hryshyn.remanence.ui.settings.BetaSafetyPanel(
                         container.apiStack.safetyRepository, signedIn.userId.toString())
-                })
+                },
+                sendAccessContent = {
+                    dev.hryshyn.remanence.ui.settings.SendAccessSettings(
+                        signedIn.userId, container.apiStack.captureSessionRequestLease(),
+                        sendAccessViewModel, rootViewModel::returnToHome)
+                }, showHeader = false)
+            }
         },
         createContent = {
             val createViewModel: CreateViewModel = viewModel(factory = factory)
@@ -443,6 +505,8 @@ private fun RootSurface(
                 // suspending publish work; the ViewModel keeps this snapshot
                 // for all staging and cleanup paths.
                 createViewModel.beginSession(createEpoch, authenticatedOwner)
+                historyViewModel.bind(authenticatedOwner)
+                historyViewModel.loadRecent()
             }
             androidx.compose.runtime.key(createEpoch) {
                 // T186 first-send handle gate: a handleless receive-only
@@ -469,6 +533,25 @@ private fun RootSurface(
                 val create: @Composable () -> Unit = {
                 CreateScreen(
                     viewModel = createViewModel,
+                    recentRecipientsContent = {
+                        val recent by historyViewModel.recent.collectAsStateWithLifecycle()
+                        val lookup by createViewModel.pickerVm.state.collectAsStateWithLifecycle()
+                        dev.hryshyn.remanence.ui.history.RecentRecipients(
+                            state = if (recent.owner == authenticatedOwner) recent else dev.hryshyn.remanence.ui.history.RecentUiState(),
+                            enabled = lookup !is dev.hryshyn.remanence.ui.create.RecipientLookupUiState.LookingUp,
+                            onRetry = {
+                                if (recent.error == dev.hryshyn.remanence.core.data.network.HistoryFailure.SIGN_IN) {
+                                    rootViewModel.returnToHome()
+                                    rootViewModel.onAppForegrounded()
+                                } else historyViewModel.loadRecent()
+                            },
+                            onSelect = { userId ->
+                                historyViewModel.recentForLookup(userId)?.let { suggestion ->
+                                    createViewModel.lookupRecentRecipient(suggestion, authenticatedOwner, createEpoch)
+                                }
+                            },
+                        )
+                    },
                     onExit = rootViewModel::returnToHome,
                     // Activity recreation disposes Compose while the root
                     // remains on Create. Only a stable route exit owns the
@@ -695,6 +778,12 @@ private fun RootSurface(
     // Register after child routes so an activity-level Back cannot dispose a
     // session-bound provider request. The provider sheet owns its own cancel.
     BackHandler(recoveryBusy || googleState == dev.hryshyn.remanence.auth.GoogleAuthState.Working) { }
+    if (atomicExitRequested) {
+        dev.hryshyn.remanence.auth.AtomicLeaveDialog(onDismiss = { atomicExitRequested = false },
+            onLeave = {
+                atomicExitRequested = false; atomicViewModel.leave(); rootViewModel.cancelHomeIntent()
+            })
+    }
     if (logoutRequested && authState != AuthUiState.SignedOut) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { logoutRequested = false },
@@ -787,6 +876,7 @@ private fun ScanFlowSurface(
                 AppDestination.Authentication,
                 AppDestination.Create,
                 AppDestination.Settings,
+                AppDestination.History,
                 -> scanViewModel.resetSession()
                 AppDestination.Scan,
                 is AppDestination.Capsule,

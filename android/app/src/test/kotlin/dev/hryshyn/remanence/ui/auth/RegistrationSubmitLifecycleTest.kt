@@ -5,9 +5,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.auth.CurrentAccountPort
 import dev.hryshyn.remanence.auth.RegistrationAuthApiPort
@@ -197,5 +199,79 @@ class RegistrationSubmitLifecycleTest {
         composeRule.onNodeWithTag("reg_submit_button").performClick()
         composeRule.waitForIdle()
         assertEquals(1, api.calls)
+    }
+
+    @Test
+    fun completedTerminalAlsoRejectsImeAndDirectSubmit() {
+        val api = ScriptedRegistrationApi(ArrayDeque(listOf(ok201(), ok201(), ok201())))
+        val viewModel = validViewModel(api)
+        setContent(viewModel)
+        composeRule.onNodeWithTag("reg_submit_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reg_handle_field").performImeAction()
+        composeRule.runOnIdle { viewModel.submit() }
+        assertEquals("all entry points share the terminal guard", 1, api.calls)
+    }
+
+    @Test
+    fun completedSignupThenSignedOutStartsAnEmptyUsableFormInSameVm() {
+        val api = ScriptedRegistrationApi(ArrayDeque(listOf(ok201(), ok201())))
+        val vm = validViewModel(api)
+        setContent(vm)
+        composeRule.onNodeWithTag("reg_submit_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            // The exact SignedOut hook wired at RootSurface; no provider/API logout.
+            vm.onSignedOut()
+            assertEquals(RegistrationFormState(), vm.form.value)
+            assertEquals(RegistrationSubmitState.Idle, vm.submitState.value)
+            vm.onFieldChange(RegistrationField.EMAIL, "next@example.com")
+            vm.onFieldChange(RegistrationField.PASSWORD, "another synthetic password")
+            vm.onFieldChange(RegistrationField.HANDLE, "next_person")
+        }
+        composeRule.onNodeWithTag("reg_completed_message").assertDoesNotExist()
+        composeRule.onNodeWithTag("reg_submit_button").assertIsEnabled().performClick()
+        composeRule.waitForIdle()
+        assertEquals(2, api.calls)
+        composeRule.onNodeWithTag("reg_submit_button").assertIsNotEnabled()
+    }
+
+    @Test
+    fun unfinishedAndFailedFormsSurviveSignedOutReentryAndCanRetry() {
+        val api = ScriptedRegistrationApi(ArrayDeque(listOf(
+            AuthResult.Failure(AuthFailure.NETWORK), ok201(),
+        )))
+        val vm = validViewModel(api)
+        val input = vm.form.value
+        vm.onSignedOut()
+        assertEquals(input, vm.form.value)
+        setContent(vm)
+        composeRule.onNodeWithTag("reg_submit_button").performClick()
+        composeRule.runOnIdle {
+            vm.onSignedOut()
+            assertEquals(input, vm.form.value)
+            assertTrue(vm.submitState.value is RegistrationSubmitState.Failed)
+        }
+        composeRule.onNodeWithTag("reg_submit_button").assertIsEnabled().performClick()
+        composeRule.waitForIdle()
+        assertEquals(2, api.calls)
+    }
+
+    @Test
+    fun retainedUnfinishedFormSurvivesCompositionRestorationWithoutSubmitting() {
+        val api = ScriptedRegistrationApi(ArrayDeque(listOf(ok201())))
+        val vm = validViewModel(api)
+        val input = vm.form.value
+        val restoration = androidx.compose.ui.test.junit4.StateRestorationTester(composeRule)
+        restoration.setContent {
+            val form by vm.form.collectAsState()
+            val state by vm.submitState.collectAsState()
+            MaterialTheme { RegistrationFormScreen(form, state, vm::onFieldChange, vm::submit) }
+        }
+        restoration.emulateSavedInstanceStateRestore()
+        composeRule.onNodeWithTag("reg_submit_button").assertIsEnabled()
+        assertEquals(input, vm.form.value)
+        assertEquals(RegistrationSubmitState.Idle, vm.submitState.value)
+        assertEquals(0, api.calls)
     }
 }

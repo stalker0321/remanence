@@ -10,7 +10,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 
 /**
  * Routine state-arrival wrapper for scan/result surfaces: a presence fade
- * using the authored routine token (340 ms gentle) with the 80 ms
+ * using the authored routine token with the 80 ms
  * crossfade under reduced motion and a snap under animator-scale 0
  * (`design/motion/motion-original.mjs:70-74` Focus ordinary,
  * `:57` reduced path).
@@ -25,8 +25,10 @@ fun AstraEnterTransition(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    val entry = remember { Animatable(0f) }
-    LaunchedEffect(Unit) {
+    val entry = remember {
+        Animatable(if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else AstraMotionSpec.ARRIVAL_ALPHA)
+    }
+    LaunchedEffect(motion) {
         val durationMs = AstraMotionSpec.routineMs(motion)
         if (durationMs <= 0) {
             entry.snapTo(1f)
@@ -36,7 +38,9 @@ fun AstraEnterTransition(
     }
     Box(
         modifier.graphicsLayer {
-            alpha = entry.value
+            // Apply accessibility changes in this frame, without waiting for
+            // the effect or retaining a partially faded sensitive surface.
+            alpha = if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else entry.value
         },
     ) {
         content()

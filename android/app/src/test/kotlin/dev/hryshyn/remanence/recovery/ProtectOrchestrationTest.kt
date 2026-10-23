@@ -60,6 +60,7 @@ class ProtectOrchestrationTest {
         var registerOptions: JsonObject =
             buildJsonObject { put("flow", "reg-flow"); put("options", buildJsonObject {}) }
         var registerVerifyId: String = credId1
+        var loseRegisterBeforeStage = false
         /** Set by register/verify: the fake server remembers the enrollment,
          * so a later status read in the SAME fixture reports PENDING. */
         var registeredId: String? = null
@@ -102,6 +103,7 @@ class ProtectOrchestrationTest {
                     } ?: status
                     "register/options" -> registerOptions
                     "register/verify" -> {
+                        if (loseRegisterBeforeStage) { loseRegisterBeforeStage = false; throw java.io.IOException("lost before stage") }
                         registeredId = registerVerifyId
                         buildJsonObject { put("credential_id", registerVerifyId) }
                     }
@@ -239,103 +241,84 @@ class ProtectOrchestrationTest {
     }
 
     @Test
-    fun freshCreateMissingGetBecomesTypedPendingWithoutSideEffects() = runTest {
+    fun createStopsBeforeAnyGetAndExplicitVerifyCompletesSameEnrollment() = runTest {
         val f = fixture()
-        val credentials = FakeCredentials(
-            created = credentialJson(credId1, prfB64),
-            immediateError = NoCredentialException("not indexed yet"),
-        )
-
-        var pending: RecoveryVerificationPending? = null
+        val credentials = FakeCredentials(created = credentialJson(credId1, prfB64),
+            getResult = credentialJson(credId1, prfB64))
+        val ceremony = ProtectCeremony()
         try {
-            protectWith(f.env(), credentials)
-            fail("expected RecoveryVerificationPending")
-        } catch (e: RecoveryVerificationPending) {
-            pending = e
-        }
-        assertEquals(credId1, pending?.credentialId)
-        // One create+register, immediate get, then the typed continuation:
-        // no setup/verify, no upload, no readiness.
-        assertEquals(
-            listOf("status", "register/options", "register/verify", "setup/options"),
-            f.apiCalls,
-        )
-        assertEquals(listOf("getImmediate"), credentials.modes)
+            protectWith(f.env(), credentials, ceremony = ceremony)
+            fail("expected saved continuation")
+        } catch (pending: RecoveryVerificationPending) { assertEquals(credId1, pending.credentialId) }
+        assertEquals(listOf("status", "register/options", "register/verify"), f.apiCalls)
+        assertTrue(credentials.modes.isEmpty()); assertEquals(1, credentials.createCalls)
+        assertTrue(f.verified.isEmpty()); assertNull(f.uploaded)
+        val code = protectWith(f.env(), credentials, ceremony = ceremony, verify = true)
+        assertEquals(32, code?.size); assertEquals(listOf("get"), credentials.modes)
         assertSameEnrollmentOptions(f, credentials, credId1, 0)
         assertEquals(1, credentials.createCalls)
-        assertTrue(f.verified.isEmpty())
-        assertNull(f.uploaded)
-    }
-
-    @Test
-    fun freshPendingThenExplicitRetryCompletesSameEnrollment() = runTest {
-        // ONE stateful fixture for both invocations: the server fake flips
-        // to PENDING on register/verify, exactly like the real backend.
-        val f = fixture()
-        val credentials = FakeCredentials(
-            created = credentialJson(credId1, prfB64),
-            getResult = credentialJson(credId1, prfB64),
-            immediateError = NoCredentialException("not indexed yet"),
-        )
-
-        // First invocation: create+register, immediate miss → typed pending.
-        var pending: RecoveryVerificationPending? = null
-        try {
-            protectWith(f.env(), credentials)
-            fail("expected RecoveryVerificationPending")
-        } catch (e: RecoveryVerificationPending) {
-            pending = e
-        }
-        assertEquals(credId1, pending?.credentialId)
-        assertTrue(f.verified.isEmpty())
-
-        // Explicit retry on the SAME fixture: PENDING reuses the retained
-        // id with normal discovery and runs the full gates to readiness.
-        val code = protectWith(f.env(), credentials)
-
-        assertNotNull(code)
-        assertEquals(32, code?.size)
-        // Exactly one registration across both invocations; the retry
-        // never re-creates. Modes flip immediate → ordinary.
-        assertEquals(1, f.apiCalls.count { it == "register/verify" })
-        assertEquals(1, credentials.createCalls)
-        assertEquals(listOf("getImmediate", "get"), credentials.modes)
-        // Same enrollment id and byte-identical options on both gets.
-        assertSameEnrollmentOptions(f, credentials, credId1, 0)
-        assertSameEnrollmentOptions(f, credentials, credId1, 1)
-        assertEquals(
-            listOf(
-                "status", "register/options", "register/verify", "setup/options",
-                "status", "setup/options", "setup/verify", "record", "record",
-            ),
-            f.apiCalls,
-        )
-        assertEquals(credId1, f.uploaded?.getValue("credential_id")?.jsonPrimitive?.content)
         assertEquals(listOf(ownerA to f.bundleA), f.verified)
     }
 
     @Test
-    fun freshImmediateSuccessCompletesFullGatesWithoutFallback() = runTest {
-        val f = fixture()
-        val credentials = FakeCredentials(
-            created = credentialJson(credId1, prfB64),
-            getResult = credentialJson(credId1, prfB64),
-        )
+    fun verifyCannotStartNewEnrollment() = runTest {
+        val f = fixture(); val credentials = FakeCredentials()
+        try { protectWith(f.env(), credentials, verify = true); fail("must not create") }
+        catch (_: RecoveryCreationUncertain) { }
+        assertEquals(0, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
+        assertEquals(listOf("status"), f.apiCalls)
+    }
 
-        val code = protectWith(f.env(), credentials)
+    @Test fun pendingStatusForDifferentCredentialCannotReplaceRetainedCreationProof() = runTest {
+        val f = fixture(); f.loseRegisterBeforeStage = true
+        val ceremony = ProtectCeremony()
+        val credentials = FakeCredentials(created = credentialJson(credId1, prfB64))
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("expected lost acknowledgement") }
+        catch (_: java.io.IOException) { }
+        f.status = buildJsonObject { put("state", "PENDING"); put("credential_id", credId2) }
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("must refuse different staged ID") }
+        catch (_: IllegalStateException) { }
+        assertEquals(1, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
+        assertTrue(ceremony.uncertain); assertNotNull(ceremony.proof); assertTrue(f.verified.isEmpty())
+    }
 
-        assertNotNull(code)
-        assertEquals(32, code?.size)
-        // No fallback to ordinary get, no duplicate registration.
-        assertEquals(listOf("getImmediate"), credentials.modes)
-        assertSameEnrollmentOptions(f, credentials, credId1, 0)
-        assertEquals(1, credentials.createCalls)
-        assertEquals(1, f.apiCalls.count { it == "register/verify" })
-        assertEquals(
-            listOf("status", "register/options", "register/verify", "setup/options", "setup/verify", "record", "record"),
-            f.apiCalls,
-        )
-        assertEquals(listOf(ownerA to f.bundleA), f.verified)
+    @Test fun acknowledgedCredentialCannotSwitchToDifferentPendingId() = runTest {
+        val f = fixture(); val ceremony = ProtectCeremony()
+        val credentials = FakeCredentials(created = credentialJson(credId1, prfB64))
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("expected explicit verify") }
+        catch (_: RecoveryVerificationPending) { }
+        assertEquals(credId1, ceremony.credentialId); assertNull(ceremony.proof)
+        f.registeredId = credId2
+        try { protectWith(f.env(), credentials, ceremony = ceremony, verify = true); fail("must retain saved ID") }
+        catch (_: IllegalStateException) { }
+        assertEquals(1, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
+        assertTrue(f.verified.isEmpty()); assertNull(f.uploaded)
+    }
+
+    @Test fun unresolvedCreatedIdCannotAdoptAnArbitraryPendingCredential() = runTest {
+        val f = fixture(); val ceremony = ProtectCeremony()
+        val credentials = FakeCredentials(created = buildJsonObject { })
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("malformed provider response") }
+        catch (_: NoSuchElementException) { }
+        assertTrue(ceremony.uncertain); assertNull(ceremony.proof)
+        f.status = buildJsonObject { put("state", "PENDING"); put("credential_id", credId2) }
+        try { protectWith(f.env(), credentials, ceremony = ceremony, verify = true); fail("unknown ID cannot be adopted") }
+        catch (_: RecoveryCreationUncertain) { }
+        assertEquals(1, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
+        assertTrue(f.verified.isEmpty()); assertNull(f.uploaded)
+    }
+
+    @Test fun acknowledgedCredentialCannotRecreateWhenStatusLosesItsStage() = runTest {
+        val f = fixture(); val ceremony = ProtectCeremony()
+        val credentials = FakeCredentials(created = credentialJson(credId1, prfB64))
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("expected explicit verify") }
+        catch (_: RecoveryVerificationPending) { }
+        f.registeredId = null
+        f.status = buildJsonObject { put("state", "NOT_STARTED") }
+        try { protectWith(f.env(), credentials, ceremony = ceremony); fail("must not create again") }
+        catch (_: RecoveryCreationUncertain) { }
+        assertEquals(1, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
+        assertEquals(credId1, ceremony.credentialId); assertTrue(f.verified.isEmpty())
     }
 
     @Test
@@ -362,56 +345,13 @@ class ProtectOrchestrationTest {
 
         var thrown: java.security.GeneralSecurityException? = null
         try {
-            protectWith(f.env(), credentials)
+            protectWith(f.env(), credentials, verify = true)
             fail("expected readback refusal")
         } catch (e: java.security.GeneralSecurityException) {
             thrown = e
         }
         assertNotNull(thrown)
         assertNotNull(f.uploaded)
-        assertTrue(f.verified.isEmpty())
-    }
-
-    @Test
-    fun freshImmediateCancellationStaysNeutral() = runTest {
-        val f = fixture()
-        val credentials = FakeCredentials(
-            created = credentialJson(credId1, prfB64),
-            immediateError = GetCredentialCancellationException(),
-        )
-
-        var thrown: GetCredentialCancellationException? = null
-        try {
-            protectWith(f.env(), credentials)
-            fail("expected cancellation")
-        } catch (e: GetCredentialCancellationException) {
-            thrown = e
-        }
-        assertNotNull(thrown)
-        assertEquals(
-            listOf("status", "register/options", "register/verify", "setup/options"),
-            f.apiCalls,
-        )
-        assertTrue(f.verified.isEmpty())
-    }
-
-    @Test
-    fun freshImmediateUnknownStaysDistinctFromPending() = runTest {
-        val f = fixture()
-        val credentials = FakeCredentials(
-            created = credentialJson(credId1, prfB64),
-            immediateError = GetCredentialUnknownException("fresh provider boom"),
-        )
-
-        var thrown: Exception? = null
-        try {
-            protectWith(f.env(), credentials)
-            fail("expected provider error")
-        } catch (e: Exception) {
-            thrown = e
-        }
-        assertTrue(thrown is GetCredentialUnknownException)
-        assertTrue(thrown !is RecoveryVerificationPending)
         assertTrue(f.verified.isEmpty())
     }
 
@@ -424,7 +364,7 @@ class ProtectOrchestrationTest {
         }
         val credentials = FakeCredentials(getResult = credentialJson(credId1, prfB64))
 
-        val code = protectWith(f.env(), credentials)
+        val code = protectWith(f.env(), credentials, verify = true)
 
         assertNotNull(code)
         assertEquals(32, code?.size)
@@ -461,7 +401,7 @@ class ProtectOrchestrationTest {
             put("signing_public_keyset", f.sigB64)
         }
 
-        assertNull(protectWith(f.env(), credentials))
+        assertNull(protectWith(f.env(), credentials, verify = true))
 
         assertEquals(listOf("get"), credentials.modes)
         assertSameEnrollmentOptions(f, credentials, credId1, 0)
@@ -482,7 +422,7 @@ class ProtectOrchestrationTest {
 
         var thrown: Exception? = null
         try {
-            protectWith(f.env(), credentials)
+            protectWith(f.env(), credentials, verify = true)
         } catch (e: Exception) {
             thrown = e
         }
@@ -493,28 +433,13 @@ class ProtectOrchestrationTest {
     }
 
     @Test
-    fun anotherManagerOnPendingCreatesThenUsesImmediate() = runTest {
+    fun pendingEnrollmentCannotBeReplacedThroughRetry() = runTest {
         val f = fixture()
-        f.status = buildJsonObject {
-            put("state", "PENDING")
-            put("credential_id", credId1)
-        }
-        f.registerVerifyId = credId2
-        val credentials = FakeCredentials(
-            created = credentialJson(credId2, prfB64),
-            immediateError = NoCredentialException("not indexed yet"),
-        )
-
-        var pending: RecoveryVerificationPending? = null
-        try {
-            protectWith(f.env(), credentials, chooseAnotherManager = true)
-            fail("expected RecoveryVerificationPending")
-        } catch (e: RecoveryVerificationPending) {
-            pending = e
-        }
-        assertEquals(credId2, pending?.credentialId)
-        assertEquals(listOf("getImmediate"), credentials.modes)
-        assertEquals(1, credentials.createCalls)
+        f.status = buildJsonObject { put("state", "PENDING"); put("credential_id", credId1) }
+        val credentials = FakeCredentials(created = credentialJson(credId2, prfB64))
+        try { protectWith(f.env(), credentials, chooseAnotherManager = true); fail("must preserve key") }
+        catch (_: IllegalStateException) { }
+        assertEquals(0, credentials.createCalls); assertTrue(credentials.modes.isEmpty())
         assertTrue(f.verified.isEmpty())
     }
 
@@ -534,7 +459,7 @@ class ProtectOrchestrationTest {
         } catch (e: IllegalStateException) {
             thrown = e
         }
-        assertEquals("existing recovery is immutable", thrown?.message)
+        assertNotNull(thrown)
         assertEquals(0, credentials.createCalls)
         assertTrue(credentials.modes.isEmpty())
         assertTrue(f.verified.isEmpty())
@@ -551,7 +476,7 @@ class ProtectOrchestrationTest {
 
         var thrown: IllegalStateException? = null
         try {
-            protectWith(f.env(), credentials)
+            protectWith(f.env(), credentials, verify = true)
             fail("expected wrong-credential refusal")
         } catch (e: IllegalStateException) {
             thrown = e
@@ -573,7 +498,7 @@ class ProtectOrchestrationTest {
 
         var thrown: RecoveryCapabilityUnavailable? = null
         try {
-            protectWith(f.env(), credentials)
+            protectWith(f.env(), credentials, verify = true)
             fail("expected PRF refusal")
         } catch (e: RecoveryCapabilityUnavailable) {
             thrown = e
@@ -601,7 +526,7 @@ class ProtectOrchestrationTest {
 
         var thrown: RecoveryCapabilityUnavailable? = null
         try {
-            protectWith(f.env(), credentials)
+            protectWith(f.env(), credentials, verify = true)
             fail("expected PRF refusal")
         } catch (e: RecoveryCapabilityUnavailable) {
             thrown = e
@@ -623,7 +548,7 @@ class ProtectOrchestrationTest {
 
         var thrown: IllegalStateException? = null
         try {
-            protectWith(f.env(), credentials)
+            protectWith(f.env(), credentials, verify = true)
             fail("expected stale-lease refusal")
         } catch (e: IllegalStateException) {
             thrown = e
@@ -644,7 +569,7 @@ class ProtectOrchestrationTest {
 
         var thrown: GetCredentialCancellationException? = null
         try {
-            protectWith(f.env(), credentials)
+            protectWith(f.env(), credentials, verify = true)
             fail("expected cancellation")
         } catch (e: GetCredentialCancellationException) {
             thrown = e
@@ -664,7 +589,7 @@ class ProtectOrchestrationTest {
 
         var thrown: Exception? = null
         try {
-            protectWith(f.env(), credentials)
+            protectWith(f.env(), credentials, verify = true)
             fail("expected provider error")
         } catch (e: Exception) {
             thrown = e

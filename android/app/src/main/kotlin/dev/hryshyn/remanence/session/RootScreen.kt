@@ -36,9 +36,9 @@ import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 /**
  * I03/FIX-M1-007-10 root renderer: picks exactly one surface from the guarded
  * set. Authentication hosts login/registration slots; authenticated users
- * land on Home and can reach ONLY the Create and Scan entry points (plus the
+ * land on Home and can reach Create, Scan and outgoing metadata (plus the
  * grant-gated capsule presentation). There is deliberately no gallery,
- * inbox, history, or feed surface anywhere in this hierarchy.
+ * inbox or feed. Outgoing history is metadata only, never capsule content.
  */
 @Composable
 fun RootScreen(
@@ -53,6 +53,9 @@ fun RootScreen(
     onExitFlow: () -> Unit = {},
     showPublicHome: Boolean = false,
     settingsContent: @Composable () -> Unit = {},
+    historyContent: @Composable () -> Unit = {},
+    onOpenSettings: (() -> Unit)? = null,
+    onOpenHistory: (() -> Unit)? = null,
 ) {
     if (authState is AuthUiState.Resolving) {
         // Cold-start session check still in flight: hold a neutral frame so
@@ -97,6 +100,29 @@ fun RootScreen(
         onBack = onExitFlow,
     )
 
+    // One persistent product shell: navigation never fades or travels with a
+    // page. Only the incoming body arrives; the outgoing body is disposed now.
+    val section = when (destination) {
+        AppDestination.Home -> dev.hryshyn.remanence.ui.hold.ProductSection.HOME
+        AppDestination.History -> dev.hryshyn.remanence.ui.hold.ProductSection.SENT
+        AppDestination.Settings -> dev.hryshyn.remanence.ui.hold.ProductSection.SETTINGS
+        else -> null
+    }
+    if (section != null && onOpenSettings != null && onOpenHistory != null) {
+        dev.hryshyn.remanence.ui.hold.ProductFrame(section, onExitFlow, onOpenHistory, onOpenSettings) {
+            AstraContextArrival(motion, Modifier.fillMaxSize(), contentKey = destination) {
+                key(destination) {
+                    when (destination) {
+                        AppDestination.Settings -> settingsContent()
+                        AppDestination.History -> historyContent()
+                        else -> homeContent()
+                    }
+                }
+            }
+        }
+        return
+    }
+
     // Opening-Carry front holder: remembered outside key(destination) so the
     // Scan branch's disposal cannot wipe the published postcard bounds before
     // the Capsule entry consumes them.
@@ -113,6 +139,9 @@ fun RootScreen(
     when (destination) {
         AppDestination.Settings -> key(destination) {
             AstraContextArrival(motion, modifier.fillMaxSize(), contentKey = destination) { settingsContent() }
+        }
+        AppDestination.History -> key(destination) {
+            AstraContextArrival(motion, modifier.fillMaxSize(), contentKey = destination) { historyContent() }
         }
         // Create owns its step-aware back arrow and pinned close control.
         // The root owns only the route boundary and session lifecycle.
@@ -201,7 +230,13 @@ fun AuthenticatedHomeChrome(
     modifier: Modifier = Modifier,
     recoveryContent: @Composable () -> Unit = {},
     onSettings: (() -> Unit)? = null,
+    onHistory: (() -> Unit)? = null,
 ) {
+    if (onSettings != null && onHistory != null) {
+        dev.hryshyn.remanence.ui.hold.ProductFrame(
+            dev.hryshyn.remanence.ui.hold.ProductSection.HOME, {}, onHistory, onSettings, homeContent)
+        return
+    }
     Column(modifier = modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             // T186: handleless receive-only accounts show no handle row —
@@ -218,6 +253,10 @@ fun AuthenticatedHomeChrome(
             }
         }
         recoveryContent()
+        if (onHistory != null) OutlinedButton(onClick = onHistory,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).testTag("root_history_button")) {
+            Text(stringResource(R.string.history_title))
+        }
         Box(Modifier.weight(1f)) { homeContent() }
     }
 }

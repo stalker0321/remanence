@@ -28,25 +28,30 @@ import dev.hryshyn.remanence.ui.locale.AppLocale
 fun SettingsScreen(handle: String?, locale: AppLocale, onLocale: (AppLocale) -> Unit,
                    recoveryReady: Boolean, onBack: () -> Unit, onLogout: () -> Unit,
                    telemetryContent: @Composable () -> Unit = {},
-                   safetyContent: @Composable () -> Unit = {}) {
+                   safetyContent: @Composable () -> Unit = {},
+                   sendAccessContent: @Composable () -> Unit = {}, showHeader: Boolean = true) {
     val gutter = HoldSpace.pageGutter()
     var languages by rememberSaveable { mutableStateOf(false) }
     var access by rememberSaveable { mutableStateOf(false) }
     var privacy by rememberSaveable { mutableStateOf(false) }
+    var feedback by rememberSaveable { mutableStateOf(false) }
     var logoutConfirmation by rememberSaveable { mutableStateOf(false) }
     val backLabel = stringResource(R.string.hold_back)
     Column(Modifier.fillMaxSize().background(HoldColors.Paper).testTag("settings_screen")) {
-        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = gutter), verticalAlignment = Alignment.CenterVertically) {
+        if (showHeader) Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = gutter), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack, modifier = Modifier.size(48.dp).testTag("settings_back")
                 .semantics { contentDescription = backLabel }) {
                 Text("←", Modifier.clearAndSetSemantics {}, style = MaterialTheme.typography.titleLarge)
             }
         }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
-            .padding(start = gutter, end = gutter, top = 12.dp, bottom = 32.dp).testTag("settings_content"),
+            .padding(start = gutter, end = gutter, top = if (showHeader) 12.dp else 24.dp, bottom = 32.dp).testTag("settings_content"),
             verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            Text(stringResource(R.string.settings_design_title), style = MaterialTheme.typography.headlineLarge,
-                color = HoldColors.Ink, modifier = Modifier.testTag("settings_title").semantics { heading() })
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.settings_design_title), style = MaterialTheme.typography.headlineLarge,
+                    color = HoldColors.Ink, modifier = Modifier.testTag("settings_title").semantics { heading() })
+                Text(stringResource(R.string.rework_settings_detail), style = MaterialTheme.typography.bodyMedium, color = HoldColors.Muted)
+            }
             Column(Modifier.fillMaxWidth().testTag("settings_section_account"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SettingsLabel(stringResource(R.string.settings_design_account))
                 // T186: handleless receive-only accounts show no handle row.
@@ -54,18 +59,22 @@ fun SettingsScreen(handle: String?, locale: AppLocale, onLocale: (AppLocale) -> 
                     Text("\u2068@$handle\u2069", Modifier.fillMaxWidth().testTag("settings_handle"),
                         style = MaterialTheme.typography.titleMedium, color = HoldColors.Ink)
                 }
-                if (BuildConfig.REMANENCE_RECOVERY_ENABLED) Text(stringResource(R.string.mvp_handle_permanent),
-                    Modifier.testTag("settings_handle_permanent"), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
             }
             SettingsGroup {
-                SettingsActionRow(stringResource(R.string.settings_design_language), stringResource(localeLabel(locale)),
-                    { languages = true }, Modifier.testTag("language_switch_row"))
                 SettingsActionRow(stringResource(R.string.settings_design_access),
                     stringResource(if (recoveryReady) R.string.settings_access_saved else R.string.settings_access_needed),
                     { access = !access }, Modifier.testTag("settings_access_row"), expanded = access)
                 if (access) Text(stringResource(if (recoveryReady) R.string.mvp_recovery_ready else R.string.mvp_recovery_not_ready),
                     Modifier.fillMaxWidth().padding(16.dp).testTag("settings_recovery_status"),
                     style = MaterialTheme.typography.bodyMedium, color = HoldColors.Muted)
+            }
+            sendAccessContent()
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingsLabel(stringResource(R.string.rework_preferences))
+                SettingsGroup {
+                    SettingsActionRow(stringResource(R.string.settings_design_language), stringResource(localeLabel(locale)),
+                        { languages = true }, Modifier.testTag("language_switch_row"))
+                }
             }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SettingsLabel(stringResource(R.string.settings_design_privacy))
@@ -78,9 +87,12 @@ fun SettingsScreen(handle: String?, locale: AppLocale, onLocale: (AppLocale) -> 
                         BetaLegalLinks(handle)
                     }
                     safetyContent()
+                    SettingsActionRow(stringResource(R.string.rework_optional_feedback),
+                        stringResource(R.string.rework_optional_feedback_detail), { feedback = !feedback },
+                        Modifier.testTag("settings_feedback_row"), expanded = feedback)
+                    if (feedback) Column(Modifier.padding(16.dp)) { telemetryContent() }
                 }
             }
-            telemetryContent()
             SettingsGroup {
                 SettingsActionRow(stringResource(R.string.settings_design_logout), onClick = { logoutConfirmation = true },
                     modifier = Modifier.testTag("settings_logout"), destructive = true)

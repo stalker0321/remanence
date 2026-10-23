@@ -101,6 +101,8 @@ data class CapsuleFinalize(
 )
 
 enum class CapsuleFinalizeFailure {
+    SEND_LIMIT_REACHED,
+    SEND_ACCESS_UNAVAILABLE,
     NETWORK,
     RATE_LIMITED,
     HTTP,
@@ -239,7 +241,14 @@ class CapsuleFinalizeRepository internal constructor(
                     retryable = capsuleHttpFallbackIsRetryable(response.code),
                 )
             }
-            val problem = parseProblem(bytes.toString(Charsets.UTF_8), response.code)
+            val text = bytes.toString(Charsets.UTF_8)
+            finalizeSendAccessProblem(text, response.code, allowMinimalPending = false)?.let {
+                return CapsuleFinalizeResult.Failure(
+                    if (it == FinalizeSendAccessProblem.LIMIT) CapsuleFinalizeFailure.SEND_LIMIT_REACHED
+                    else CapsuleFinalizeFailure.SEND_ACCESS_UNAVAILABLE,
+                    response.code, retryable = it == FinalizeSendAccessProblem.UNAVAILABLE)
+            }
+            val problem = parseProblem(text, response.code)
             return CapsuleFinalizeResult.Failure(
                 reason = problem?.let { mapProblemCode(it.code) } ?: CapsuleFinalizeFailure.HTTP,
                 httpStatus = response.code,

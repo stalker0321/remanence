@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
@@ -90,6 +91,30 @@ class CollageChoiceHostTest {
             !session.isPreparing && session.candidates.isNotEmpty()
         }
         composeRule.waitForIdle()
+    }
+
+    @Test fun photoHotspotsHaveDistinctLocalizedNamesAndSelectTheirOwnPhoto() = hotspotLabels("Crop photo", "of")
+    @Test @Config(qualifiers = "ru")
+    fun russianPhotoHotspots() = hotspotLabels("Кадрировать фото", "из")
+    @Test @Config(qualifiers = "uk")
+    fun ukrainianPhotoHotspots() = hotspotLabels("Кадрувати фото", "з")
+
+    private fun hotspotLabels(prefix: String, separator: String) {
+        val session = CollageChoiceSession()
+        val tapped = mutableListOf<String>()
+        val input = input()
+        val sources = sources()
+        val crops = cropSource()
+        composeRule.setContent {
+            CollageChoiceHost(session, input, sources, null, null, crops, onSlotTap = { tapped += it })
+        }
+        awaitCandidates(session)
+        val placements = requireNotNull(session.displayed).expression.placements
+        placements.forEachIndexed { index, placement ->
+            composeRule.onNodeWithTag("crop_hotspot_$index")
+                .assertContentDescriptionEquals("$prefix ${index + 1} $separator ${placements.size}").performClick()
+            assertEquals(placement.contentId, tapped.last())
+        }
     }
 
     @Test
@@ -303,11 +328,14 @@ class CollageChoiceHostTest {
         accepted = false
         val retained = session.candidates.toList()
 
-        // Phase 2: remount with the session retained; gated builder held.
+        // Phase 2: explicitly request a fresh build, then remount with its
+        // gated builder held. A same-input remount alone now revalidates the
+        // authored cohort; this test still exercises VALUE-EQUAL replacement.
         composeRule.runOnIdle {
             useGated = true
             gatedResult = retained
             showHost = false
+            session.clear()
         }
         composeRule.waitForIdle()
         composeRule.runOnIdle { showHost = true }

@@ -95,6 +95,7 @@ abstract class OutboxCapsuleDao {
     @Query(
         "SELECT capsule_id FROM outbox_capsule " +
             "WHERE owner_user_id = :ownerUserId AND (" +
+            "last_error_code IS NULL OR last_error_code NOT IN ('SEND_LIMIT_REACHED', 'FINALIZE_UNCONFIRMED')) AND (" +
             "(state IN ('ENCRYPTED', 'UPLOADING') " +
             "    AND (last_error_code IS NULL OR last_error_code NOT IN " +
             "        ('RECIPIENT_KEY_STALE', 'RECIPIENT_KEY_STALE_DRAFT', " +
@@ -113,6 +114,15 @@ abstract class OutboxCapsuleDao {
             ") ORDER BY capsule_id",
     )
     abstract suspend fun getCapsuleIdsNeedingUploadForOwner(ownerUserId: String): List<String>
+
+    /** Explicit user retry only. Keep all immutable bytes/state/IDs intact. */
+    @Query(
+        "UPDATE outbox_capsule SET last_error_code = NULL " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND sender_user_id = :ownerUserId AND state = 'FINALIZING' " +
+            "AND last_error_code IN ('SEND_LIMIT_REACHED', 'FINALIZE_UNCONFIRMED')",
+    )
+    abstract suspend fun releaseParkedFinalizeForOwner(capsuleId: String, ownerUserId: String): Int
 
     /** Owner-guarded PREPARING -> ENCRYPTED CAS; 0 rows means refused. */
     @Query(

@@ -13,6 +13,10 @@
     <string name="auth_identity_rejected">Account setup did not complete. Try again later.</string>
     <string name="auth_registration_failed">Account creation did not complete. Try again.</string>
     <string name="auth_recovery_required">You are signed in, but your keys are not on this device. Restore access to open your encrypted memories. Existing keys will not be replaced.</string>
-    <string name="auth_passkey_cancelled">Cancelled. You can try again when you are ready.</string>
+    <string name="auth_passkey_cancelled">The sign-in or passkey step did not finish. If you did not close it, check the provider settings before trying again.</string>
+    <string name="auth_credential_missing">No matching sign-in or passkey credential was found. Check the selected provider and account.</string>
+    <string name="auth_credential_not_configured">Sign-in or passkeys are not configured correctly. Check credential settings; if this persists, contact support.</string>
+    <string name="auth_credential_unavailable">Sign-in or passkeys are unavailable here. Check device updates and credential settings.</string>
+    <string name="auth_credential_failed">The sign-in or passkey provider could not complete this step. Try again later.</string>
     <string name="auth_passkey_setup_failed">Passkey setup did not complete. Your existing keys are unchanged. Check your connection and try again.</string>
 </resources>

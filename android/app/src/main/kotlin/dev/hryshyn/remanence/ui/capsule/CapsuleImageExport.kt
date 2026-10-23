@@ -138,6 +138,7 @@ internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boole
     var menu by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
+    var interrupted by remember { mutableStateOf(false) }
     // Not saved state. A cancelled document picker or disposed route clears the bytes.
     val pending = remember { mutableStateOf<ByteArray?>(null) }
     val title = stringResource(R.string.capsule_export_share)
@@ -156,12 +157,19 @@ internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boole
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { failed = true }
             finally { bytes.fill(0); busy = false }
-        } else busy = false
+        } else {
+            busy = false
+            // A restored registry may deliver a document after our transient
+            // pixels were disposed. Never imply success or persist plaintext
+            // to bridge that boundary. A cancelled picker remains silent.
+            if (uri != null) interrupted = true
+        }
     }
     fun perform(toFile: Boolean) {
         menu = false
         busy = true
         failed = false
+        interrupted = false
         scope.launch {
             var bytes: ByteArray? = null
             var file: File? = null
@@ -202,7 +210,7 @@ internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boole
         } }, confirmButton = {}, dismissButton = {
             HoldTextButton(onClick = { menu = false }) { Text(stringResource(R.string.hold_close)) }
         })
-    if (failed) AlertDialog(onDismissRequest = { failed = false },
-        text = { Text(stringResource(R.string.capsule_export_failed)) },
-        confirmButton = { HoldTextButton(onClick = { failed = false }) { Text(stringResource(R.string.hold_close)) } })
+    if (failed || interrupted) AlertDialog(onDismissRequest = { failed = false; interrupted = false },
+        text = { Text(stringResource(if (interrupted) R.string.media_export_interrupted else R.string.capsule_export_failed)) },
+        confirmButton = { HoldTextButton(onClick = { failed = false; interrupted = false }) { Text(stringResource(R.string.hold_close)) } })
 }

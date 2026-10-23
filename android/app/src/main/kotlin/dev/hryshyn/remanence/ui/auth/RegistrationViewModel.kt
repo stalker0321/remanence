@@ -51,6 +51,19 @@ class RegistrationViewModel(
     private val _submitState = MutableStateFlow<RegistrationSubmitState>(RegistrationSubmitState.Idle)
     val submitState: StateFlow<RegistrationSubmitState> = _submitState.asStateFlow()
 
+    /**
+     * Activity retention is longer than a completed auth flow. A subsequent
+     * SignedOut boundary retires its form (including credentials), but ordinary
+     * login/register navigation and rotation must preserve unfinished input.
+     * The existing use case already rotates its key epoch on success/logout.
+     */
+    fun onSignedOut() {
+        if (_submitState.value == RegistrationSubmitState.Completed) {
+            _form.value = RegistrationFormState()
+            _submitState.value = RegistrationSubmitState.Idle
+        }
+    }
+
     fun onFieldChange(field: RegistrationField, value: String) {
         val current = _form.value
         _form.value = when (field) {
@@ -61,7 +74,8 @@ class RegistrationViewModel(
     }
 
     fun submit() {
-        if (_submitState.value is RegistrationSubmitState.Submitting) return
+        if (_submitState.value is RegistrationSubmitState.Submitting ||
+            _submitState.value is RegistrationSubmitState.Completed) return
         if (!RegistrationFormValidator.canSubmit(_form.value)) return
         val snapshot = _form.value
         _submitState.value = RegistrationSubmitState.Submitting

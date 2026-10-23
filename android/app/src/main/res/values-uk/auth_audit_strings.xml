@@ -13,6 +13,10 @@
     <string name="auth_identity_rejected">Налаштування акаунта не завершено. Спробуй пізніше.</string>
     <string name="auth_registration_failed">Не вдалося створити акаунт. Спробуй ще раз.</string>
     <string name="auth_recovery_required">Ти увійшов в акаунт, але його ключів немає на цьому пристрої. Віднови доступ, щоб відкрити зашифровані спогади. Наявні ключі не будуть замінені.</string>
-    <string name="auth_passkey_cancelled">Скасовано. Можна спробувати знову, коли будеш готовий.</string>
+    <string name="auth_passkey_cancelled">Вхід або дію з паскеєм не завершено. Якщо ти не закривав вікно, перевір налаштування провайдера перед новою спробою.</string>
+    <string name="auth_credential_missing">Відповідні дані для входу або паскей не знайдено. Перевір вибраного провайдера й акаунт.</string>
+    <string name="auth_credential_not_configured">Вхід або паскеї налаштовано некоректно. Перевір налаштування входу; якщо проблема залишається, звернися до підтримки.</string>
+    <string name="auth_credential_unavailable">Вхід або паскеї тут недоступні. Перевір оновлення пристрою та налаштування входу.</string>
+    <string name="auth_credential_failed">Провайдер входу або паскеїв не зміг завершити цей крок. Спробуй пізніше.</string>
     <string name="auth_passkey_setup_failed">Налаштування паскея не завершено. Наявні ключі не змінено. Перевір підключення та спробуй ще раз.</string>
 </resources>

@@ -1,0 +1,16 @@
+<resources>
+    <string name="media_collage_description">Композиция открытки</string>
+    <string name="media_crop_photo">Кадрировать фото %1$d из %2$d</string>
+    <string name="media_crop_position">Рамка: %1$d%% слева, %2$d%% сверху; ширина %3$d%%, высота %4$d%%</string>
+    <string name="media_crop_left">Сдвинуть рамку влево</string>
+    <string name="media_crop_right">Сдвинуть рамку вправо</string>
+    <string name="media_crop_up">Сдвинуть рамку вверх</string>
+    <string name="media_crop_down">Сдвинуть рамку вниз</string>
+    <string name="media_crop_zoom_in">Приблизить</string>
+    <string name="media_crop_zoom_out">Отдалить</string>
+    <string name="media_crop_hint">Перетаскивайте рамку или меняйте размер щипком. Также доступны действия рамки, клавиши стрелок и + / −.</string>
+    <string name="media_photo_previous">Предыдущее фото</string>
+    <string name="media_photo_next">Следующее фото</string>
+    <string name="media_photo_position">Фото %1$d из %2$d</string>
+    <string name="media_export_interrupted">Сохранение прервано. Оставьте воспоминание открытым и снова выберите «Сохранить изображение».</string>
+</resources>

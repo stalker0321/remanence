@@ -1,0 +1,23 @@
+<resources>
+    <string name="atomic_registration_prf_unavailable">Ключ сохранён, но провайдер не предоставил нужную защиту открыток. Настройка не завершена. Повторная проверка может не помочь.</string>
+    <string name="atomic_registration_failed">Не удалось завершить этот шаг настройки аккаунта. Проверь подключение и попробуй позже.</string>
+    <string name="atomic_registration_title">Настройка аккаунта</string>
+    <string name="atomic_registration_intro">Войдите через Google, затем выберите менеджер ключей доступа. Аккаунт сохраняется только вместе с записью восстановления.</string>
+    <string name="atomic_registration_unknown">Аккаунт уже мог сохраниться. Проверьте состояние, повторите тот же запрос или войдите снова, чтобы восстановить исходные ключи.</string>
+    <string name="atomic_registration_restore">Аккаунт сохранён. Войдите и восстановите его исходные ключи, чтобы продолжить.</string>
+    <string name="atomic_registration_reauthenticate">Подтвердите аккаунт Google ещё раз. Новый аккаунт взамен прежнего не создан.</string>
+    <string name="atomic_registration_terminal">Эта настройка завершена. После подтверждения владельца можно явно начать новую.</string>
+    <string name="atomic_registration_ready">Сохранённая запись восстановления открыта. Аккаунт готов.</string>
+    <string name="atomic_registration_handle_error">Выберите свободное имя: 3–30 латинских букв, цифр, точек или подчёркиваний.</string>
+    <string name="atomic_registration_upgrade">Сервер требует обновлённую настройку аккаунта. Не обходите это требование другим способом регистрации.</string>
+    <string name="atomic_registration_closed">Создание новых аккаунтов сейчас закрыто. В существующие аккаунты можно войти.</string>
+    <string name="atomic_registration_handle">Имя аккаунта</string>
+    <string name="atomic_registration_save">Сохранить с ключом доступа</string>
+    <string name="atomic_registration_restart">Начать новую настройку</string>
+    <string name="atomic_registration_google">Продолжить с Google</string>
+    <string name="atomic_registration_check">Проверить сохранение</string>
+    <string name="atomic_registration_retry">Повторить тот же запрос</string>
+    <string name="atomic_registration_cancel">Отменить эту настройку</string>
+    <string name="atomic_registration_leave_hint">При выходе локальные ключи настройки удаляются. Уже сохранённый аккаунт этим не отменить.</string>
+    <string name="atomic_registration_leave">Выйти из настройки</string>
+</resources>

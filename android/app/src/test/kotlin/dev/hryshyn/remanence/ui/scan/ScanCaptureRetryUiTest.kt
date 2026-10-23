@@ -1,14 +1,24 @@
 package dev.hryshyn.remanence.ui.scan
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.material3.MaterialTheme
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
 import dev.hryshyn.remanence.capture.CapturePermissionStep
@@ -22,6 +32,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.runBlocking
+import dev.hryshyn.remanence.ui.create.CreateTestViewModels
+import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -32,6 +45,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.recognition.QualityReason
@@ -47,12 +61,14 @@ import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ScanCaptureRetryUiTest {
 
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     private val testDispatcher = UnconfinedTestDispatcher()
+    private val owned = CreateTestViewModels(testDispatcher.scheduler)
 
     private lateinit var database: RemanenceLocalDatabase
 
@@ -67,6 +83,7 @@ class ScanCaptureRetryUiTest {
 
     @After
     fun tearDown() {
+        runBlocking { owned.clearAndJoin() }
         Dispatchers.resetMain()
         if (::database.isInitialized) database.close()
     }
@@ -116,13 +133,23 @@ class ScanCaptureRetryUiTest {
 
     @Test
     fun rejectionRendersPanelRetakeWorksTwiceAndExceptionShowsFailure() {
+        verifyReceiverCopyAndRetakes(1f)
+    }
+
+    @Test @Config(qualifiers = "ru-w320dp-h640dp-xhdpi")
+    fun russianReceiverCopyAfterRetakesFont18() = verifyReceiverCopyAndRetakes(1.8f)
+
+    @Test @Config(qualifiers = "uk-w390dp-h844dp-xhdpi")
+    fun ukrainianReceiverCopyAfterRetakesFont15() = verifyReceiverCopyAndRetakes(1.5f)
+
+    private fun verifyReceiverCopyAndRetakes(fontScale: Float) {
         val front = ScriptedProcessor(
             ProcessedStill.Rejected(setOf(QualityReason.TOO_BLURRY)),
             ProcessedStill.Rejected(setOf(QualityReason.TOO_BLURRY)),
             "sift extraction failed",
             synthetic(),
         )
-        val vm = ScanViewModel(
+        val vm = owned.own(ScanViewModel(
             persistence = NoPersistence(),
             database = database,
             profile = RecognitionProfile.postcardSiftRootSiftV1(),
@@ -139,13 +166,14 @@ class ScanCaptureRetryUiTest {
             incomingPresentationPreparation = null,
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
-        )
+        ))
 
         // One fake adapter per binding cycle; keep the live one reachable.
         val live = AtomicReference<FakeStillCameraAdapter?>(null)
         var bindCount = 0
 
         composeRule.setContent {
+          CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
             MaterialTheme {
                 ScanScreen(
                     viewModel = vm,
@@ -156,6 +184,7 @@ class ScanCaptureRetryUiTest {
                     },
                 )
             }
+          }
         }
 
         /** Lets the surface finish its binding cycle, then completes it. */
@@ -163,10 +192,28 @@ class ScanCaptureRetryUiTest {
             composeRule.waitForIdle()
             composeRule.runOnIdle { live.get()?.emitReady() }
             composeRule.waitForIdle()
+            val locale = ApplicationProvider.getApplicationContext<Context>().resources.configuration.locales[0].language
+            val copy = when (locale) {
+                "ru" -> "Снимите лицевую сторону полученной открытки, чтобы открыть воспоминание."
+                "uk" -> "Сфотографуйте лицьовий бік отриманої листівки, щоб відкрити спогад."
+                else -> "Capture the picture side of the postcard you received to open the memory."
+            }
+            composeRule.onNodeWithText(copy).performScrollTo().assertIsDisplayed()
+            val tree = composeRule.onRoot(useUnmergedTree = true).printToString()
+            composeRule.runOnIdle {
+                val view = composeRule.activity.window.decorView
+                val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+                view.draw(Canvas(bitmap))
+                val dir = File("build/t389-review").apply { mkdirs() }
+                val name = "scan-$locale-font$fontScale-bind$bindCount"
+                File(dir, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                File(dir, "$name-semantics.txt").writeText(tree)
+                bitmap.recycle()
+            }
         }
 
         fun shutter() {
-            composeRule.onNodeWithTag("capture_shutter_front").assertIsDisplayed()
+            composeRule.onNodeWithTag("capture_shutter_front").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("capture_shutter_front").performClick()
         }
 
@@ -189,7 +236,7 @@ class ScanCaptureRetryUiTest {
         shutter()
         deliver("frame-1")
 
-        composeRule.onNodeWithTag("capture_terminal_panel").assertIsDisplayed()
+        composeRule.onNodeWithTag("capture_terminal_panel").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("quality_reason_TOO_BLURRY").assertIsDisplayed()
         composeRule.onNodeWithTag("quality_failure_header").assertIsDisplayed()
         assertTrue(
@@ -199,7 +246,7 @@ class ScanCaptureRetryUiTest {
         val firstRejection = (vm.frontAttempt.phase as CaptureAttemptPhase.Rejected)
 
         // Retake -> fresh binding -> identical rejection is a NEW attempt.
-        composeRule.onNodeWithTag("capture_retake_front").performClick()
+        composeRule.onNodeWithTag("capture_retake_front").performScrollTo().performClick()
         composeRule.waitForIdle()
         assertEquals(CaptureAttemptPhase.Binding, vm.frontAttempt.phase)
         readyCamera()
@@ -211,7 +258,7 @@ class ScanCaptureRetryUiTest {
         composeRule.onNodeWithTag("quality_reason_TOO_BLURRY").assertIsDisplayed()
 
         // Processor exception -> visible Failed message + working Retake.
-        composeRule.onNodeWithTag("capture_retake_front").performClick()
+        composeRule.onNodeWithTag("capture_retake_front").performScrollTo().performClick()
         composeRule.waitForIdle()
         readyCamera()
         shutter()
@@ -221,7 +268,7 @@ class ScanCaptureRetryUiTest {
         assertTrue(vm.frontAttempt.phase is CaptureAttemptPhase.Failed)
 
         // Retry after failure is accepted: one FRONT runs matching immediately.
-        composeRule.onNodeWithTag("capture_retake_front").performClick()
+        composeRule.onNodeWithTag("capture_retake_front").performScrollTo().performClick()
         composeRule.waitForIdle()
         readyCamera()
         shutter()

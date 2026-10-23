@@ -291,10 +291,20 @@ class RootViewModel internal constructor(
     fun openSettings() {
         synchronized(publicationFence) {
             if (!authenticatedEntryAdmitted()) return
-            // Settings is entered from Home only; never retain a scan grant behind it.
-            if (controller.current != AppDestination.Home) return
+            // Utilities share a navigation row; transient creation/scan surfaces do not.
+            if (controller.current !in setOf(AppDestination.Home, AppDestination.History, AppDestination.Settings)) return
             controller.consumeCapsuleAccess()
             controller.navigate(AppDestination.Settings)
+            _destination.value = controller.current
+        }
+    }
+
+    /** Sender metadata only. This never issues or restores a capsule grant. */
+    fun openHistory() {
+        synchronized(publicationFence) {
+            if (!authenticatedEntryAdmitted() || controller.current !in setOf(AppDestination.Home, AppDestination.Settings, AppDestination.History)) return
+            controller.consumeCapsuleAccess()
+            controller.navigate(AppDestination.History)
             _destination.value = controller.current
         }
     }

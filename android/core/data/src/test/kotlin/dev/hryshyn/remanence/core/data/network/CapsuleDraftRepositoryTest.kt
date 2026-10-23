@@ -21,6 +21,21 @@ import java.util.UUID
 
 class CapsuleDraftRepositoryTest {
 
+    @Test fun quotaProblemHasNoAuthorityAtDraftEndpoint() = runTest {
+        withServer { server ->
+            for ((status, code) in listOf(409 to "SEND_LIMIT_REACHED", 503 to "SEND_ACCESS_UNAVAILABLE")) {
+                server.enqueue(MockResponse.Builder().code(status).setHeader("Content-Type", "application/problem+json")
+                    .body(problemJson(code, status, status == 503)).build())
+                val result = assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "synthetic"))
+                assertEquals(CapsuleDraftFailure.HTTP, result.reason)
+                assertEquals(status, result.httpStatus)
+                assertEquals(status == 503, result.retryable)
+                assertFalse(result.toString().contains("private detail"))
+            }
+            assertEquals(2, server.requestCount)
+        }
+    }
+
     private val capsuleId = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000ca01")
     private val senderBundleId = KeyBundleId.parseRest("0198f0a0-0000-7000-8000-00000000ba01")
     private val recipientId = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a502")

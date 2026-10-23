@@ -203,6 +203,8 @@ class AppContainer private constructor(
     }
 
     val recoveryReadiness by lazy { dev.hryshyn.remanence.recovery.RecoveryReadinessStore(appContext) }
+    // Public creation proof only: survives screen/Activity recreation, never persisted to disk.
+    internal val recoveryProtectCeremony by lazy { dev.hryshyn.remanence.recovery.ProtectCeremony() }
 
     /**
      * In-app language choice (EN/RU/UK + system default). Handle only: the

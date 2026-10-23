@@ -24,6 +24,11 @@ import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeFailure
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeRequest
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeResult
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeState
+import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
+import dev.hryshyn.remanence.core.data.network.AuthTokenHolder
+import dev.hryshyn.remanence.core.data.network.ProductionApiStack
+import dev.hryshyn.remanence.core.data.network.RefreshTokenReader
+import dev.hryshyn.remanence.core.data.network.SessionRotationSink
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialLifecycle
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
@@ -35,6 +40,8 @@ import java.security.MessageDigest
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.runBlocking
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -842,6 +849,317 @@ class CapsuleUploadOrchestratorTest {
             ),
             request.tags,
         )
+    }
+
+    @Test fun confirmedLimitParksWorkerAndRestartDiscoveryWithoutDeletingRequest() = runBlocking {
+        restartable { reopen ->
+            seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+            var calls = 0
+            var captured: CapsuleFinalizeRequest? = null
+            val first = orchestrator {
+                finalizeCapsule = { request, _ ->
+                    calls++; captured = request
+                    CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.SEND_LIMIT_REACHED, 409, false)
+                }
+                cleanupRetryMaterial = { _, _ -> error("denial must not destroy recovery") }
+            }
+            assertEquals(CapsuleUploadOutcome.SendLimitReached, first.run(OWNER_TYPED, CAPSULE_TYPED))
+            assertEquals(androidx.work.ListenableWorker.Result.failure(),
+                CapsuleUploadWorker.mapOutcome(CapsuleUploadOutcome.SendLimitReached))
+            val parked = capsuleRow()
+            assertEquals(OutboxCapsuleState.FINALIZING, parked.state)
+            assertEquals("SEND_LIMIT_REACHED", parked.lastErrorCode)
+            val paths = listOf(parked.envelopePath!!, parked.publishStatementPath!!,
+                parked.publishStatementSignaturePath!!, parked.senderRetryKeysetPath!!)
+            val bytes = paths.associateWith { File(it).readBytes().toList() }
+            reopen()
+            val enqueued = mutableListOf<String>()
+            val resumer = CapsuleUploadResumer(database.outboxCapsuleDao(), { OWNER }) { owner, capsule ->
+                assertEquals(OWNER_TYPED, owner); enqueued += capsule.toRestString()
+            }
+            assertEquals(0, resumer.resume(OWNER_TYPED).discoveredCount)
+            val restarted = orchestrator {
+                createDraft = { _, _ -> error("FINALIZING must never restage") }
+                uploadBlob = { _, _ -> error("FINALIZING must never reupload") }
+                finalizeCapsule = { request, _ ->
+                    calls++
+                    assertSameRequest(captured!!, request)
+                    CapsuleFinalizeResult.Success(CapsuleFinalize(CAPSULE_TYPED, CapsuleFinalizeState.READY, "2030-01-08T00:00:00Z"), 200)
+                }
+                cleanupRetryMaterial = { _, _ -> SenderRetryMaterialLifecycle.Result.OK }
+            }
+            assertEquals(CapsuleUploadOutcome.SendLimitReached, restarted.run(OWNER_TYPED, CAPSULE_TYPED))
+            assertEquals(1, calls); assertTrue(enqueued.isEmpty())
+            assertEquals(parked, capsuleRow())
+            paths.forEach { assertEquals(bytes[it], File(it).readBytes().toList()) }
+            assertEquals(0, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OTHER_OWNER))
+            assertEquals(parked, capsuleRow())
+            assertEquals(1, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OWNER))
+            assertEquals(parked.copy(lastErrorCode = null), capsuleRow())
+            assertEquals(0, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OWNER))
+            assertEquals(1, resumer.resume(OWNER_TYPED).enqueuedCount)
+            assertEquals(listOf(CAPSULE), enqueued)
+            assertEquals(CapsuleUploadOutcome.Succeeded, restarted.run(OWNER_TYPED, CAPSULE_TYPED))
+            assertEquals(2, calls)
+        }
+    }
+
+    @Test fun unavailable503RestartsWithExactSignedBytesAndOwnerNotANewSend() = runBlocking {
+        ambiguousRestart(CapsuleFinalizeFailure.SEND_ACCESS_UNAVAILABLE, 503)
+    }
+    @Test fun transportUnknownRestartsWithExactSignedBytesNotTerminalCleanup() = runBlocking {
+        ambiguousRestart(CapsuleFinalizeFailure.NETWORK, null)
+    }
+
+    private suspend fun ambiguousRestart(reason: CapsuleFinalizeFailure, status: Int?) = restartable { reopen ->
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+        var captured: CapsuleFinalizeRequest? = null
+        val outcome = orchestrator {
+            finalizeCapsule = { request, _ ->
+                captured = request
+                CapsuleFinalizeResult.Failure(reason, status, true)
+            }
+            cleanupRetryMaterial = { _, _ -> error("unknown finalization must keep recovery") }
+        }.run(OWNER_TYPED, CAPSULE_TYPED)
+        assertEquals(CapsuleUploadOutcome.Retryable(reason.name), outcome)
+        assertEquals(androidx.work.ListenableWorker.Result.retry(), CapsuleUploadWorker.mapOutcome(outcome))
+        val saved = capsuleRow()
+        val paths = listOf(saved.publishStatementPath!!, saved.publishStatementSignaturePath!!,
+            saved.envelopePath!!, saved.senderRetryKeysetPath!!)
+        val before = paths.associateWith { File(it).readBytes().toList() }
+        reopen()
+        assertEquals(saved, capsuleRow())
+        val enqueued = mutableListOf<String>()
+        val resumer = CapsuleUploadResumer(database.outboxCapsuleDao(), { OWNER }) { _, capsule -> enqueued += capsule.toRestString() }
+        assertEquals(CapsuleUploadResumeStatus.ACCOUNT_MISMATCH, resumer.resume(UserId.parseRest(OTHER_OWNER)).status)
+        assertEquals(1, resumer.resume(OWNER_TYPED).enqueuedCount)
+        assertEquals(listOf(CAPSULE), enqueued)
+        assertEquals(CapsuleUploadOutcome.AccountMismatch,
+            orchestrator(currentOwner = OTHER_OWNER).run(OWNER_TYPED, CAPSULE_TYPED))
+        assertEquals(saved, capsuleRow())
+        assertEquals(CapsuleUploadOutcome.Succeeded, orchestrator {
+            createDraft = { _, _ -> error("restart must not replay draft") }
+            uploadBlob = { _, _ -> error("restart must not upload again") }
+            finalizeCapsule = { request, _ ->
+                assertSameRequest(captured!!, request)
+                paths.forEach { assertEquals(before[it], File(it).readBytes().toList()) }
+                CapsuleFinalizeResult.Success(CapsuleFinalize(CAPSULE_TYPED, CapsuleFinalizeState.READY, "2030-01-08T00:00:00Z"), 200)
+            }
+        }.run(OWNER_TYPED, CAPSULE_TYPED))
+    }
+
+    @Test fun noncanonicalFinalizeReplyParksUnknownWithoutCleanupOrAutomaticAttempts() =
+        noncanonicalPark(CapsuleFinalizeFailure.HTTP)
+    @Test fun malformedSuccessParksUnknownWithoutCleanupOrAutomaticAttempts() =
+        noncanonicalPark(CapsuleFinalizeFailure.INVALID_RESPONSE)
+
+    private fun noncanonicalPark(reason: CapsuleFinalizeFailure) = runBlocking {
+        restartable { reopen ->
+            seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+            val outcome = orchestrator {
+                finalizeCapsule = { _, _ -> CapsuleFinalizeResult.Failure(reason, 409, false) }
+                cleanupRetryMaterial = { _, _ -> error("unknown is not rollback") }
+            }.run(OWNER_TYPED, CAPSULE_TYPED)
+            assertEquals(CapsuleUploadOutcome.FinalizationUnconfirmed, outcome)
+            assertEquals(androidx.work.ListenableWorker.Result.failure(), CapsuleUploadWorker.mapOutcome(outcome))
+            val saved = capsuleRow()
+            assertEquals(OutboxCapsuleState.FINALIZING, saved.state)
+            assertEquals("FINALIZE_UNCONFIRMED", saved.lastErrorCode)
+            assertTrue(File(saved.senderRetryKeysetPath!!).exists())
+            reopen()
+            assertTrue(database.outboxCapsuleDao().getCapsuleIdsNeedingUploadForOwner(OWNER).isEmpty())
+            assertEquals(CapsuleUploadOutcome.FinalizationUnconfirmed,
+                orchestrator { finalizeCapsule = { _, _ -> error("must stay parked") } }.run(OWNER_TYPED, CAPSULE_TYPED))
+            assertEquals(saved, capsuleRow())
+            assertEquals(1, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OWNER))
+            assertEquals(saved.copy(lastErrorCode = null), capsuleRow())
+        }
+    }
+
+    @Test fun realHttpMissingCode409ParksUntilExplicitSameRequestRetry() =
+        httpFinalizeAcrossRestart(409, """{"status":409,"detail":"private detail"}""", parked = true)
+
+    @Test fun realHttpMissingStatus409ParksUntilExplicitSameRequestRetry() =
+        httpFinalizeAcrossRestart(409, """{"code":"SEND_LIMIT_REACHED","detail":"private detail"}""", parked = true)
+
+    @Test fun realHttpEmpty409ParksUntilExplicitSameRequestRetry() =
+        httpFinalizeAcrossRestart(409, "{}", parked = true)
+
+    @Test fun realHttpMissingCode503RetainsAutomaticSameRequestRetry() =
+        httpFinalizeAcrossRestart(503, """{"status":503,"detail":"private detail"}""", parked = false)
+
+    @Test fun realHttpMissingStatus503RetainsAutomaticSameRequestRetry() =
+        httpFinalizeAcrossRestart(503, """{"code":"SEND_ACCESS_UNAVAILABLE","detail":"private detail"}""", parked = false)
+
+    @Test fun realHttpValidUnavailable503RetainsAutomaticSameRequestRetry() =
+        httpFinalizeAcrossRestart(
+            503,
+            """{"type":"about:blank","title":"SEND_ACCESS_UNAVAILABLE","status":503,"code":"SEND_ACCESS_UNAVAILABLE","detail":"private detail","request_id":"0198f0a0-0000-7000-8000-00000000ac01","retryable":true}""",
+            parked = false,
+            retryCode = "SEND_ACCESS_UNAVAILABLE",
+        )
+
+    // Real HTTP finalizer + production orchestrator + file-backed Room. Draft/blob and
+    // cleanup remain existing test seams; this is not a live publish or cleanup proof.
+    private fun httpFinalizeAcrossRestart(
+        status: Int,
+        body: String,
+        parked: Boolean,
+        retryCode: String = "INTERNAL_UNAVAILABLE",
+    ) = runBlocking {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val stack = ProductionApiStack.create(
+                ApiBaseUrl.parse(server.url("/").toString()),
+                AuthTokenHolder("access-token", "synthetic-refresh"),
+                RefreshTokenReader { null },
+                object : SessionRotationSink {
+                    override fun rotate(accessToken: String, refreshToken: String, ownerUserId: UserId) = Unit
+                    override fun clear() = Unit
+                },
+            )
+            stack.sessionRefreshCoordinator.install(OWNER_TYPED)
+            val expected = if (parked) CapsuleUploadOutcome.FinalizationUnconfirmed
+                else CapsuleUploadOutcome.Retryable(retryCode)
+            restartable { reopen ->
+                seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+                val staged = capsuleRow()
+                val paths = listOf(staged.publishStatementPath!!, staged.publishStatementSignaturePath!!,
+                    staged.envelopePath!!, staged.senderRetryKeysetPath!!)
+                val bytes = paths.associateWith { File(it).readBytes().toList() }
+                val captured = mutableListOf<CapsuleFinalizeRequest>()
+                val decoded = mutableListOf<CapsuleFinalizeResult>()
+                var owner = OWNER
+                var cleanupCalls = 0
+                server.enqueue(MockResponse.Builder().code(status)
+                    .setHeader("Content-Type", "application/problem+json").body(body).build())
+                val first = orchestrator {
+                    finalizeCapsule = { request, token ->
+                        captured += request
+                        stack.capsuleFinalizeRepository.finalize(request, token).also { decoded += it }
+                    }
+                    cleanupRetryMaterial = { _, _ -> error("unconfirmed finalization must retain recovery") }
+                }
+                val outcome = first.run(OWNER_TYPED, CAPSULE_TYPED)
+                assertEquals(1, decoded.size)
+                val failure = decoded.single() as CapsuleFinalizeResult.Failure
+                assertEquals(if (retryCode == "SEND_ACCESS_UNAVAILABLE") CapsuleFinalizeFailure.SEND_ACCESS_UNAVAILABLE
+                    else CapsuleFinalizeFailure.HTTP, failure.reason)
+                assertEquals(status, failure.httpStatus)
+                assertEquals(!parked, failure.retryable)
+                assertEquals(expected, outcome)
+                assertFalse(outcome.toString().contains("private detail"))
+                assertEquals(
+                    if (parked) androidx.work.ListenableWorker.Result.failure() else androidx.work.ListenableWorker.Result.retry(),
+                    CapsuleUploadWorker.mapOutcome(outcome),
+                )
+                assertEquals(1, server.requestCount)
+                val firstWire = server.takeRequest()
+                val firstBody = firstWire.body!!.toByteArray().toList()
+                assertEquals("POST", firstWire.method)
+                assertEquals("/v1/capsules/$CAPSULE/finalize", firstWire.url.encodedPath)
+                assertEquals("Bearer access-token", firstWire.headers["Authorization"])
+                assertNull(firstWire.headers["Idempotency-Key"])
+                val saved = capsuleRow()
+                assertEquals(staged.copy(state = OutboxCapsuleState.FINALIZING,
+                    lastErrorCode = if (parked) "FINALIZE_UNCONFIRMED" else retryCode), saved)
+                assertTrue(blobRows().all { it.uploadState == OutboxBlobUploadState.STORED && it.attemptCount == 1 })
+
+                // Queue a finite response before negative checks: an unintended HTTP call
+                // fails the assertions instead of waiting forever for an unqueued reply.
+                server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "application/json")
+                    .body("""{"capsule_id":"$CAPSULE","state":"READY","ready_at":"2030-01-08T00:00:00Z"}""").build())
+                reopen()
+                val enqueued = mutableListOf<String>()
+                val resumer = CapsuleUploadResumer(database.outboxCapsuleDao(), { owner }) { actualOwner, capsule ->
+                    assertEquals(OWNER_TYPED, actualOwner)
+                    enqueued += capsule.toRestString()
+                }
+                val restarted = orchestrator(currentOwnerProvider = { owner }) {
+                    createDraft = { _, _ -> error("retry must not restage") }
+                    uploadBlob = { _, _ -> error("retry must not reupload") }
+                    finalizeCapsule = { request, token ->
+                        captured += request
+                        assertSameRequest(captured.first(), request)
+                        paths.forEach { assertEquals(bytes[it], File(it).readBytes().toList()) }
+                        stack.capsuleFinalizeRepository.finalize(request, token)
+                    }
+                    cleanupRetryMaterial = { actualOwner, capsule ->
+                        assertEquals(OWNER_TYPED, actualOwner)
+                        assertEquals(CAPSULE_TYPED, capsule)
+                        assertEquals(OutboxCapsuleState.PUBLISHED, capsuleRow().state)
+                        cleanupCalls++
+                        SenderRetryMaterialLifecycle.Result.OK
+                    }
+                }
+                assertEquals(saved, capsuleRow())
+                owner = OTHER_OWNER
+                assertEquals(CapsuleUploadOutcome.AccountMismatch, restarted.run(OWNER_TYPED, CAPSULE_TYPED))
+                assertEquals(CapsuleUploadResumeStatus.ACCOUNT_MISMATCH, resumer.resume(OWNER_TYPED).status)
+                assertEquals(0, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OTHER_OWNER))
+                assertEquals(saved, capsuleRow())
+                assertEquals(1, server.requestCount)
+                assertTrue(enqueued.isEmpty())
+                owner = OWNER
+                if (parked) {
+                    assertEquals(0, resumer.resume(OWNER_TYPED).discoveredCount)
+                    // A stale already-enqueued worker must also stop at the durable marker.
+                    val staleWorkerOutcome = restarted.run(OWNER_TYPED, CAPSULE_TYPED)
+                    assertEquals(expected, staleWorkerOutcome)
+                    assertEquals(androidx.work.ListenableWorker.Result.failure(), CapsuleUploadWorker.mapOutcome(staleWorkerOutcome))
+                    assertEquals(1, server.requestCount)
+                    assertTrue(enqueued.isEmpty())
+                    assertEquals(saved, capsuleRow())
+                    assertEquals(1, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OWNER))
+                    assertEquals(saved.copy(lastErrorCode = null), capsuleRow())
+                    assertEquals(0, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OWNER))
+                } else {
+                    // Real/malformed 503 remain discoverable without an explicit release.
+                    assertEquals(0, database.outboxCapsuleDao().releaseParkedFinalizeForOwner(CAPSULE, OWNER))
+                }
+                assertEquals(0, cleanupCalls)
+                paths.forEach { assertEquals(bytes[it], File(it).readBytes().toList()) }
+                assertEquals(1, resumer.resume(OWNER_TYPED).enqueuedCount)
+                assertEquals(listOf(CAPSULE), enqueued)
+                assertEquals(CapsuleUploadOutcome.Succeeded, restarted.run(OWNER_TYPED, CAPSULE_TYPED))
+                assertEquals(2, server.requestCount)
+                assertEquals(2, captured.size)
+                val secondWire = server.takeRequest()
+                assertEquals(firstWire.method, secondWire.method)
+                assertEquals(firstWire.url.encodedPath, secondWire.url.encodedPath)
+                assertEquals(firstWire.headers["Authorization"], secondWire.headers["Authorization"])
+                assertNull(secondWire.headers["Idempotency-Key"])
+                assertEquals(firstBody, secondWire.body!!.toByteArray().toList())
+                assertEquals(saved.copy(state = OutboxCapsuleState.PUBLISHED,
+                    lastErrorCode = if (parked) null else retryCode), capsuleRow())
+                assertEquals(1, cleanupCalls)
+            }
+        } finally {
+            server.close()
+        }
+    }
+
+    private fun assertSameRequest(first: CapsuleFinalizeRequest, next: CapsuleFinalizeRequest) {
+        assertEquals(first.capsuleId, next.capsuleId)
+        assertEquals(first.senderKeyBundleId, next.senderKeyBundleId)
+        assertEquals(first.recipientKeyBundleId, next.recipientKeyBundleId)
+        assertTrue(first.statement.contentEquals(next.statement))
+        assertTrue(first.signature.contentEquals(next.signature))
+        assertTrue(first.recipientEnvelopeCiphertext.contentEquals(next.recipientEnvelopeCiphertext))
+        assertTrue(first.recipientEnvelopeCiphertextSha256.contentEquals(next.recipientEnvelopeCiphertextSha256))
+    }
+
+    private suspend fun restartable(block: suspend (() -> Unit) -> Unit) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "t387-restart-" + UUID.randomUUID()
+        fun reopen() {
+            database.close()
+            database = Room.databaseBuilder(context, RemanenceLocalDatabase::class.java, name)
+                .allowMainThreadQueries().build()
+        }
+        reopen()
+        try { block(::reopen) } finally { database.close(); context.deleteDatabase(name) }
     }
 
     private fun orchestrator(

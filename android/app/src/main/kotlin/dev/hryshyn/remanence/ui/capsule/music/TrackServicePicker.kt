@@ -39,7 +39,9 @@ internal fun rememberTrackServiceAction(
         onDismissRequest = { noHandler = false },
         text = { Text(stringResource(R.string.track_no_handler), Modifier.testTag("capsule_track_no_browser")) },
         confirmButton = {
-            HoldTextButton(onClick = { noHandler = false }) { Text(stringResource(R.string.hold_close)) }
+            HoldTextButton(onClick = { noHandler = false }, modifier = Modifier.testTag("capsule_track_error_close")) {
+                Text(stringResource(R.string.hold_close))
+            }
         },
     )
     return { pickerOpen = true; noHandler = false }

@@ -23,6 +23,8 @@ fun RecoveryPanel(hasIdentity: Boolean, recoveryRequired: Boolean, mandatorySetu
                   onProtect: () -> Unit, onAnotherManager: () -> Unit, onRestore: () -> Unit,
                   onContinue: () -> Unit, onToggleCode: () -> Unit, onCodeChange: (String) -> Unit,
                   onRestoreCode: () -> Unit, onHideCode: () -> Unit,
+                  awaitingVerification: Boolean = false,
+                  creationUncertain: Boolean = false,
                   codeContent: @Composable () -> Unit = {}) {
     var manualCode by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(HoldSpace.Group)) {
@@ -36,7 +38,11 @@ fun RecoveryPanel(hasIdentity: Boolean, recoveryRequired: Boolean, mandatorySetu
         else if (hasIdentity) {
             if (!verified) HoldButton(enabled = !busy, onClick = onProtect,
                 modifier = Modifier.fillMaxWidth().testTag("recovery_save")) {
-                RecoveryActionLabel(busy, R.string.recovery_save)
+                RecoveryActionLabel(busy, when {
+                    awaitingVerification -> R.string.rework_verify_key
+                    creationUncertain -> R.string.atomic_registration_check
+                    else -> R.string.rework_create_key
+                })
             }
             if (verified) {
                 Text(stringResource(R.string.access_verified_detail), style = MaterialTheme.typography.bodyMedium,
@@ -52,14 +58,9 @@ fun RecoveryPanel(hasIdentity: Boolean, recoveryRequired: Boolean, mandatorySetu
                 Text(stringResource(R.string.recovery_another_manager))
             }
         } else {
-            val label = if (recoveryRequired) R.string.recovery_restore_signed_in else R.string.recovery_sign_in
-            if (recoveryRequired) HoldButton(enabled = !busy, onClick = onRestore,
+            val label = if (recoveryRequired) R.string.recovery_restore_signed_in else R.string.rework_signin_action
+            HoldButton(enabled = !busy, onClick = onRestore,
                 modifier = Modifier.fillMaxWidth().testTag("recovery_restore")) { RecoveryActionLabel(busy, label) }
-            else {
-                HoldSecondaryButton(enabled = !busy, onClick = onRestore,
-                    modifier = Modifier.fillMaxWidth().testTag("recovery_restore")) { RecoveryActionLabel(busy, label) }
-                Text(stringResource(R.string.access_passkey_detail), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
-            }
         }
         if (recoveryRequired) {
             HoldTextButton(onClick = { manualCode = !manualCode }, enabled = !busy,

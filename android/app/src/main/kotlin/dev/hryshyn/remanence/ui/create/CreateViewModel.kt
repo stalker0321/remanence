@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.ui.create
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.setValue
 import android.graphics.BitmapFactory
 import android.util.Log
@@ -205,7 +206,12 @@ class CreateViewModel(
         data class RetryableFailure(val errorCode: String?) : CreateUploadStatus
         data class TerminalFailure(val errorCode: String?) : CreateUploadStatus
         data object Published : CreateUploadStatus
+        data class PublicationIssue(val kind: PublicationIssueKind, val durable: Boolean) : CreateUploadStatus
     }
+    enum class PublicationIssueKind { LIMIT, ACCESS_UNAVAILABLE, UNKNOWN }
+    // This is an invocation fence, not new key persistence or a pending outbox.
+    private var pendingFinalizeAttempt: Pair<UserId, String>? = null
+    private var finalizingQueueRefused = false
 
     sealed interface CapsuleRevokeStatus {
         data object Idle : CapsuleRevokeStatus
@@ -240,6 +246,7 @@ class CreateViewModel(
 
     private val sessionStore = CreateSessionStore()
     private val recipientFlow = CreateRecipientFlow(pickerVm, sessionStore)
+    private var pendingPickerResolution: RecipientLookupUiState.Resolved? = null
 
     val confirmedRecipient: StateFlow<ResolvedHandleSnapshot?> get() = sessionStore.confirmedRecipient
 
@@ -523,10 +530,16 @@ class CreateViewModel(
     )
 
     /** Positive Ready inputs by candidate id (equality-checked on every use). */
-    private val drawableInputs = mutableMapOf<String, PrepareInputs>()
+    private val drawableInputs = mutableStateMapOf<String, PrepareInputs>()
 
     /** Drawable inputs recorded alongside the frozen selection, if any. */
-    private var frozenDrawableInputs: PrepareInputs? = null
+    private var frozenDrawableInputs: PrepareInputs? by mutableStateOf(null)
+
+    internal val isFrozenCollageDrawable: Boolean
+        get() = frozenCollageSelection != null && frozenDrawableInputs == prepareInputs()
+
+    internal val isDisplayedCollageDrawable: Boolean
+        get() = collageChoices.displayed?.let { drawableMatches(it.candidateId) } == true
 
     /** Current positive drawable evidence for [candidateId], if any. */
     private fun drawableMatches(candidateId: String): Boolean =
@@ -539,13 +552,26 @@ class CreateViewModel(
      * fail-closed: the sheet flipped Ready→Rejected (e.g. late artwork
      * changing the measured band).
      */
-    internal fun onCandidatePrepared(candidateId: String, ready: Boolean, inputs: PrepareInputs) {        if (ready) {
+    internal fun onCandidatePrepared(candidateId: String, ready: Boolean, inputs: PrepareInputs) {
+        if (collageChoices.candidates.none { it.candidateId == candidateId }) return
+        if (inputs != prepareInputs()) {
+            // An inconsistent report cannot leave this candidate approved.
+            // Keep authored edits, but require a fresh matching Ready result.
+            drawableInputs.remove(candidateId)
+            if (frozenCollageSelection?.candidateId == candidateId) frozenDrawableInputs = null
+            return
+        }
+        if (ready) {
             drawableInputs[candidateId] = inputs
+            // Keep the authored choice through host recreation, but permit it
+            // only after the NEW host has actually prepared the same sheet.
+            if (frozenCollageSelection?.candidateId == candidateId &&
+                collageChoices.selected?.candidateId == candidateId) {
+                frozenDrawableInputs = inputs
+            }
         } else {
             drawableInputs.remove(candidateId)
-            if (frozenCollageSelection?.candidateId == candidateId &&
-                frozenDrawableInputs == inputs
-            ) {
+            if (frozenCollageSelection?.candidateId == candidateId) {
                 frozenCollageSelection = null
                 frozenDrawableInputs = null
             }
@@ -1018,6 +1044,7 @@ class CreateViewModel(
      */
     val collageChoices = CollageChoiceSession().also { session ->
         session.onTelemetryInvalidated = { telemetrySession?.reset() }
+        session.onReadinessInvalidated = ::clearDrawableProofs
         session.beginDraft(_capsuleId)
         session.onCandidatesReplaced = {
             telemetrySession?.reset()
@@ -1311,6 +1338,7 @@ class CreateViewModel(
         _step.value = Step.RECIPIENT_LOOKUP
         // FIX-M1-ONDEVICE-01: pending and confirmed recipient material both die.
         recipientFlow.clearTransientMaterial()
+        pendingPickerResolution = null
         pickerVm.reset()
         photoSelection.clear()
         _pickedPhotoIds.value = emptyList()
@@ -1357,13 +1385,30 @@ class CreateViewModel(
         capsuleId: String,
     ) {
         if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
+        // A pending-v2 attempt has no v1 outbox row. A late/null Room
+        // projection must not erase its finalizer outcome or confirmed code.
+        if (pendingFinalizeAttempt == (owner to capsuleId)) return
+        val localQueueFailure = _uploadStatus.value == CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
+        // ENCRYPTED proves durable recovery material, not scheduler admission.
+        // Room may deliver this older staging projection after enqueue refused.
+        // Keep the local failure until explicit retry or actual worker progress.
+        if (localQueueFailure && (status == null || status.state == OutboxCapsuleState.PREPARING ||
+                status.state == OutboxCapsuleState.ENCRYPTED)) return
+        // Clearing our own parking marker is not scheduler/worker admission.
+        if (localQueueFailure && finalizingQueueRefused &&
+            status?.state == OutboxCapsuleState.FINALIZING && status.lastErrorCode == null) return
         val mapped = when (status?.state) {
             null -> CreateUploadStatus.NotStarted
             OutboxCapsuleState.PREPARING,
             OutboxCapsuleState.ENCRYPTED,
             OutboxCapsuleState.UPLOADING,
-            OutboxCapsuleState.FINALIZING,
             -> CreateUploadStatus.Pending(status.state)
+            OutboxCapsuleState.FINALIZING -> when (status.lastErrorCode) {
+                "SEND_LIMIT_REACHED" -> CreateUploadStatus.PublicationIssue(PublicationIssueKind.LIMIT, true)
+                "SEND_ACCESS_UNAVAILABLE" -> CreateUploadStatus.PublicationIssue(PublicationIssueKind.ACCESS_UNAVAILABLE, true)
+                "FINALIZE_UNCONFIRMED" -> CreateUploadStatus.PublicationIssue(PublicationIssueKind.UNKNOWN, true)
+                else -> CreateUploadStatus.Pending(status.state)
+            }
             OutboxCapsuleState.RETRYABLE_FAILURE ->
                 CreateUploadStatus.RetryableFailure(status.lastErrorCode)
             OutboxCapsuleState.TERMINAL_FAILURE ->
@@ -1371,6 +1416,8 @@ class CreateViewModel(
             OutboxCapsuleState.PUBLISHED -> CreateUploadStatus.Published
         }
         if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
+        if (localQueueFailure) _publishError.value = null
+        if (localQueueFailure) finalizingQueueRefused = false
         _uploadStatus.value = mapped
         if (_step.value == Step.UPLOAD_PENDING || _step.value == Step.PUBLISHED) {
             if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
@@ -1380,6 +1427,14 @@ class CreateViewModel(
                 Step.UPLOAD_PENDING
             }
         }
+    }
+
+    private fun CreateUploadStatus.hasOutboxProgress(): Boolean = when (this) {
+        CreateUploadStatus.NotStarted -> false
+        is CreateUploadStatus.Pending -> state != OutboxCapsuleState.PREPARING && state != OutboxCapsuleState.ENCRYPTED
+        is CreateUploadStatus.RetryableFailure -> errorCode != "QUEUE_FAILED"
+        is CreateUploadStatus.TerminalFailure, CreateUploadStatus.Published,
+        is CreateUploadStatus.PublicationIssue -> true
     }
 
     private fun outboxObservationStillCurrent(
@@ -1392,6 +1447,20 @@ class CreateViewModel(
     // ---------------------------------------------------------------------
     // Recipient steps.
     // ---------------------------------------------------------------------
+
+    /** Shared Activity/Compose recent selection entrypoint; still a fresh lookup. */
+    fun lookupRecentRecipient(
+        suggestion: dev.hryshyn.remanence.core.data.network.RecentRecipient,
+        ownerUserId: String?,
+        epoch: Long,
+    ) {
+        // A callback captured by an obsolete Activity/session cannot replace
+        // the current lookup's expectation, even for the same handle.
+        if (_step.value != Step.RECIPIENT_LOOKUP || ownerUserId == null ||
+            sessionOwner?.toRestString() != ownerUserId || begunEpoch != epoch) return
+        onHandleChange(suggestion.handle)
+        pickerVm.lookupRecent(suggestion.userId)
+    }
 
     fun onHandleChange(value: String) {
         selfLookupJob?.cancel()
@@ -1473,8 +1542,16 @@ class CreateViewModel(
         _selfRecipientLookupRejected.value = false
     }
 
+    /** Only the currently admitted picker result can advance its Compose effect. */
+    fun onPickerResolved(resolution: RecipientLookupUiState.Resolved) {
+        if (pickerVm.state.value !== resolution) return
+        onResolved(resolution.snapshot)
+        if (pendingRecipient.value === resolution.snapshot) pendingPickerResolution = resolution
+    }
+
     fun onResolved(snapshot: ResolvedHandleSnapshot) {
         if (!requireStep(Step.RECIPIENT_LOOKUP, "recipient resolution")) return
+        pendingPickerResolution = null
         selfRecipientTargetUserId?.let { expectedOwner ->
             val live = pickerVm.state.value as? RecipientLookupUiState.Resolved
             if (snapshot.userId.toRestString() != expectedOwner ||
@@ -1494,6 +1571,14 @@ class CreateViewModel(
         // recipient operation. Keep the immutable confirmed snapshot.
         if (_step.value == Step.FRONT && confirmedRecipient.value != null) return
         if (!requireStep(Step.RECIPIENT_CONFIRM, "recipient confirmation")) return
+        pendingPickerResolution?.let { resolution ->
+            if (pickerVm.state.value !== resolution) {
+                // A synchronous logout/input boundary may precede the next
+                // Activity frame. Do not bind the now-retired pending result.
+                restartLookup()
+                return
+            }
+        }
         try {
             recipientFlow.onConfirm()
         } catch (failure: IllegalStateException) {
@@ -1510,6 +1595,7 @@ class CreateViewModel(
             return
         }
         recipientFlow.restartLookup()
+        pendingPickerResolution = null
         selfRecipientTargetUserId = null
         _selfRecipientLookupRejected.value = false
         // The lookup screen observes Resolved and advances to confirmation.
@@ -1808,6 +1894,14 @@ class CreateViewModel(
     }
 
     fun startPublishing() {
+        if (pendingFinalizeAttempt == (sessionOwner to _capsuleId)) {
+            if (_step.value != Step.PUBLISHED) {
+                if (_uploadStatus.value !is CreateUploadStatus.PublicationIssue)
+                    showPendingPublicationIssue(PublicationIssueKind.UNKNOWN)
+                else _step.value = Step.UPLOAD_PENDING
+            }
+            return
+        }
         if (!requireStep(Step.COMPOSE, "publishing")) return
         if (frontFingerprintId == null) {
             failGuard("front must be captured before publishing")
@@ -2141,6 +2235,7 @@ class CreateViewModel(
         val epoch = generatorSessionEpoch ?: 0L
         val note = if (noteEditor.isEmpty) null else noteEditor.text
         previewJob = viewModelScope.launch {
+            try {
             val result = generatorPreviewCoordinator.compute(ownerId, epoch, ids, note)
             if (generation == previewGeneration) {
                 // A non-empty note previews as NotePending before any Ready;
@@ -2152,6 +2247,17 @@ class CreateViewModel(
                     maybeBuildCropSource(ids)
                 }
                 _generatorPreview.value = result
+            }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Preparation is not publication. Keep the current form and
+                // durable FRONT/capsule ID, with no automatic retry or raw
+                // exception text. An obsolete failure cannot retire a newer
+                // preview, source or retained-original owner.
+                if (generation == previewGeneration) {
+                    _generatorPreview.value = GeneratorPreviewState.Unavailable("preview preparation failed")
+                }
             }
         }
     }
@@ -2167,8 +2273,10 @@ class CreateViewModel(
         val factory = collageSourceFactory ?: return
         if (collageCropSource != null) return
         if (cropSourceBuiltIds == photoIds) return
-        cropSourceBuiltIds = photoIds.toList()
         collageCropSource = factory.create(retainedOriginals)
+        // Commit after construction: an ordinary factory failure must not
+        // poison an explicit note/edit retry for the same selected photos.
+        cropSourceBuiltIds = photoIds.toList()
     }
 
     /** Drops collage holder/source ownership (zeroized/closed). */
@@ -2178,6 +2286,10 @@ class CreateViewModel(
         collageCropSource = null
         cropSourceBuiltIds = null
         retainedOriginals.clear()
+        // The preview cache is backed by these originals, not just picker
+        // IDs. Reusing it after a photo revision would skip the retain sink.
+        // Drop references only: the outgoing host may still draw its JPEGs.
+        generatorPreviewCoordinator.reset()
     }
 
     /** Drops all preview ownership (sources + in-flight load) on any change. */
@@ -2187,6 +2299,7 @@ class CreateViewModel(
         previewGeneration += 1
         _generatorPreview.value = GeneratorPreviewState.Idle
         generatorPreviewCoordinator.zeroize()
+        collageChoices.clear()
         frozenCollageSelection = null
         frozenDrawableInputs = null
         clearDrawableProofs()
@@ -2668,8 +2781,11 @@ class CreateViewModel(
                     // Ciphertext is already durably staged. Never send the
                     // user through sealing again (stage rejects replay).
                     if (!isPublishCurrent(generation)) return
-                    if (_uploadStatus.value is CreateUploadStatus.Published) {
-                        _step.value = Step.PUBLISHED
+                    // An already-running worker can make progress before a
+                    // refused/lost scheduler ACK. Its state wins in either order.
+                    if (_uploadStatus.value.hasOutboxProgress()) {
+                        _step.value = if (_uploadStatus.value is CreateUploadStatus.Published)
+                            Step.PUBLISHED else Step.UPLOAD_PENDING
                         return
                     }
                     _uploadStatus.value = CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
@@ -2779,6 +2895,13 @@ class CreateViewModel(
                 // instead of re-pinning a fresh lease, so a same-owner
                 // replacement across the staging awaits fails closed.
                 expectedLease = inputs.pendingLease,
+                onFinalizeStarted = {
+                    // Called BEFORE the final POST, including its cancellation/lost reply.
+                    if (isPublishCurrent(generation) && sessionOwner == inputs.owner &&
+                        _capsuleId == inputs.capsuleId) {
+                        pendingFinalizeAttempt = inputs.owner to inputs.capsuleId
+                    }
+                },
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -2795,9 +2918,22 @@ class CreateViewModel(
                 _step.value = Step.PUBLISHED
             }
             is dev.hryshyn.remanence.pending.PendingBoundaryPublish.Result.Failed -> {
-                failPublishing(pendingBoundaryMessage(result.reason), generation)
+                if (!isPublishCurrent(generation)) return
+                if (pendingFinalizeAttempt == (inputs.owner to inputs.capsuleId)) {
+                    showPendingPublicationIssue(when (result.reason) {
+                        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.SEND_LIMIT_REACHED -> PublicationIssueKind.LIMIT
+                        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.SEND_ACCESS_UNAVAILABLE -> PublicationIssueKind.ACCESS_UNAVAILABLE
+                        else -> PublicationIssueKind.UNKNOWN
+                    })
+                } else failPublishing(pendingBoundaryMessage(result.reason), generation)
             }
         }
+    }
+
+    private fun showPendingPublicationIssue(kind: PublicationIssueKind) {
+        _publishError.value = null
+        _uploadStatus.value = CreateUploadStatus.PublicationIssue(kind, durable = false)
+        _step.value = Step.UPLOAD_PENDING
     }
 
     private fun pendingBoundaryMessage(
@@ -2818,6 +2954,10 @@ class CreateViewModel(
             "that address can't be used for code sending"
         dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.GENERIC ->
             "publishing failed"
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.SEND_LIMIT_REACHED,
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.SEND_ACCESS_UNAVAILABLE,
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.FINALIZE_UNKNOWN ->
+            "publication is not confirmed"
     }
 
     private fun failPublishing(
@@ -2840,19 +2980,33 @@ class CreateViewModel(
         val dao = outboxCapsuleDao ?: return
         _uploadRetrying.value = true
         uploadRetryJob = viewModelScope.launch {
+            var statusBeforeEnqueue: CreateUploadStatus? = null
+            var retryingFinalization = false
             try {
                 val row = dao.getByCapsuleIdAndOwner(capsule, owner.toRestString()) ?: return@launch
                 if (!outboxObservationStillCurrent(generation, owner, capsule)) return@launch
                 // In-flight chains keep their scheduler/backoff. Terminal,
                 // published and preparation-only rows cannot be retried here.
-                if (row.state != OutboxCapsuleState.ENCRYPTED &&
+                val parkedLimit = row.state == OutboxCapsuleState.FINALIZING &&
+                    row.lastErrorCode in setOf("SEND_LIMIT_REACHED", "FINALIZE_UNCONFIRMED")
+                val refusedFinalization = finalizingQueueRefused && row.state == OutboxCapsuleState.FINALIZING &&
+                    row.lastErrorCode == null
+                if (!parkedLimit && !refusedFinalization && row.state != OutboxCapsuleState.ENCRYPTED &&
                     row.state != OutboxCapsuleState.RETRYABLE_FAILURE) return@launch
                 val liveOwner = identityProvider()?.userId
                 if (liveOwner != owner.toRestString() ||
                     !outboxObservationStillCurrent(generation, owner, capsule)) return@launch
                 val expectedStatus = _uploadStatus.value
+                statusBeforeEnqueue = expectedStatus
+                retryingFinalization = parkedLimit || refusedFinalization
+                if (parkedLimit) {
+                    if (dao.releaseParkedFinalizeForOwner(capsule, owner.toRestString()) != 1) return@launch
+                    if (!outboxObservationStillCurrent(generation, owner, capsule) ||
+                        identityProvider()?.userId != owner.toRestString()) return@launch
+                }
                 enqueueUpload(owner, CapsuleId.parseRest(capsule))
                 if (outboxObservationStillCurrent(generation, owner, capsule)) {
+                    finalizingQueueRefused = false
                     _publishError.value = null
                     // A fast worker may already have emitted a newer state.
                     // Never repaint Published/a fresh failure with our old row.
@@ -2865,7 +3019,14 @@ class CreateViewModel(
             } catch (_: Exception) {
                 if (outboxObservationStillCurrent(generation, owner, capsule) &&
                     _step.value == Step.UPLOAD_PENDING && _uploadStatus.value !is CreateUploadStatus.Published) {
-                    _uploadStatus.value = CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
+                    // Do not overwrite a worker observation delivered during
+                    // this attempt; an unchanged prior failure is still retryable.
+                    if (_uploadStatus.value == statusBeforeEnqueue || !_uploadStatus.value.hasOutboxProgress() ||
+                        (retryingFinalization && _uploadStatus.value == CreateUploadStatus.Pending(OutboxCapsuleState.FINALIZING))) {
+                        finalizingQueueRefused = retryingFinalization
+                        _uploadStatus.value = CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
+                        _publishError.value = "upload could not be queued; retry available"
+                    }
                 }
             } finally {
                 if (generation == createSessionGeneration) _uploadRetrying.value = false
@@ -2874,6 +3035,7 @@ class CreateViewModel(
     }
 
     private fun cancelDeliveryAndRetry() {
+        finalizingQueueRefused = false
         frontDeliveryJob?.cancel(); frontDeliveryJob = null
         uploadRetryJob?.cancel(); uploadRetryJob = null
         _uploadRetrying.value = false
@@ -2937,6 +3099,7 @@ class CreateViewModel(
             bridge.cancel(context, sessionId)
         }
         recipientFlow.clearTransientMaterial()
+        pendingPickerResolution = null
         pickerVm.reset()
         photoSelection.clear()
         _pickedPhotoIds.value = emptyList()

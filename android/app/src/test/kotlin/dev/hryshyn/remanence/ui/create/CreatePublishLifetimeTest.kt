@@ -13,6 +13,14 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Job
+import androidx.lifecycle.viewModelScope
+import dev.hryshyn.remanence.core.data.db.OutboxCapsuleDao
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -54,10 +62,10 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  * publish can neither stage an outbox row nor mutate step/error of any newer
  * session. Duplicate taps stay a single publish.
  */
-private fun lifetimeSynthetic(side: FingerprintSide): ProcessedStill.Accepted {
+private fun lifetimeSynthetic(seed: Int): ProcessedStill.Accepted {
         return ProcessedStill.Accepted(
         profileId = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.PROFILE_ID,
-        serializedBytes = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(6),
+        serializedBytes = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(seed),
     )
 }
 
@@ -68,6 +76,8 @@ private fun lifetimeSynthetic(side: FingerprintSide): ProcessedStill.Accepted {
 class CreatePublishLifetimeTest {
 
     private val testDispatcher = UnconfinedTestDispatcher()
+    private val ownedViewModels = CreateTestViewModels(testDispatcher.scheduler)
+    private var nextFrontSeed = 6
 
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var stagingDir: File
@@ -80,8 +90,6 @@ class CreatePublishLifetimeTest {
     private val testKekBoundary = SoftwareKekBoundary()
     private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
     private lateinit var testWrapper: SenderRetryKeysetWrapper
-
-    private val bridge = dev.hryshyn.remanence.create.MemoryGeneratorBridge()
 
     @Before
     fun setUp() {
@@ -100,6 +108,8 @@ class CreatePublishLifetimeTest {
 
     @After
     fun tearDown() {
+        runBlocking { withTimeout(10_000) { ownedViewModels.clearAndJoin() } }
+        assertTrue(ownedViewModels.allCompleted)
         Dispatchers.resetMain()
         if (::database.isInitialized) database.close()
         stagingDir.deleteRecursively()
@@ -110,8 +120,8 @@ class CreatePublishLifetimeTest {
     // Fixtures.
     // ------------------------------------------------------------------
 
-    private class Accepting(private val side: FingerprintSide) : StillProcessor {
-        override fun process(jpegBytes: ByteArray): ProcessedStill = lifetimeSynthetic(side)
+    private class Accepting(private val seed: Int) : StillProcessor {
+        override fun process(jpegBytes: ByteArray): ProcessedStill = lifetimeSynthetic(seed)
     }
 
 
@@ -212,8 +222,12 @@ class CreatePublishLifetimeTest {
         revoke: CapsuleRevokePort? = null,
         networkConnected: () -> Boolean = { true },
         accessToken: String? = null,
+        observation: OutboxCapsuleDao = database.outboxCapsuleDao(),
     ): CreateViewModel {
         val persistence = RecordingPersistence()
+        // Ordering controls create independent VMs in one method. Sharing a
+        // bridge would incorrectly reuse an earlier VM's retired epoch.
+        val bridge = dev.hryshyn.remanence.create.MemoryGeneratorBridge()
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
@@ -230,7 +244,10 @@ class CreatePublishLifetimeTest {
                     )
                 }
             },
-            frontProcessor = Accepting(FingerprintSide.FRONT),
+            // The real duplicate guard hashes canonical FRONT fingerprint
+            // bytes, not the input JPEG. Independent scenarios need distinct
+            // valid fingerprints; never disable or clear duplicate protection.
+            frontProcessor = Accepting(nextFrontSeed++),
             // C3 authoritative cutover: normalization runs once inside the
             // G4B bind; the publisher consumes bind results through the bridge.
             generatorBridgeProvider = bridge.provider,
@@ -244,10 +261,11 @@ class CreatePublishLifetimeTest {
                 dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id)
             },
             enqueueUpload = enqueueUpload,
-            outboxCapsuleDao = database.outboxCapsuleDao(),
+            outboxCapsuleDao = observation,
             capsuleRevoke = revoke,
             networkConnected = networkConnected,
         )
+        ownedViewModels.own(vm)
         vm.beginSession(1L, userUuid.toString())
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
@@ -269,9 +287,7 @@ class CreatePublishLifetimeTest {
         assertEquals(1, dao.beginUploadForOwner(vm.capsuleId, userUuid.toString()))
         assertEquals(1, dao.beginFinalizeForOwner(vm.capsuleId, userUuid.toString()))
         assertEquals(1, dao.markPublishedForOwner(vm.capsuleId, userUuid.toString()))
-        awaitCondition("published status") {
-            vm.uploadStatus.value == CreateViewModel.CreateUploadStatus.Published
-        }
+        awaitUpload(vm, CreateViewModel.CreateUploadStatus.Published)
         assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
     }
 
@@ -321,6 +337,322 @@ class CreatePublishLifetimeTest {
         assertNotNull(row)
         assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
         assertTrue(row.senderRetryKeysetPath == null || File(row.senderRetryKeysetPath!!).exists())
+    }
+
+    @Test fun encryptedObservationAfterEnqueueRefusalMustKeepQueueFailure() = runBlocking {
+        controlledQueueFailure(encryptedBeforeFailure = false)
+    }
+
+    @Test fun encryptedObservationBeforeEnqueueRefusalIsAnInverseControl() = runBlocking {
+        controlledQueueFailure(encryptedBeforeFailure = true)
+    }
+
+    private suspend fun controlledQueueFailure(encryptedBeforeFailure: Boolean) {
+        val owner = userUuid.toString()
+        val observation = ControlledOutboxObservation(database.outboxCapsuleDao())
+        var calls = 0
+        var encrypted: dev.hryshyn.remanence.core.data.db.OutboxCapsuleStatus? = null
+        val vm = contentStage(
+            CompletableDeferred(senderIdentity()),
+            enqueueUpload = { _, capsule ->
+                calls++
+                encrypted = observation.snapshot(capsule.toRestString(), owner)
+                assertEquals(OutboxCapsuleState.ENCRYPTED, encrypted!!.state)
+                if (encryptedBeforeFailure) observation.deliver(capsule.toRestString(), owner, encrypted)
+                throw IllegalStateException("controlled queue refusal")
+            },
+            observation = observation,
+        )
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose())
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+        val row = requireNotNull(outboxRow(vm.capsuleId))
+        val blobs = database.outboxBlobDao().getAllByCapsuleIdAndOwner(vm.capsuleId, owner)
+        assertEquals(CreateViewModel.CreateUploadStatus.RetryableFailure("QUEUE_FAILED"), vm.uploadStatus.value)
+        if (!encryptedBeforeFailure) observation.deliver(vm.capsuleId, owner, encrypted)
+        assertEquals("late ENCRYPTED must not claim queued transport",
+            CreateViewModel.CreateUploadStatus.RetryableFailure("QUEUE_FAILED"), vm.uploadStatus.value)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertEquals("upload could not be queued; retry available", vm.publishError.value)
+        assertEquals(1, calls) // no implicit retry or second publication
+        assertEquals(row, outboxRow(vm.capsuleId))
+        assertEquals(OutboxCapsuleState.ENCRYPTED, row.state)
+        assertEquals(blobs, database.outboxBlobDao().getAllByCapsuleIdAndOwner(vm.capsuleId, owner))
+        assertTrue(File(requireNotNull(row.senderRetryKeysetPath)).exists())
+    }
+
+    @Test fun realOutboxProgressAfterRefusalSupersedesQueueFailure() = runBlocking {
+        val dao = database.outboxCapsuleDao()
+        val observation = ControlledOutboxObservation(dao)
+        val owner = userUuid.toString()
+        var calls = 0
+        val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ ->
+            calls++; throw IllegalStateException("controlled refusal")
+        }, observation = observation)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        for (older in listOf(null, dev.hryshyn.remanence.core.data.db.OutboxCapsuleStatus(OutboxCapsuleState.PREPARING, null),
+            observation.snapshot(vm.capsuleId, owner))) {
+            observation.deliver(vm.capsuleId, owner, older)
+            assertEquals(CreateViewModel.CreateUploadStatus.RetryableFailure("QUEUE_FAILED"), vm.uploadStatus.value)
+        }
+        assertEquals(1, dao.beginUploadForOwner(vm.capsuleId, owner))
+        observation.deliver(vm.capsuleId, owner, observation.snapshot(vm.capsuleId, owner))
+        assertEquals(CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.UPLOADING), vm.uploadStatus.value)
+        assertNull("real progress retires only the local queue error", vm.publishError.value)
+        assertEquals(1, dao.beginFinalizeForOwner(vm.capsuleId, owner))
+        observation.deliver(vm.capsuleId, owner, observation.snapshot(vm.capsuleId, owner))
+        assertEquals(CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.FINALIZING), vm.uploadStatus.value)
+        assertEquals(1, dao.markPublishedForOwner(vm.capsuleId, owner))
+        observation.deliver(vm.capsuleId, owner, observation.snapshot(vm.capsuleId, owner))
+        assertEquals(CreateViewModel.CreateUploadStatus.Published, vm.uploadStatus.value)
+        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+        assertEquals(1, calls)
+    }
+
+    @Test fun workerProgressBeforeEnqueueRefusalMustNotBeReplacedByQueueFailure() = runBlocking {
+        val dao = database.outboxCapsuleDao()
+        val owner = userUuid.toString()
+        for (state in listOf(OutboxCapsuleState.UPLOADING, OutboxCapsuleState.FINALIZING,
+            OutboxCapsuleState.PUBLISHED, OutboxCapsuleState.RETRYABLE_FAILURE, OutboxCapsuleState.TERMINAL_FAILURE)) {
+            val observation = ControlledOutboxObservation(dao)
+            val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, capsule ->
+                val id = capsule.toRestString()
+                assertEquals(1, dao.beginUploadForOwner(id, owner))
+                if (state == OutboxCapsuleState.FINALIZING || state == OutboxCapsuleState.PUBLISHED)
+                    assertEquals(1, dao.beginFinalizeForOwner(id, owner))
+                when (state) {
+                    OutboxCapsuleState.PUBLISHED -> assertEquals(1, dao.markPublishedForOwner(id, owner))
+                    OutboxCapsuleState.RETRYABLE_FAILURE -> assertEquals(1, dao.markRetryableFailureForOwner(id, owner, "NETWORK"))
+                    OutboxCapsuleState.TERMINAL_FAILURE -> assertEquals(1, dao.markTerminalFailureForOwner(id, owner, "RECIPIENT_KEY_REVOKED"))
+                    else -> Unit
+                }
+                observation.deliver(id, owner, observation.snapshot(id, owner))
+                throw IllegalStateException("ack refused after worker progress")
+            }, observation = observation)
+            CollageFreezeFixture.freezeFirstCandidate(vm)
+            assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+            val expected = when (state) {
+                OutboxCapsuleState.PUBLISHED -> CreateViewModel.CreateUploadStatus.Published
+                OutboxCapsuleState.RETRYABLE_FAILURE -> CreateViewModel.CreateUploadStatus.RetryableFailure("NETWORK")
+                OutboxCapsuleState.TERMINAL_FAILURE -> CreateViewModel.CreateUploadStatus.TerminalFailure("RECIPIENT_KEY_REVOKED")
+                else -> CreateViewModel.CreateUploadStatus.Pending(state)
+            }
+            assertEquals(state.name, expected, vm.uploadStatus.value)
+            assertNull(state.name, vm.publishError.value)
+            assertEquals(state, outboxRow(vm.capsuleId)!!.state)
+        }
+    }
+
+    @Test fun confirmedQuotaCanBeExplicitlyRetriedWithoutNewCapsuleOrMaterial() = runBlocking {
+        val dao = database.outboxCapsuleDao()
+        val owner = userUuid.toString()
+        val observation = ControlledOutboxObservation(dao)
+        var calls = 0
+        val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ -> calls++ },
+            observation = observation)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        val capsule = vm.capsuleId
+        assertEquals(1, dao.beginUploadForOwner(capsule, owner))
+        assertEquals(1, dao.beginFinalizeForOwner(capsule, owner))
+        assertEquals(1, dao.markFinalizeRetryableForOwner(capsule, owner, "SEND_LIMIT_REACHED"))
+        observation.deliver(capsule, owner, observation.snapshot(capsule, owner))
+        assertEquals(CreateViewModel.CreateUploadStatus.PublicationIssue(CreateViewModel.PublicationIssueKind.LIMIT, true),
+            vm.uploadStatus.value)
+        val before = requireNotNull(outboxRow(capsule))
+        val paths = listOfNotNull(before.publishStatementPath, before.publishStatementSignaturePath,
+            before.envelopePath, before.senderRetryKeysetPath)
+        val bytes = paths.associateWith { File(it).readBytes().toList() }
+        assertTrue(dao.getCapsuleIdsNeedingUploadForOwner(owner).isEmpty())
+        assertEquals(1, calls)
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        assertEquals(2, calls); assertEquals(capsule, vm.capsuleId)
+        assertEquals(before.copy(lastErrorCode = null), outboxRow(capsule))
+        paths.forEach { assertEquals(bytes[it], File(it).readBytes().toList()) }
+        assertEquals(CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.FINALIZING), vm.uploadStatus.value)
+        vm.retryUpload() // now in flight; user cannot add another attempt
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        assertEquals(2, calls)
+    }
+
+    @Test fun lateUnparkProjectionCannotEraseRefusedExplicitFinalizeRetry() = runBlocking {
+        val dao = database.outboxCapsuleDao()
+        val owner = userUuid.toString()
+        val observation = ControlledOutboxObservation(dao)
+        var calls = 0
+        var refuse = true
+        val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ ->
+            calls++
+            if (calls > 1 && refuse) error("controlled explicit-finalize queue refusal")
+        }, observation = observation)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        val capsule = vm.capsuleId
+        dao.beginUploadForOwner(capsule, owner); dao.beginFinalizeForOwner(capsule, owner)
+        dao.markFinalizeRetryableForOwner(capsule, owner, "SEND_LIMIT_REACHED")
+        observation.deliver(capsule, owner, observation.snapshot(capsule, owner))
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        val unparked = requireNotNull(outboxRow(capsule))
+        observation.deliver(capsule, owner, observation.snapshot(capsule, owner))
+        assertEquals(CreateViewModel.CreateUploadStatus.RetryableFailure("QUEUE_FAILED"), vm.uploadStatus.value)
+        assertEquals(2, calls)
+        refuse = false
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        assertEquals(3, calls); assertEquals(unparked, outboxRow(capsule))
+        assertEquals(CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.FINALIZING), vm.uploadStatus.value)
+        assertNull(vm.publishError.value)
+    }
+
+    @Test fun unavailableProjectionIsHonestAndDoesNotManuallyRearmRunningRecovery() = runBlocking {
+        val dao = database.outboxCapsuleDao()
+        val owner = userUuid.toString()
+        val observation = ControlledOutboxObservation(dao)
+        var calls = 0
+        val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ -> calls++ },
+            observation = observation)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        val capsule = vm.capsuleId
+        dao.beginUploadForOwner(capsule, owner); dao.beginFinalizeForOwner(capsule, owner)
+        dao.markFinalizeRetryableForOwner(capsule, owner, "SEND_ACCESS_UNAVAILABLE")
+        observation.deliver(capsule, owner, observation.snapshot(capsule, owner))
+        assertEquals(CreateViewModel.CreateUploadStatus.PublicationIssue(CreateViewModel.PublicationIssueKind.ACCESS_UNAVAILABLE, true),
+            vm.uploadStatus.value)
+        assertNull(vm.publishError.value)
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        assertEquals(1, calls)
+        assertEquals(listOf(capsule), dao.getCapsuleIdsNeedingUploadForOwner(owner))
+        val before = requireNotNull(outboxRow(capsule))
+        vm.beginSession(2L, "9d111111-2222-4333-8444-555555555555")
+        vm.retryUpload()
+        assertEquals(1, calls); assertEquals(before, outboxRow(capsule))
+    }
+
+    @Test fun explicitRetryCanClearQueueFailureWithoutResealingOrChangingIdentity() = runBlocking {
+        val owner = userUuid.toString()
+        val observation = ControlledOutboxObservation(database.outboxCapsuleDao())
+        var calls = 0
+        var refuse = true
+        val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ ->
+            calls++
+            if (refuse) throw IllegalStateException("controlled refusal")
+        }, observation = observation)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        val row = requireNotNull(outboxRow(vm.capsuleId))
+        val encrypted = observation.snapshot(vm.capsuleId, owner)
+        observation.deliver(vm.capsuleId, owner, encrypted)
+        assertEquals(CreateViewModel.CreateUploadStatus.RetryableFailure("QUEUE_FAILED"), vm.uploadStatus.value)
+        refuse = false
+        assertEquals(1, calls)
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        assertEquals(2, calls)
+        assertEquals(CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.ENCRYPTED), vm.uploadStatus.value)
+        assertNull(vm.publishError.value)
+        assertEquals(row, outboxRow(vm.capsuleId))
+        // Retry itself may also be refused; old observation must not erase it.
+        refuse = true
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        observation.deliver(vm.capsuleId, owner, encrypted)
+        assertEquals(CreateViewModel.CreateUploadStatus.RetryableFailure("QUEUE_FAILED"), vm.uploadStatus.value)
+        assertEquals(3, calls)
+        assertEquals(row, outboxRow(vm.capsuleId))
+    }
+
+    @Test fun lateObservationAndEnqueueRefusalCannotRepaintReplacementAttemptOrOwner() = runBlocking {
+        for (replacementOwner in listOf(userUuid.toString(), "9d111111-2222-4333-8444-555555555555")) {
+            val owner = userUuid.toString()
+            val observation = ControlledOutboxObservation(database.outboxCapsuleDao())
+            val enqueuing = CompletableDeferred<Unit>()
+            val refuse = CompletableDeferred<Unit>()
+            var calls = 0
+            val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ ->
+                withContext(NonCancellable) {
+                    calls++; enqueuing.complete(Unit); refuse.await()
+                    throw IllegalStateException("late queue refusal")
+                }
+            }, observation = observation)
+            CollageFreezeFixture.freezeFirstCandidate(vm)
+            assertTrue(vm.goToCompose())
+            val rootJob = requireNotNull(vm.viewModelScope.coroutineContext[Job])
+            val previousJobs = rootJob.children.toSet()
+            vm.startPublishing()
+            try { withTimeout(10_000) { enqueuing.await() } }
+            catch (failure: kotlinx.coroutines.TimeoutCancellationException) {
+                throw AssertionError("enqueue gate not reached: step=${vm.step.value}, error=${vm.publishError.value}", failure)
+            }
+            val publishing = rootJob.children.single { it !in previousJobs }
+            val oldId = vm.capsuleId
+            val row = requireNotNull(outboxRow(oldId))
+            val late = observation.armLate(oldId, owner)
+            vm.beginSession(2L, replacementOwner)
+            try {
+                late(dev.hryshyn.remanence.core.data.db.OutboxCapsuleStatus(OutboxCapsuleState.PUBLISHED, null))
+            } finally { refuse.complete(Unit) }
+            withTimeout(10_000) { publishing.join() }
+            assertTrue(oldId != vm.capsuleId)
+            assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+            assertEquals(CreateViewModel.CreateUploadStatus.NotStarted, vm.uploadStatus.value)
+            assertNull(vm.publishError.value)
+            assertEquals(1, calls)
+            assertEquals(row, outboxRow(oldId))
+        }
+    }
+
+    @Test fun retryRefusalCannotOverwriteProgressFromAnAlreadyRunningWorker() = runBlocking {
+        val dao = database.outboxCapsuleDao()
+        val observation = ControlledOutboxObservation(dao)
+        val owner = userUuid.toString()
+        var calls = 0
+        val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, capsule ->
+            calls++
+            if (calls == 2) {
+                assertEquals(1, dao.beginUploadForOwner(capsule.toRestString(), owner))
+                observation.deliver(capsule.toRestString(), owner, observation.snapshot(capsule.toRestString(), owner))
+            }
+            throw IllegalStateException("refused ACK")
+        }, observation = observation)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        assertEquals(CreateViewModel.CreateUploadStatus.RetryableFailure("QUEUE_FAILED"), vm.uploadStatus.value)
+        vm.retryUpload()
+        withTimeout(10_000) { vm.uploadRetrying.first { !it } }
+        assertEquals(2, calls)
+        assertEquals(CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.UPLOADING), vm.uploadStatus.value)
+        assertNull(vm.publishError.value)
+        assertEquals(OutboxCapsuleState.UPLOADING, outboxRow(vm.capsuleId)!!.state)
+    }
+
+    @Test fun actualOutboxFailuresAlsoSupersedeLocalQueueFailure() = runBlocking {
+        val dao = database.outboxCapsuleDao()
+        val owner = userUuid.toString()
+        for (terminal in listOf(false, true)) {
+            val observation = ControlledOutboxObservation(dao)
+            val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ ->
+                throw IllegalStateException("refused ACK")
+            }, observation = observation)
+            CollageFreezeFixture.freezeFirstCandidate(vm)
+            assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+            val expected = if (terminal) {
+                assertEquals(1, dao.markTerminalFailureForOwner(vm.capsuleId, owner, "RECIPIENT_KEY_REVOKED"))
+                CreateViewModel.CreateUploadStatus.TerminalFailure("RECIPIENT_KEY_REVOKED")
+            } else {
+                assertEquals(1, dao.markRetryableFailureForOwner(vm.capsuleId, owner, "NETWORK"))
+                CreateViewModel.CreateUploadStatus.RetryableFailure("NETWORK")
+            }
+            observation.deliver(vm.capsuleId, owner, observation.snapshot(vm.capsuleId, owner))
+            assertEquals(expected, vm.uploadStatus.value)
+            assertNull(vm.publishError.value)
+            assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        }
     }
 
     @Test
@@ -426,17 +758,8 @@ class CreatePublishLifetimeTest {
 
         identityGate.complete(senderIdentity())
 
-        // Durable staging completes on Room's own executors: bounded await.
-        val deadline = System.currentTimeMillis() + 10_000
-        while (vm.step.value == CreateViewModel.Step.PUBLISHING) {
-            if (System.currentTimeMillis() > deadline) {
-                error(
-                    "publish never terminated; publishError=" + vm.publishError.value +
-                        " flowError=" + vm.flowError.value,
-                )
-            }
-            Thread.sleep(20)
-        }
+        // Durable staging completes on Room's own executors: bounded event await.
+        awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
         runBlockingNullable {
             val row = outboxRow(capsuleId)
@@ -473,9 +796,7 @@ class CreatePublishLifetimeTest {
         identityGate.complete(senderIdentity())
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
-        awaitCondition("pending encrypted status") {
-            vm.uploadStatus.value == CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.ENCRYPTED)
-        }
+        awaitUpload(vm, CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.ENCRYPTED))
 
         runBlockingNullable {
             val dao = database.outboxCapsuleDao()
@@ -483,9 +804,7 @@ class CreatePublishLifetimeTest {
             assertEquals(1, dao.beginFinalizeForOwner(capsuleId, userUuid.toString()))
             assertEquals(1, dao.markPublishedForOwner(capsuleId, userUuid.toString()))
         }
-        awaitCondition("published status") {
-            vm.uploadStatus.value == CreateViewModel.CreateUploadStatus.Published
-        }
+        awaitUpload(vm, CreateViewModel.CreateUploadStatus.Published)
         assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
         runBlockingNullable {
             assertEquals(OutboxCapsuleState.PUBLISHED, outboxRow(capsuleId)!!.state)
@@ -624,10 +943,7 @@ class CreatePublishLifetimeTest {
                 "BLOB_HASH_MISMATCH",
             )
         }
-        awaitCondition("retryable failure") {
-            vm.uploadStatus.value ==
-                CreateViewModel.CreateUploadStatus.RetryableFailure("BLOB_HASH_MISMATCH")
-        }
+        awaitUpload(vm, CreateViewModel.CreateUploadStatus.RetryableFailure("BLOB_HASH_MISMATCH"))
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
         runBlockingNullable {
@@ -637,33 +953,29 @@ class CreatePublishLifetimeTest {
                 "RECIPIENT_KEY_REVOKED",
             )
         }
-        awaitCondition("terminal failure") {
-            vm.uploadStatus.value ==
-                CreateViewModel.CreateUploadStatus.TerminalFailure("RECIPIENT_KEY_REVOKED")
-        }
+        awaitUpload(vm, CreateViewModel.CreateUploadStatus.TerminalFailure("RECIPIENT_KEY_REVOKED"))
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
         assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
     }
 
-    private fun awaitCondition(what: String, timeoutMs: Long = 10_000, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition()) {
-            if (System.currentTimeMillis() > deadline) error("timed out waiting for $what")
-            Thread.sleep(20)
+    private fun awaitUpload(vm: CreateViewModel, expected: CreateViewModel.CreateUploadStatus) =
+        runBlocking {
+            withTimeout(10_000) {
+                // Room collection on Unconfined can wake this test between
+                // the status and step writes. Await the complete observable
+                // outcome, retaining the caller's independent assertions.
+                val expectedStep = if (expected == CreateViewModel.CreateUploadStatus.Published)
+                    CreateViewModel.Step.PUBLISHED else CreateViewModel.Step.UPLOAD_PENDING
+                combine(vm.uploadStatus, vm.step) { status, step -> status == expected && step == expectedStep }
+                    .first { it }
+            }
         }
-    }
 
     private fun runBlockingNullable(block: suspend () -> Unit) {
         kotlinx.coroutines.runBlocking { block() }
     }
 
     private fun awaitTerminalPublish(vm: CreateViewModel) {
-        val deadline = System.currentTimeMillis() + 10_000
-        while (vm.step.value == CreateViewModel.Step.PUBLISHING) {
-            if (System.currentTimeMillis() > deadline) {
-                error("publishing never reached a terminal step; publishError=" + vm.publishError.value)
-            }
-            Thread.sleep(20)
-        }
+        runBlocking { withTimeout(10_000) { vm.step.first { it != CreateViewModel.Step.PUBLISHING } } }
     }
 }

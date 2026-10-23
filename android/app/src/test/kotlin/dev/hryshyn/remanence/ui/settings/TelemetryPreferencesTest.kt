@@ -54,6 +54,8 @@ class TelemetryPreferencesTest {
         restore.setContent { HoldTheme {
             SettingsScreen("owner", AppLocale.SYSTEM, {}, true, {}, {}, telemetryContent = { TelemetryPreferences(coordinator) })
         } }
+        rule.onNodeWithTag("telemetry_design").assertDoesNotExist()
+        rule.onNodeWithTag("settings_feedback_row").performScrollTo().performClick()
         rule.onNodeWithTag("telemetry_design").performScrollTo().assertIsOff().performClick().assertIsOn()
         rule.onNodeWithTag("telemetry_crops").performScrollTo().assertIsOff()
         restore.emulateSavedInstanceStateRestore()
@@ -68,6 +70,7 @@ class TelemetryPreferencesTest {
         rule.setContent { CompositionLocalProvider(LocalDensity provides Density(1f, 1.8f)) { HoldTheme {
             SettingsScreen("owner", AppLocale.SYSTEM, {}, true, {}, {}, telemetryContent = { TelemetryPreferencesPanel(TelemetryConsent(), {}, {}) })
         } } }
+        rule.onNodeWithTag("settings_feedback_row").performScrollTo().performClick()
         rule.onNodeWithTag("telemetry_design").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(56.dp)
         rule.onNodeWithTag("telemetry_crops").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(56.dp)
         rule.onNodeWithTag("telemetry_disclosure").performScrollTo().assertIsDisplayed()
@@ -95,6 +98,7 @@ class TelemetryPreferencesTest {
         rule.setContent { HoldTheme {
             SettingsScreen("owner", AppLocale.SYSTEM, {}, true, {}, {}, telemetryContent = { TelemetryPreferences(owner) })
         } }
+        rule.onNodeWithTag("settings_feedback_row").performScrollTo().performClick()
         rule.onNodeWithTag("telemetry_design").performScrollTo().performClick().assertIsOff()
         rule.onNodeWithTag("telemetry_crops").performScrollTo().assertIsOff()
         rule.onNodeWithTag("telemetry_save_failed").performScrollTo().assertIsDisplayed()

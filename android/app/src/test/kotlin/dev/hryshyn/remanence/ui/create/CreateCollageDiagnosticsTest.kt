@@ -199,10 +199,12 @@ class CreateCollageDiagnosticsTest {
         decoderDims: Pair<Int, Int> = 1000 to 1000,
         parkDecodeCall: Int? = null,
         gate: CompletableDeferred<Unit>? = null,
+        reads: MutableList<String> = mutableListOf(),
     ): DefaultGeneratorPreviewLoader {
         var decodeCalls = 0
         return DefaultGeneratorPreviewLoader(
             openSource = { pickerId ->
+                reads += pickerId
                 PhotoSource { ByteArrayInputStream(originals.getValue(pickerId)) }
             },
             decoder = GeneratorSourceBinding.PhotoDecoderPort { _ ->
@@ -261,6 +263,85 @@ class CreateCollageDiagnosticsTest {
         return state as GeneratorPreviewState.Ready
     }
 
+    @Test fun ordinaryLoaderFailureIsRedactedAndExplicitRepickRecoversWithoutNewDraft() {
+        val ids = listOf("u1", "u2", "u3")
+        val delegate = previewLoader(ids.associateWith { originalFor(it) })
+        var fail = true
+        val vm = viewModel(GeneratorPreviewLoader { if (fail) error("private source details") else delegate.load(it) })
+        vm.beginSession(1L, senderUserUuid.toString())
+        val capsuleId = vm.capsuleId
+        vm.onPhotosPicked(ids)
+        assertEquals(GeneratorPreviewState.Unavailable("preview preparation failed"), vm.generatorPreview.value)
+        assertEquals(ids, vm.photoSelection.selectedIds)
+        assertEquals(capsuleId, vm.capsuleId)
+        fail = false
+        drivePhotos(vm, ids)
+        assertEquals(capsuleId, vm.capsuleId)
+        assertTrue(vm.uploadStatus.value is CreateViewModel.CreateUploadStatus.NotStarted)
+        vm.endSession()
+    }
+
+    @Test fun factoryFailureDoesNotPoisonSamePhotoNoteRetry() {
+        val ids = listOf("u1", "u2", "u3")
+        var calls = 0
+        val goodFactory = sourceFactory(mutableListOf())
+        val vm = viewModel(previewLoader(ids.associateWith { originalFor(it) }), CollageCropSourceFactory { holder ->
+            calls++
+            if (calls == 1) error("private runtime details")
+            goodFactory.create(holder)
+        })
+        vm.beginSession(1L, senderUserUuid.toString())
+        val capsuleId = vm.capsuleId
+        vm.onPhotosPicked(ids)
+        assertEquals(GeneratorPreviewState.Unavailable("preview preparation failed"), vm.generatorPreview.value)
+        assertNull(vm.collageCropSource)
+        vm.noteEditor.onChange("explicit retry") // Same picker IDs, coordinator cache reused.
+        assertTrue(vm.generatorPreview.value is GeneratorPreviewState.NotePending)
+        assertEquals(2, calls)
+        val source = vm.collageCropSource
+        assertTrue(source != null)
+        vm.noteEditor.onChange("another edit")
+        assertTrue(vm.collageCropSource === source)
+        assertEquals(2, calls)
+        assertEquals(capsuleId, vm.capsuleId)
+        vm.endSession()
+    }
+
+    @Test fun obsoleteNonCooperativeFailureCannotReplaceNewerReadyOrSource() {
+        val old = listOf("u1", "u2", "u3")
+        val fresh = listOf("d1", "d2", "d3")
+        val gate = CompletableDeferred<Unit>()
+        val delegate = previewLoader((old + fresh).associateWith { originalFor(it) })
+        val vm = viewModel(GeneratorPreviewLoader { id ->
+            if (id == old.first()) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                gate.await()
+                error("obsolete private failure")
+            } else delegate.load(id)
+        }, sourceFactory(mutableListOf()))
+        vm.beginSession(1L, senderUserUuid.toString())
+        vm.onPhotosPicked(old)
+        val ready = drivePhotos(vm, fresh)
+        val source = vm.collageCropSource
+        gate.complete(Unit)
+        assertTrue(vm.generatorPreview.value === ready)
+        assertTrue(vm.collageCropSource === source)
+        vm.endSession()
+    }
+
+    @Test fun preparationCancellationRetainsCancellationIdentityNotUnavailable() {
+        val cancelled = kotlinx.coroutines.CancellationException("synthetic cancellation")
+        var completion: Throwable? = null
+        val vm = viewModel(GeneratorPreviewLoader {
+            kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!.invokeOnCompletion { completion = it }
+            throw cancelled
+        })
+        vm.beginSession(1L, senderUserUuid.toString())
+        vm.onPhotosPicked(listOf("u1", "u2", "u3"))
+        org.junit.Assert.assertSame(cancelled, completion)
+        assertFalse(vm.generatorPreview.value is GeneratorPreviewState.Unavailable)
+        vm.endSession()
+    }
+
     @Test
     fun retainCallbackUsesLiveOriginalBytesNotPreviewBytes() = runTest {
         val original = ByteArray(64) { it.toByte() }
@@ -286,6 +367,91 @@ class CreateCollageDiagnosticsTest {
         assertEquals(sha256Hex(original), loaded!!.originalHash)
         // The holder-style copy survives the loader's own zeroization.
         assertTrue(seenBytes.contentEquals(original))
+    }
+
+    @Test
+    fun lastPhotoOffOnReloadsOriginalsEvenWhenPreviewIdsMatch() {
+        assertPhotoRevisionRetainsOriginals { vm, ids ->
+            vm.photoSelection.toggle(ids.last())
+            vm.photoSelection.toggle(ids.last())
+        }
+    }
+
+    @Test
+    fun identicalRepickReloadsOriginalsEvenWhenPreviewIdsMatch() {
+        assertPhotoRevisionRetainsOriginals { vm, ids -> vm.onPhotosPicked(ids) }
+    }
+
+    @Test
+    fun reorderedPhotosReloadButPickerCancelAndNoteOnlyReuseOriginals() {
+        assertPhotoRevisionRetainsOriginals { vm, ids -> vm.onPhotosPicked(ids.reversed()) }
+    }
+
+    private fun assertPhotoRevisionRetainsOriginals(edit: (CreateViewModel, List<String>) -> Unit) {
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { originalFor(it) }
+        val reads = mutableListOf<String>()
+        val loader = previewLoader(originals, reads = reads)
+        lateinit var retained: RetainedOriginalHolder
+        val vm = viewModel(loader, CollageCropSourceFactory { holder ->
+            retained = holder
+            null
+        })
+        vm.beginSession(1L, senderUserUuid.toString())
+        drivePhotos(vm, ids)
+        val staleSink = requireNotNull(loader.retainOriginal)
+        val before = reads.size
+        edit(vm, ids)
+        val ready = vm.generatorPreview.value as GeneratorPreviewState.Ready
+        assertEquals("a cleared holder requires a fresh original read per photo", before + 3, reads.size)
+        ready.expression.input.photos.forEach { photo ->
+            val expected = originals.values.single { sha256Hex(it) == photo.contentId.removePrefix("c") }
+            assertTrue("retained original must match identity, never thumbnail",
+                retained.bytesFor(photo.contentId)?.contentEquals(expected) == true)
+        }
+        val currentKeys = retained.retainedSizesForTests().keys.toSet()
+        val late = originalFor("obsolete")
+        staleSink(late, sha256Hex(late))
+        assertEquals("old revision callback must be inert", currentKeys, retained.retainedSizesForTests().keys)
+        vm.onPhotosPicked(emptyList())
+        vm.noteEditor.onChange("A short note")
+        vm.noteEditor.onChange("")
+        assertEquals("cancel and note-only edits must reuse originals", before + 3, reads.size)
+        assertEquals(currentKeys, retained.retainedSizesForTests().keys)
+        vm.endSession()
+        assertTrue(retained.retainedSizesForTests().isEmpty())
+    }
+
+    @Test
+    fun rapidSamePhotoRevisionIgnoresParkedOriginalCompletion() {
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { originalFor(it) }
+        val gate = CompletableDeferred<Unit>()
+        val reads = mutableListOf<String>()
+        val loader = previewLoader(originals, parkDecodeCall = 6, gate = gate, reads = reads)
+        lateinit var retained: RetainedOriginalHolder
+        val vm = viewModel(loader, CollageCropSourceFactory { retained = it; null })
+        vm.beginSession(1L, senderUserUuid.toString())
+        drivePhotos(vm, ids)
+        vm.photoSelection.toggle(ids.last())
+        vm.photoSelection.toggle(ids.last())
+        assertTrue(vm.generatorPreview.value is GeneratorPreviewState.Loading)
+        val staleSink = requireNotNull(loader.retainOriginal)
+        // A second same-ID edit overtakes the parked original decode.
+        vm.photoSelection.toggle(ids.last())
+        vm.photoSelection.toggle(ids.last())
+        val ready = vm.generatorPreview.value as GeneratorPreviewState.Ready
+        gate.complete(Unit)
+        val obsolete = originalFor("obsolete")
+        staleSink(obsolete, sha256Hex(obsolete))
+        assertEquals(9, reads.size)
+        assertEquals(ready.expression.input.photos.map { it.contentId }.toSet(),
+            retained.retainedSizesForTests().keys)
+        originals.values.forEach { bytes ->
+            val id = dev.hryshyn.remanence.core.model.CapsulePhotoIdentity.contentIdFor(sha256Hex(bytes))
+            assertTrue(retained.bytesFor(id)!!.contentEquals(bytes))
+        }
+        vm.endSession()
     }
 
     @Test

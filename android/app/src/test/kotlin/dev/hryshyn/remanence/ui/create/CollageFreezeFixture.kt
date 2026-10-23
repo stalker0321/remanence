@@ -14,6 +14,8 @@ import dev.hryshyn.remanence.ui.collage.CollageCropSource
 import dev.hryshyn.remanence.ui.collage.CollageProviderResult
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertTrue
 
 /**
@@ -67,14 +69,10 @@ internal object CollageFreezeFixture {
 
     /** Waits until the preview exposes a chooser input (Ready or NotePending). */
     fun awaitChooserInput(vm: CreateViewModel, timeoutMs: Long = 10_000): GeneratorExpression.GeneratorInput {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (true) {
-            vm.collageChooserInput()?.let { return it }
-            if (System.currentTimeMillis() > deadline) {
-                error("preview never exposed a chooser input; state=${vm.generatorPreview.value}")
-            }
-            Thread.sleep(20)
-        }
+        return runBlocking { withTimeout(timeoutMs) {
+            vm.generatorPreview.first { vm.collageChooserInput() != null }
+            requireNotNull(vm.collageChooserInput())
+        } }
     }
 
     /**

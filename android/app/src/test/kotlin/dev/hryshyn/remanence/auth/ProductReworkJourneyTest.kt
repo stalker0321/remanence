@@ -123,7 +123,7 @@ class ProductReworkJourneyTest {
             } }
         } }
         capture("$locale-home")
-        rule.onNodeWithTag("product_navigation").assertHeightIsAtMost(96.dp)
+        assertTrue(rule.onNodeWithTag("product_navigation").getUnclippedBoundsInRoot().height <= 96.dp)
         rule.onNodeWithTag("root_home_button", useUnmergedTree = true).assertIsSelected()
         navigate(ProductSection.SENT)
         rule.onNodeWithTag("root_history_button", useUnmergedTree = true).assertIsSelected()

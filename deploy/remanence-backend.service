@@ -1,0 +1,36 @@
+[Unit]
+Description=Remanence backend
+After=network.target docker.service
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=vodkolyan
+Group=vodkolyan
+EnvironmentFile=/home/vodkolyan/remanence/server.env
+WorkingDirectory=/home/vodkolyan/remanence/current/server
+ExecStartPre=/home/vodkolyan/remanence/current/venv/bin/alembic upgrade head
+ExecStart=/home/vodkolyan/remanence/current/venv/bin/uvicorn remanence.main:create_app --factory --host ${REMANENCE_HOST} --port ${REMANENCE_PORT} --no-access-log
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=20
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/vodkolyan/.local/share/remanence-t425-test/blobs
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+LimitCORE=0
+TasksMax=128
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

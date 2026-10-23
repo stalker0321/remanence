@@ -34,7 +34,8 @@ class AtomicProviderCopyTest {
     private fun checkCopy(cancelPrefix: String, failurePrefix: String) {
         var actions = 0
         rule.setContent { MaterialTheme {
-            AtomicRegistrationContent(AtomicView(AtomicPhase.HANDLE, error = reason), "synthetic_handle",
+            AtomicRegistrationContent(AtomicView(if (reason == "PRF_UNAVAILABLE") AtomicPhase.VERIFY_REQUIRED else AtomicPhase.HANDLE,
+                error = reason, handle = "synthetic_handle"), "synthetic_handle",
                 { actions++ }, { actions++ }, { actions++ }, { actions++ }, { actions++ },
                 { actions++ }, { actions++ }, { actions++ }, false) { _, _ -> }
         } }
@@ -53,7 +54,11 @@ class AtomicProviderCopyTest {
         for ((value, id) in messages) {
             rule.runOnIdle { reason = value }
             rule.onNodeWithTag("atomic_error").performScrollTo().assertIsDisplayed().assertTextEquals(context.getString(id))
-            rule.onNodeWithText("synthetic_handle").assertExists()
+            if (value == "PRF_UNAVAILABLE") {
+                rule.onNodeWithTag("atomic_handle").assertDoesNotExist()
+                rule.onNodeWithTag("atomic_leave_setup").assertExists()
+                rule.onNodeWithTag("atomic_verify").assertExists()
+            } else rule.onNodeWithText("synthetic_handle").assertExists()
             val text = context.getString(id)
             assertFalse(Regex("PROVIDER_|PRF|50152|UNREGISTERED|dev\\.hryshyn|pm_at_|rgs_|unknown private").containsMatchIn(text))
             assertNotEquals(context.getString(R.string.auth_invalid_response), text)

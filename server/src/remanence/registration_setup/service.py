@@ -201,7 +201,10 @@ class AtomicRegistration:
                                                                    user_verification=UserVerificationRequirement.REQUIRED),
             exclude_credentials=[PublicKeyCredentialDescriptor(id=unb64(value)) for value in pending])
         flow = self._issue(row, "REGISTER", challenge=options.challenge)
-        out = json.loads(options_to_json(options)); out["extensions"] = {"prf": {}}
+        # Evaluating PRF at creation lets providers that support it (Google
+        # Password Manager, iCloud Keychain) return the secret immediately, so
+        # registration needs no second passkey prompt.
+        out = json.loads(options_to_json(options)); out["extensions"] = {"prf": {"eval": {"first": b64(PRF_INPUT)}}}
         return dict(flow=str(flow.id), options=out, expires_at=flow.expires_at.isoformat())
 
     def _consume(self, row, flow_id, purpose):
@@ -231,11 +234,18 @@ class AtomicRegistration:
                 self.db.add(Credential(id=credential_id, reservation_id=row.id, public_key=verified.credential_public_key,
                                        counter=verified.sign_count, created_at=self.clock()))
                 self.db.flush()
+                # A user-verified registration over this setup's fresh challenge
+                # proves possession as strongly as a later assertion, so it
+                # authorizes finalize directly; clients that got no PRF result
+                # at creation still use setup_options/setup_verify.
+                secret = "rgf_" + b64(secrets.token_bytes(32))
+                grant = self._issue(row, "FINAL", credential_id, secret=secret)
         except IntegrityError:
             raise SetupFailure("CREDENTIAL_CONFLICT", 409, persist=True) from None
         except ValueError:
             raise SetupFailure("SETUP_REJECTED", persist=True) from None
-        return dict(credential_id=credential_id, registered=True, recoverable=False)
+        return dict(credential_id=credential_id, registered=True, recoverable=False,
+                    final_authorization=secret, expires_at=grant.expires_at.isoformat())
 
     def setup_options(self, row, credential_id):
         self._reserved(row)

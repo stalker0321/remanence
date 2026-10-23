@@ -111,7 +111,11 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
         return true
     }
 
-    /** One provider CREATE only. A successful return always stops at an explicit Verify action. */
+    /**
+     * One provider CREATE only. When the provider returns the PRF result with
+     * the creation, registration finishes right here; otherwise it stops at an
+     * explicit Verify action that reads PRF with an ordinary GET.
+     */
     suspend fun save(rawHandle: String, credentials: RecoveryCredentialPort) {
         if (state.value.phase == AtomicPhase.HANDLE) chooseHandle(rawHandle)
         val current = owner ?: return
@@ -132,9 +136,19 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
                     if (isCredentialUserCancellation(failure)) current.creationUncertain = false
                     throw failure
                 }
+                // Own the PRF before any check so every exit path wipes it.
+                val creationPrf = try { atomicPrf(created) } catch (_: RecoveryCapabilityUnavailable) { null }
+                creationPrf?.let { current.buffers.add(it) }
                 checkOwner(current)
                 current.creation = verifyBody(current, options, checkedCredential(created))
-                acknowledgeCreation(current)
+                val creationGrant = acknowledgeCreation(current)
+                if (creationPrf != null && creationGrant != null) {
+                    show(AtomicPhase.VERIFYING)
+                    prepareCandidate(current, creationPrf)
+                    current.grant = creationGrant
+                    startFinalize(current, state.value.handle)
+                    return@run
+                }
             }
             show(AtomicPhase.VERIFY_REQUIRED)
         }
@@ -149,15 +163,19 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
             catch (_: IllegalArgumentException) { throw AtomicRegistrationRejected(0, "HANDLE_INVALID") }
             requireReserved(current); show(AtomicPhase.VERIFYING)
             if (current.grant == null) authorize(current, credentials)
-            checkOwner(current)
-            val candidate = checkNotNull(current.candidate)
-            current.intent = buildJsonObject {
-                put("epoch", current.setup!!.reservation.epoch); put("operation_id", UUID.randomUUID().toString())
-                put("final_authorization", checkNotNull(current.grant)); put("handle", handle)
-                put("key_bundle", candidate.bundle); put("record", candidate.record)
-            }
-            finalize(current)
+            startFinalize(current, handle)
         }
+    }
+
+    private suspend fun startFinalize(current: Owner, handle: String) {
+        checkOwner(current)
+        val candidate = checkNotNull(current.candidate)
+        current.intent = buildJsonObject {
+            put("epoch", current.setup!!.reservation.epoch); put("operation_id", UUID.randomUUID().toString())
+            put("final_authorization", checkNotNull(current.grant)); put("handle", handle)
+            put("key_bundle", candidate.bundle); put("record", candidate.record)
+        }
+        finalize(current)
     }
 
     suspend fun retry() {
@@ -234,13 +252,17 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
             else if (!current.creationUncertain) ids.firstOrNull() else null
     }
 
-    private suspend fun acknowledgeCreation(current: Owner) {
+    /** Returns the server's finalize grant for this creation, when it issued one. */
+    private suspend fun acknowledgeCreation(current: Owner): String? {
         val body = checkNotNull(current.creation)
         val verified = post(current, AtomicAction.CREDENTIAL_VERIFY, body)
         AtomicWire.flag(verified, "registered", true); AtomicWire.flag(verified, "recoverable", false)
         val credentialId = AtomicWire.binary(AtomicWire.text(verified, "credential_id", 2048))
         require(credentialId == AtomicWire.text(body.getValue("response").jsonObject, "id", 2048))
         current.credential = credentialId; current.creation = null; current.creationUncertain = false
+        return if (verified.containsKey("final_authorization")) {
+            AtomicWire.capability(AtomicWire.text(verified, "final_authorization", 47), "rgf_")
+        } else null
     }
 
     private suspend fun authorize(current: Owner, credentials: RecoveryCredentialPort) {
@@ -264,18 +286,23 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
             AtomicWire.flag(verified, "authentication_verified", true)
             require(AtomicWire.text(verified, "credential_id", 2048) == current.credential)
             val grant = AtomicWire.capability(AtomicWire.text(verified, "final_authorization", 47), "rgf_")
-            val existing = current.candidate
-            if (existing != null) {
-                withContext(env.cryptoDispatcher) { unwrapAtomic(existing, existing.localReadback(), secret) }
-                checkOwner(current); existing.prf.fill(0); current.buffers.remove(existing.prf); existing.prf = secret
-            } else {
-                val candidate = withContext(env.cryptoDispatcher) {
-                    prepareAtomicCandidate(current.setup!!.reservation.accountId, current.credential!!, secret, env.generate)
-                }
-                checkOwner(current); current.candidate = candidate
-            }
+            prepareCandidate(current, secret)
             current.grant = grant; retained = true
         } finally { if (!retained) { secret.fill(0); current.buffers.remove(secret) } }
+    }
+
+    /** Adopts [secret] (already in the owner's buffers) as the candidate's PRF. */
+    private suspend fun prepareCandidate(current: Owner, secret: ByteArray) {
+        val existing = current.candidate
+        if (existing != null) {
+            withContext(env.cryptoDispatcher) { unwrapAtomic(existing, existing.localReadback(), secret) }
+            checkOwner(current); existing.prf.fill(0); current.buffers.remove(existing.prf); existing.prf = secret
+        } else {
+            val candidate = withContext(env.cryptoDispatcher) {
+                prepareAtomicCandidate(current.setup!!.reservation.accountId, current.credential!!, secret, env.generate)
+            }
+            checkOwner(current); current.candidate = candidate
+        }
     }
 
     private suspend fun finalize(current: Owner) {

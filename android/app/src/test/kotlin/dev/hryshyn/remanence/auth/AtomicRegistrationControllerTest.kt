@@ -30,6 +30,26 @@ class AtomicRegistrationControllerTest {
         assertFalse(f.requests.any { it.second?.toString()?.contains(Crypto.encode(f.prf)) == true })
     }
 
+    @Test fun prfAtCreationFinishesWithoutASecondPasskeyPrompt(): Unit = runBlocking {
+        val f = Fixture(); f.prfAtCreation = true; f.creationGrant = true; val c = f.controller()
+        c.begin(f.google); c.chooseHandle("valid"); c.save("valid", f)
+        assertEquals(AtomicPhase.READY, c.state.value.phase)
+        assertEquals(1, f.creates); assertEquals(0, f.discoveryGets); assertEquals(0, f.immediateGets)
+        assertEquals(1, f.generations); assertNotNull(f.installed)
+        assertEquals(JsonPrimitive(Fixture.CREATION_GRANT), f.finals.single()["final_authorization"])
+    }
+
+    @Test fun creationWithoutPrfOrGrantStillStopsAtExplicitVerify(): Unit = runBlocking {
+        for ((prf, grant) in listOf(false to true, true to false)) {
+            val f = Fixture(); f.prfAtCreation = prf; f.creationGrant = grant; val c = f.controller()
+            c.begin(f.google); c.chooseHandle("valid"); c.save("valid", f)
+            assertEquals(AtomicPhase.VERIFY_REQUIRED, c.state.value.phase)
+            assertEquals(0, f.generations); assertEquals(0, f.discoveryGets)
+            c.verify("valid", f)
+            assertEquals(AtomicPhase.READY, c.state.value.phase); assertEquals(1, f.discoveryGets)
+        }
+    }
+
     @Test fun missingPrfOrRejectedAssertionCannotGenerateOrFinalize(): Unit = runBlocking {
         for (mode in listOf("no-prf", "rejected-proof")) {
             val f = Fixture(); f.providerMode = mode; val c = f.controller()
@@ -363,6 +383,7 @@ class AtomicRegistrationControllerTest {
         var generations = 0; var creates = 0; var assertions = 0; var immediateGets = 0; var discoveryGets = 0
         var finalMode = "ok"; var providerMode = "ok"; var readMode = "ok"; var loseCredentialAck = false; var retireOnRead = false
         var prf = ByteArray(32) { 7 }
+        var prfAtCreation = false; var creationGrant = false
         var saved: JsonObject? = null; var published: LoginResponseDto? = null; var installed: Crypto.Restored? = null
         val requests = mutableListOf<Pair<AtomicAction, JsonObject?>>()
         val finals = mutableListOf<JsonObject>(); val reads = mutableListOf<String>()
@@ -427,7 +448,10 @@ class AtomicRegistrationControllerTest {
             AtomicAction.CREDENTIAL_VERIFY -> {
                 registered = true
                 if (loseCredentialAck) { loseCredentialAck = false; throw IOException("lost ack") }
-                buildJsonObject { put("registered", true); put("recoverable", false); put("credential_id", CREDENTIAL) }
+                buildJsonObject {
+                    put("registered", true); put("recoverable", false); put("credential_id", CREDENTIAL)
+                    if (creationGrant) put("final_authorization", CREATION_GRANT)
+                }
             }
             AtomicAction.SETUP_OPTIONS -> buildJsonObject {
                 put("flow", FLOW)
@@ -497,7 +521,7 @@ class AtomicRegistrationControllerTest {
             put("session_id", FLOW); put("access_token", "pm_at_synthetic"); put("refresh_token", "pm_rt_synthetic")
             put("access_expires_at", "2026-10-21T10:10:00Z"); put("refresh_expires_at", "2026-11-21T10:00:00Z")
         }
-        override suspend fun create(options: JsonObject): JsonObject { creates++; return credential(false) }
+        override suspend fun create(options: JsonObject): JsonObject { creates++; return credential(prfAtCreation) }
         override suspend fun get(options: JsonObject): JsonObject {
             discoveryGets++
             if (providerMode == "pending") throw NoCredentialException()
@@ -520,6 +544,7 @@ class AtomicRegistrationControllerTest {
             const val RESERVATION = "22222222-2222-4222-8222-222222222222"
             const val FLOW = "33333333-3333-4333-8333-333333333333"
             const val CREDENTIAL = "Y3JlZA"
+            val CREATION_GRANT = "rgf_" + "C".repeat(43)
             val TOKEN = "rgs_" + "A".repeat(43)
         }
     }

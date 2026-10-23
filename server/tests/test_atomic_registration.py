@@ -19,6 +19,7 @@ from sqlalchemy import event, func, select, text
 from test_me_endpoint import me_env, _seed
 from test_google_auth import google_env, options, verify, registration
 from test_passkey_recovery import Authenticator, record, b64, unb64
+from remanence.api.recovery import PRF_INPUT
 from remanence.auth.google_models import GoogleIdentity
 from remanence.auth.models import AuthSession
 from remanence.recovery.models import RecoveryCredential, RecoveryRecord
@@ -85,8 +86,12 @@ def register_credential(env, a, auth=None):
     auth = auth or Authenticator(a["reservation"]["account_id"])
     begin = post(env, a, "credential/options")
     assert unb64(begin["options"]["user"]["id"]) == uuid.UUID(auth.user).bytes
+    assert begin["options"]["extensions"] == {"prf": {"eval": {"first": b64(PRF_INPUT)}}}
     verified = post(env, a, "credential/verify", {"flow": begin["flow"], "response": auth.response(begin["options"], True)})
-    assert verified == dict(credential_id=b64(auth.id), registered=True, recoverable=False)
+    assert {k: verified[k] for k in ("credential_id", "registered", "recoverable")} == dict(
+        credential_id=b64(auth.id), registered=True, recoverable=False)
+    assert verified["final_authorization"].startswith("rgf_")
+    auth.creation_grant = verified["final_authorization"]
     return auth
 
 
@@ -111,6 +116,17 @@ def candidate(env, subject="synthetic-subject", handle="atomicuser"):
         protocol_version=1, encryption_public_keyset=b64(public),
         signing_public_keyset=b64(proto_keyset_format.serialize_without_secret(sign.public_keyset_handle()))), record=record(material))
     return a, body, material
+
+
+def test_creation_grant_finalizes_without_a_second_passkey_prompt(atomic):
+    client, factory, _, _ = atomic
+    a, body, material = candidate(atomic)
+    body = dict(body, final_authorization=material["auth"].creation_grant)
+    reply = final(atomic, a, body)
+    assert reply.status_code == 201, reply.json()
+    assert counts(factory) == [1] * 7
+    # The unused assertion grant cannot finalize a second time.
+    assert final(atomic, a, dict(body, operation_id=str(uuid.uuid4()))).status_code == 409
 
 
 def final(env, a, body):
@@ -267,7 +283,8 @@ def test_real_assertion_rejects_and_burns_only_addressed_challenge(atomic, failu
     post(atomic, a, "setup/verify", {"flow": begin["flow"], "response": auth.response(begin["options"])}, 400)
     with atomic[1]() as db:
         assert db.get(Credential, b64(auth.id)).counter == 1
-        assert db.scalar(select(func.count()).select_from(Challenge).where(Challenge.purpose == "FINAL")) == 1
+        # Creation grant + the one valid assertion grant; rejected attempts add none.
+        assert db.scalar(select(func.count()).select_from(Challenge).where(Challenge.purpose == "FINAL")) == 2
     assert counts(atomic[1]) == [0] * 7
 
 

@@ -75,7 +75,7 @@ def test_populated_additive_upgrade_preserves_every_existing_table(populated):
 def test_empty_upgrade_matches_orm_and_no_permanent_foreign_key_weakening(me_env):
     with me_env[1]() as db:
         inspector = inspect(db.connection())
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0018_atomic_registration"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0019_pending_fk_names"
         for model in MODELS:
             table = model.__table__
             assert {x["name"] for x in inspector.get_columns(table.name)} == set(table.c.keys())

@@ -115,7 +115,9 @@ def test_create_app_mounts_recovery_without_pending_or_db(tmp_path: Path) -> Non
     paths = set(app.openapi()["paths"])
     assert "/v1/recovery/status" in paths
     assert "/recovery-test/" in paths
-    assert not any(path.startswith("/v2/") for path in paths)
+    from remanence.pending.api import router as pending_router
+
+    assert not paths & {route.path for route in pending_router.routes}
 
 
 def test_main_refuses_without_database_url(tmp_path: Path, capsys) -> None:

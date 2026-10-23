@@ -36,6 +36,7 @@ EXPECTED_COLUMNS = frozenset(
         "revoked_at",
         "first_opened_at",
         "draft_expires_at",
+        "send_accounting_version",
     }
 )
 NON_NULL_COLUMNS = frozenset(
@@ -70,7 +71,7 @@ def test_capsule_state_members_exact() -> None:
 def test_table_name_and_exact_column_set() -> None:
     assert Capsule.__tablename__ == "capsules"
     assert set(_table().columns.keys()) == EXPECTED_COLUMNS
-    assert len(_table().columns) == 16
+    assert len(_table().columns) == 17
 
 
 def test_column_types_and_nullability_exact() -> None:
@@ -173,7 +174,7 @@ def test_exactly_four_named_restrict_fks() -> None:
         assert constraint.ondelete == "RESTRICT"
 
 
-def test_exactly_eight_named_checks_and_normalized_sql() -> None:
+def test_named_checks_and_normalized_sql() -> None:
     checks = {
         constraint.name: " ".join(str(constraint.sqltext).split())
         for constraint in _table().constraints
@@ -206,6 +207,10 @@ def test_exactly_eight_named_checks_and_normalized_sql() -> None:
         ),
         "ck_capsules_first_opened_state_shape":
             "first_opened_at IS NULL OR state = 'READY'",
+        "ck_capsules_send_accounting": (
+            "send_accounting_version IS NULL OR "
+            "(send_accounting_version = 1 AND state IN ('READY','REVOKED'))"
+        ),
     }
 
 

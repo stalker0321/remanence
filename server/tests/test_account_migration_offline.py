@@ -154,7 +154,7 @@ def offline_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[Config]:
 
 def test_revision_chain_reachable() -> None:
     script = ScriptDirectory(str(MIGRATIONS_DIR))
-    assert script.get_heads() == ["0008_music_staging"]
+    assert script.get_heads() == ["0019_pending_fk_names"]
     assert script.get_revision("0001_m0_baseline").revision == "0001_m0_baseline"
     assert script.get_revision("0002_m1_accounts").down_revision == "0001_m0_baseline"
     assert script.get_revision("0003_m2_capsule_routing").down_revision == "0002_m1_accounts"

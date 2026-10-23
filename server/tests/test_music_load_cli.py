@@ -230,8 +230,8 @@ def test_run_load_rejects_bad_batch_rows(tmp_path: Path) -> None:
         cli.run_load(engine, directory, batch_rows=0)
 
 
-def test_migration_chain_single_head_at_0008() -> None:
-    """DB-free: linear chain, exactly one head, music revision on top."""
+def test_migration_chain_single_head() -> None:
+    """DB-free: linear chain, exactly one head, music revision in the chain."""
     import importlib.util
 
     versions = Path(__file__).resolve().parent.parent / "migrations" / "versions"
@@ -251,6 +251,6 @@ def test_migration_chain_single_head_at_0008() -> None:
             assert parent not in children, f"branch at {parent}"
             children[parent] = revision
     heads = [revision for revision in modules if revision not in children]
-    assert heads == ["0008_music_staging"]
+    assert len(heads) == 1
     music = modules["0008_music_staging"]
     assert music.down_revision == "0007_m2_f3_first_open_claim"

@@ -338,24 +338,6 @@ def test_postgres_cap_serializes_separate_processes_and_full_app(me_env):
         assert len(rows) == 2 and all(row.id.version == 4 for row in rows)
 
 
-def test_postgres_additive_migration_roundtrip_keeps_synthetic_account(me_env):
-    from alembic import command
-    from alembic.config import Config
-    from remanence.users.models import User
-    client, factory = me_env
-    seed = _seed(client)
-    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
-    config.set_main_option("path_separator", "os")
-    command.downgrade(config, "0011_beta_safety")
-    engine = factory.kw["bind"]
-    assert "anonymous_telemetry_reports" not in inspect(engine).get_table_names()
-    with factory() as session:
-        assert session.scalar(select(User)).handle_normalized == "alice"
-    command.upgrade(config, "head")
-    assert {c["name"] for c in inspect(engine).get_columns("anonymous_telemetry_reports")} == {"id", "payload"}
-    assert client.get("/v1/me", headers={"Authorization": "Bearer " + seed["access_token"]}).status_code == 200
-
-
 def test_telemetry_dispatch_does_not_allocate_request_id(env, monkeypatch):
     def forbidden():
         raise AssertionError("telemetry must not allocate a trace identifier")

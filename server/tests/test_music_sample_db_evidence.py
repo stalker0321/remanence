@@ -27,9 +27,10 @@ from remanence.settings import AppMode, Settings
 
 
 def _db_url() -> str:
-    url = os.environ.get("REMANENCE_TEST_DATABASE_URL")
+    # Evidence against an already loaded sample instance, not a fresh test DB.
+    url = os.environ.get("REMANENCE_MUSIC_SAMPLE_DATABASE_URL")
     if not url:
-        pytest.skip("REMANENCE_TEST_DATABASE_URL is not set")
+        pytest.skip("REMANENCE_MUSIC_SAMPLE_DATABASE_URL is not set (loaded sample instance opt-in)")
     return url
 
 

@@ -62,5 +62,5 @@ def test_real_publications_history_nulls_recents_and_both_cancels_do_not_refund(
         assert client.get(PATHS[0], headers=headers).json() == access_before
         assert client.get(PATHS[2], headers=headers).json()["items"] == recent
     with session_factory() as observer:
-        assert observer.scalar(text("SELECT version_num FROM alembic_version")) == "0018_atomic_registration"
+        assert observer.scalar(text("SELECT version_num FROM alembic_version")) == "0019_pending_fk_names"
         assert observer.scalar(select(func.count()).select_from(SendPublication)) == 3

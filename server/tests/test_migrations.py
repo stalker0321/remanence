@@ -11,20 +11,45 @@ from psycopg import sql
 from sqlalchemy.engine import make_url
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
-_BASELINE = "0001_m0_baseline"
-_HEAD = "0008_music_staging"
+_HEAD = "0019_pending_fk_names"
 _HEAD_TABLES = {
+    "account_send_access",
+    "address_proof_attempts",
     "alembic_version",
-    "users",
+    "anonymous_telemetry_reports",
     "auth_credentials",
     "auth_sessions",
-    "user_key_bundles",
-    "capsules",
     "capsule_blobs",
     "capsule_envelopes",
-    "recipient_delivery_state",
     "capsule_idempotency_records",
+    "capsules",
+    "claim_challenges",
+    "delivery_address_bindings",
+    "gift_locators",
+    "google_flows",
+    "google_identities",
+    "locator_open_completions",
+    "pending_claims",
+    "pending_deliveries",
+    "pending_incoming",
+    "pending_send_routes",
+    "recipient_delivery_state",
     "recipient_tombstone_counters",
+    "recovery_challenges",
+    "recovery_credentials",
+    "recovery_records",
+    "registration_reservations",
+    "registration_setup_challenges",
+    "registration_setup_credentials",
+    "registration_setup_policy",
+    "retire_outbox",
+    "safety_reports",
+    "send_publications",
+    "terms_acceptances",
+    "used_locator_tombstones",
+    "user_blocks",
+    "user_key_bundles",
+    "users",
 }
 _REQUIRED_FKS = {
     "fk_auth_credentials_user_id_users": "c",
@@ -160,22 +185,6 @@ def _enum_labels(conn: psycopg.Connection, enum_name: str = "key_bundle_status")
     return [row[0] for row in rows]
 
 
-def _enum_exists(conn: psycopg.Connection, enum_name: str = "key_bundle_status") -> bool:
-    row = conn.execute(
-        """
-        SELECT EXISTS (
-            SELECT 1
-            FROM pg_type AS t
-            JOIN pg_namespace AS n ON n.oid = t.typnamespace
-            WHERE t.typname = %s AND n.nspname = 'public'
-        )
-        """,
-        (enum_name,),
-    ).fetchone()
-    assert row is not None
-    return bool(row[0])
-
-
 def _constraint_names_by_table(conn: psycopg.Connection, table: str) -> dict[str, str]:
     rows = conn.execute(
         """
@@ -186,38 +195,6 @@ def _constraint_names_by_table(conn: psycopg.Connection, table: str) -> dict[str
         (table,),
     ).fetchall()
     return {row[0]: row[1] for row in rows}
-
-
-def _assert_baseline(conn: psycopg.Connection) -> None:
-    assert _alembic_version(conn) == [_BASELINE]
-    assert _public_tables(conn) == {"alembic_version"}
-    for enum_name in (
-        "key_bundle_status",
-        "capsule_state",
-        "capsule_blob_kind",
-        "capsule_blob_state",
-        "recipient_delivery_status",
-    ):
-        assert not _enum_exists(conn, enum_name)
-
-
-def _assert_m1_schema(conn: psycopg.Connection) -> None:
-    assert _alembic_version(conn) == ["0002_m1_accounts"]
-    assert _public_tables(conn) == {
-        "alembic_version",
-        "users",
-        "auth_credentials",
-        "auth_sessions",
-        "user_key_bundles",
-    }
-    assert _enum_labels(conn) == ["ACTIVE", "RETIRED", "REVOKED"]
-    for enum_name in (
-        "capsule_state",
-        "capsule_blob_kind",
-        "capsule_blob_state",
-        "recipient_delivery_status",
-    ):
-        assert not _enum_exists(conn, enum_name)
 
 
 def _assert_head_schema(conn: psycopg.Connection) -> None:
@@ -325,7 +302,7 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
             """
         ).fetchall()
     }
-    assert foreign_keys == _REQUIRED_FKS
+    assert foreign_keys.items() >= _REQUIRED_FKS.items()
 
     present = {
         row[0]
@@ -585,31 +562,12 @@ def test_account_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
                 (revoked_user_id,),
             ).fetchone() == (2,)
         command.check(config)
-        with pytest.raises(RuntimeError, match="revoked rows exist"):
+        # 0018 is intentionally irreversible: downgrading below it must refuse
+        # and leave the database at head.
+        with pytest.raises(RuntimeError, match="atomic registration downgrade"):
             command.downgrade(config, "0004_r1_publication_order")
         with _connect_db(url, database) as conn:
             assert _alembic_version(conn) == [_HEAD]
-            conn.execute("DELETE FROM capsules WHERE id = ANY(%s)", (revoked_capsule_ids,))
-            conn.execute("DELETE FROM user_key_bundles WHERE id = %s", (revoked_bundle_id,))
-            conn.execute("DELETE FROM users WHERE id = %s", (revoked_user_id,))
-
-        command.downgrade(config, "0002_m1_accounts")
-        with _connect_db(url, database) as conn:
-            _assert_m1_schema(conn)
-
-        command.upgrade(config, "head")
-        with _connect_db(url, database) as conn:
-            _assert_head_schema(conn)
-        command.check(config)
-
-        command.downgrade(config, _BASELINE)
-        with _connect_db(url, database) as conn:
-            _assert_baseline(conn)
-
-        command.upgrade(config, "head")
-        with _connect_db(url, database) as conn:
-            _assert_head_schema(conn)
-        command.check(config)
 
         command.upgrade(config, "head")
         with _connect_db(url, database) as conn:

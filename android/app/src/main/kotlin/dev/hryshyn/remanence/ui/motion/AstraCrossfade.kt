@@ -5,10 +5,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.layer.GraphicsLayer
@@ -41,32 +39,29 @@ fun AstraCrossfade(
     val second = rememberGraphicsLayer()
     val state = remember { CrossfadeHolder(contentKey) }
     val outgoing = remember { Animatable(0f) }
-    var generation by remember { mutableIntStateOf(0) }
     val currentAnimate by rememberUpdatedState(animate)
 
+    // Plain (non-snapshot) bookkeeping: the swap must take effect before the
+    // next draw records, without invalidating the composition it runs in.
     if (contentKey != state.key) {
         val from = state.key
         state.key = contentKey
-        if (state.hasFrame && motion != AstraMotionSpec.Resolved.INSTANT && currentAnimate(from, contentKey)) {
+        state.fadePending = state.hasFrame && motion != AstraMotionSpec.Resolved.INSTANT && currentAnimate(from, contentKey)
+        if (state.fadePending) {
             // The layer holding the last drawn frame stops recording and
             // becomes the outgoing snapshot; the next draw records into the
             // other one.
             state.recordingFirst = !state.recordingFirst
             state.frozenDirty = true
-            generation++
-        } else {
-            state.dropFrozen = true
-            generation++
         }
     }
 
-    LaunchedEffect(generation) {
-        if (generation == 0) return@LaunchedEffect
-        if (state.dropFrozen) {
-            state.dropFrozen = false
+    LaunchedEffect(contentKey) {
+        if (!state.fadePending) {
             outgoing.snapTo(0f)
             return@LaunchedEffect
         }
+        state.fadePending = false
         outgoing.snapTo(1f)
         outgoing.animateTo(0f, astraTween(AstraMotionSpec.crossfadeMs(motion), AstraDissolveEasing))
     }
@@ -78,7 +73,10 @@ fun AstraCrossfade(
         recording.record { this@drawWithContent.drawContent() }
         drawLayer(recording)
         state.hasFrame = true
-        val fade = outgoing.value
+        // Until the effect starts, a pending fade shows the old frame whole.
+        // Always read the animation so this draw is invalidated by it.
+        val animated = outgoing.value
+        val fade = if (state.fadePending) 1f else animated
         if (fade > 0f && state.frozenDirty) {
             frozen.alpha = fade
             drawLayer(frozen)
@@ -96,7 +94,7 @@ private class CrossfadeHolder(var key: Any?) {
     var recordingFirst = true
     var hasFrame = false
     var frozenDirty = false
-    var dropFrozen = false
+    var fadePending = false
 }
 
 private fun GraphicsLayer.clear() {

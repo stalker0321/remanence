@@ -41,6 +41,26 @@ class AstraEnterMotionChangeTest {
         verifyPreferenceChange("step")
     }
 
+    @Test fun stepChangeDissolvesTheOldFrameOverTheNewOne() {
+        val step = mutableStateOf(0)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            Box(Modifier.size(96.dp).background(Color.White)) {
+                AstraStepArrival(AstraMotionSpec.Resolved.FULL, stepKey = step.value) {
+                    Box(Modifier.size(48.dp).background(if (step.value == 0) Color.Red else Color.White).testTag("probe"))
+                }
+            }
+        }
+        rule.mainClock.advanceTimeBy(32)
+        assertEquals(1f, opacity(), .01f)
+        rule.runOnUiThread { step.value = 1 }
+        rule.mainClock.advanceTimeBy(AstraMotionSpec.CROSSFADE_MS / 2L)
+        val mid = opacity()
+        assertTrue("mid-dissolve opacity $mid", mid > .05f && mid < .95f)
+        rule.mainClock.advanceTimeBy(AstraMotionSpec.CROSSFADE_MS.toLong())
+        assertEquals(0f, opacity(), .01f)
+    }
+
     private fun verifyPreferenceChange(surface: String) {
         val motion = mutableStateOf(AstraMotionSpec.Resolved.FULL)
         val step = mutableStateOf(0)
@@ -58,8 +78,16 @@ class AstraEnterMotionChangeTest {
             }
         }
         if (surface == "step") {
+            // Steps cross-dissolve from the last drawn frame: identical frames
+            // never dim mid-transition, whatever the motion preference does.
             rule.mainClock.advanceTimeBy(32)
             rule.runOnUiThread { step.value++ }
+            rule.mainClock.advanceTimeBy(32)
+            assertEquals(1f, opacity(), .01f)
+            rule.runOnUiThread { motion.value = AstraMotionSpec.Resolved.INSTANT }
+            rule.mainClock.advanceTimeByFrame()
+            assertEquals(1f, opacity(), .01f)
+            return
         }
         rule.mainClock.advanceTimeBy(32)
         assertTrue(opacity() < 1f)

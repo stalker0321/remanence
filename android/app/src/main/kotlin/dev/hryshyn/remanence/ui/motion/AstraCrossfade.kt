@@ -73,8 +73,10 @@ fun AstraCrossfade(
     Box(modifier.drawWithContent {
         val recording = if (state.recordingFirst) first else second
         val frozen = if (state.recordingFirst) second else first
-        // Always read the animation so this draw is invalidated by it.
-        val p = if (state.fadePending) 0f else progress.value
+        // Read the animation unconditionally: a draw that skips the read is
+        // never invalidated by it and would leave the new frame invisible.
+        val animated = progress.value
+        val p = if (state.fadePending) 0f else animated
         val fading = state.frozenDirty && p < 1f
         // Fade through: the old frame leaves first, then the new one rises
         // from the background. The two never share the screen at strength.

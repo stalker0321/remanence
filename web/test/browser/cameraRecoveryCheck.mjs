@@ -39,12 +39,14 @@ try {
         const box = el.getBoundingClientRect(), title = el.firstElementChild.getBoundingClientRect()
         return { focused: el === document.activeElement, top: box.top, bottom: box.bottom, titleBottom: title.bottom, height: innerHeight,
           overflow: document.documentElement.scrollWidth > innerWidth,
+          textWidth: el.firstElementChild.getBoundingClientRect().width, textSize: parseFloat(getComputedStyle(el.firstElementChild).fontSize),
           nearControls: el.nextElementSibling?.classList.contains('actions'),
           beforeAccount: !el.parentElement.querySelector('.scan-account') || !!(el.compareDocumentPosition(el.parentElement.querySelector('.scan-account')) & Node.DOCUMENT_POSITION_FOLLOWING) }
       })
       check(`${label}: failure focused and headline in viewport`, metrics.focused && metrics.top >= 0 && metrics.titleBottom <= metrics.height)
       check(`${label}: feedback at initiating controls, before identity gate`, metrics.nearControls && metrics.beforeAccount)
       check(`${label}: no horizontal overflow`, !metrics.overflow)
+      check(`${label}: readable feedback text measure`, metrics.textWidth >= Math.min(250, metrics.textSize * 7))
       check(`${label}: exact truthful recovery, not guessed dismissal`, (await feedback.textContent()).includes(await text(kind === 'denied' || kind === 'blocked' ? 'cameraDeniedHelp' : 'cameraUnavailableHelp')) && !(await feedback.textContent()).includes('dismissed'))
       check(`${label}: one explicit attempt; no camera or global duplicate`, (await state()).cameraAttempts === before + 1 && await page.locator('video.preview').count() === 0 && await page.locator('main > .notice').count() === 0)
       await shot(`${route}-${kind}${enlarged ? '-text200' : ''}`)

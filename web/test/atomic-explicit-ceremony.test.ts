@@ -61,6 +61,33 @@ describe('explicit create, then verify ceremony', () => {
     } finally { controller.dispose(); keys.drop() }
   })
 
+  it('PRF returned with the creation finishes registration without a second prompt', async () => {
+    const { f, controller, session, keys } = fixture()
+    f.prfAtCreation = true; f.creationGrant = true
+    try {
+      await controller.begin(); controller.chooseHandle('ada'); await controller.createPasskey('ada')
+      expect(controller.getSnapshot().phase).toBe('ready')
+      expect(f.creates).toBe(1)
+      expect(f.assertions).toBe(0)
+      expect(f.calls).not.toContain('setup/options')
+      expect(f.intents).toHaveLength(1)
+      expect(session.getSnapshot().phase).not.toBe('signed-out')
+    } finally { controller.dispose(); keys.drop() }
+  })
+
+  it.each([[true, false], [false, true]] as const)('creation PRF %s / grant %s still requires explicit verify', async (prf, grant) => {
+    const { f, controller, keys } = fixture()
+    f.prfAtCreation = prf; f.creationGrant = grant
+    try {
+      await controller.begin(); controller.chooseHandle('ada'); await controller.createPasskey('ada')
+      expect(controller.getSnapshot().phase).toBe('verify')
+      expect(f.intents).toHaveLength(0)
+      await controller.save('ada')
+      expect(controller.getSnapshot().phase).toBe('ready')
+      expect(f.assertions).toBe(1)
+    } finally { controller.dispose(); keys.drop() }
+  })
+
   it.each(['cancelProvider', 'noPrf'] as const)('%s keeps the created key and only retries verification', async failure => {
     const { f, controller, keys } = fixture()
     try {

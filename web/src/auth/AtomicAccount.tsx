@@ -109,8 +109,8 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     <div className="actions">
       {stopped ? <a className="button primary" href={href('home')} onClick={leave}>{t('atomicLeave')}</a> : null}
       {!signedIn && start ? <button className="primary google-button" aria-disabled={busy} onClick={() => { void controller.begin() }}>{t('continueGoogle')}</button> : null}
-      {!signedIn && creating ? <button className="primary" aria-disabled={busy} onClick={() => { void controller.createPasskey() }}><Icon name="key" />{t('atomicCreate')}</button> : null}
-      {!signedIn && pendingCredential && !unreadableCreation ? <button className="primary" aria-disabled={busy} onClick={() => { void controller.createPasskey() }}>{t('atomicLink')}</button> : null}
+      {!signedIn && creating ? <button className="primary" aria-disabled={busy} onClick={() => { void controller.createPasskey(handle) }}><Icon name="key" />{t('atomicCreate')}</button> : null}
+      {!signedIn && pendingCredential && !unreadableCreation ? <button className="primary" aria-disabled={busy} onClick={() => { void controller.createPasskey(handle) }}>{t('atomicLink')}</button> : null}
       {!signedIn && verifying ? <button className={unsupported ? undefined : 'primary'} aria-disabled={busy} onClick={() => { void controller.save(handle) }}><Icon name="key" />{t(unsupported ? 'atomicVerifyAgain' : 'atomicVerify')}</button> : null}
       {state.phase === 'unknown' && !busy ? <>
         <button className="primary" aria-disabled={busy} onClick={() => { void controller.resolve() }}>{t('atomicCheck')}</button>

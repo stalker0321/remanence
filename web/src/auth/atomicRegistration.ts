@@ -92,13 +92,22 @@ export class AtomicRegistration {
     } catch (error) { this.#show('handle', errorCode(error)) }
   }
 
-  /** Finishes after registration. A second browser prompt needs a new action. */
-  createPasskey(): Promise<void> {
+  /**
+   * Registers the passkey. When the browser returned the PRF result with the
+   * creation, registration finishes here; otherwise a second browser prompt
+   * needs the explicit Verify action.
+   */
+  createPasskey(rawHandle?: string): Promise<void> {
     const owner = this.#owner
     if (!owner || !['passkey', 'creating', 'credential-pending'].includes(this.#view.phase)) return Promise.resolve()
     return this.#run(owner, async () => {
       this.#show('creating')
       await this.#stageCredential(owner)
+      if (rawHandle !== undefined && owner.grant && owner.candidate) {
+        this.#show('saving')
+        await this.#startFinalize(owner, normalizeHandle(rawHandle))
+        return
+      }
       this.#show('verify')
     })
   }
@@ -112,12 +121,16 @@ export class AtomicRegistration {
       this.#requireReserved(owner)
       this.#show('saving')
       if (!owner.grant) await this.#authorize(owner)
-      this.#check(owner)
-      if (!owner.candidate) throw new AtomicError('SETUP_REJECTED')
-      owner.intent = Object.freeze({ epoch: owner.setup!.reservation.epoch, operation_id: crypto.randomUUID(),
-        final_authorization: owner.grant!, handle, key_bundle: owner.candidate.bundle, record: owner.candidate.record })
-      await this.#finalize(owner)
+      await this.#startFinalize(owner, handle)
     })
+  }
+
+  async #startFinalize(owner: Owner, handle: string): Promise<void> {
+    this.#check(owner)
+    if (!owner.candidate) throw new AtomicError('SETUP_REJECTED')
+    owner.intent = Object.freeze({ epoch: owner.setup!.reservation.epoch, operation_id: crypto.randomUUID(),
+      final_authorization: owner.grant!, handle, key_bundle: owner.candidate.bundle, record: owner.candidate.record })
+    await this.#finalize(owner)
   }
 
   /** Safe exact replay, including when GET says RESERVED. No new intent here. */
@@ -208,6 +221,7 @@ export class AtomicRegistration {
       owner.creationUnresolved = false
       return
     }
+    let creationPrf: Uint8Array | null = null
     if (!owner.created) {
       if (owner.creationUnresolved) throw new AtomicError('PASSKEY_CREATION_UNRESOLVED')
       const begin = await this.#post(owner, 'credential/options', { epoch })
@@ -226,14 +240,28 @@ export class AtomicRegistration {
         // Store before any network write. A lost response must never offer
         // creation again just because a status read still says RESERVED.
         owner.created = { flow, response: this.#publicAssertion(created) }
-      } finally { created.prf?.fill(0) }
+        if (created.prf?.length === 32) { creationPrf = created.prf; owner.buffers.add(creationPrf) }
+      } finally { if (created.prf !== creationPrf) created.prf?.fill(0) }
     }
     const pending = owner.created!
-    const verified = await this.#post(owner, 'credential/verify', { epoch, flow: pending.flow, response: pending.response })
-    if (verified.registered !== true || verified.recoverable !== false || binary(verified.credential_id, 2048) !== pending.response.id) throw new AtomicError('SETUP_REJECTED')
-    owner.credential = pending.response.id
-    owner.created = null
-    owner.creationUnresolved = false
+    let adopted = false
+    try {
+      const verified = await this.#post(owner, 'credential/verify', { epoch, flow: pending.flow, response: pending.response })
+      if (verified.registered !== true || verified.recoverable !== false || binary(verified.credential_id, 2048) !== pending.response.id) throw new AtomicError('SETUP_REJECTED')
+      owner.credential = pending.response.id
+      owner.created = null
+      owner.creationUnresolved = false
+      // A creation that already carries PRF needs no second prompt when the
+      // server also issued the finalize grant for this verified registration.
+      const grant = verified.final_authorization
+      if (creationPrf && typeof grant === 'string' && /^rgf_[A-Za-z0-9_-]{43}$/.test(grant)) {
+        binary(grant.slice(4), 43)
+        await this.#adopt(owner, creationPrf, grant)
+        adopted = true
+      }
+    } finally {
+      if (creationPrf && !adopted) { creationPrf.fill(0); owner.buffers.delete(creationPrf) }
+    }
   }
 
   async #authorize(owner: Owner): Promise<void> {
@@ -257,46 +285,49 @@ export class AtomicRegistration {
       const verified = await this.#post(owner, 'setup/verify', { epoch, flow, response })
       if (verified.authentication_verified !== true || verified.credential_id !== owner.credential || typeof verified.final_authorization !== 'string' || !/^rgf_[A-Za-z0-9_-]{43}$/.test(verified.final_authorization)) throw new AtomicError('SETUP_REJECTED')
       binary(verified.final_authorization.slice(4), 43)
-      const grant = verified.final_authorization
-      if (owner.candidate) {
-        // Reassert the SAME credential. Prove its PRF still opens the frozen
-        // candidate; do not silently reseal/generate against a different result.
-        const caps = await unlockAccount({ record: owner.candidate.record,
-          encryption_public_keyset: owner.candidate.bundle.encryption_public_keyset,
-          signing_public_keyset: owner.candidate.bundle.signing_public_keyset }, secret)
-        caps.lock()
-        this.#check(owner)
-        owner.candidate.prf.fill(0)
-        owner.buffers.delete(owner.candidate.prf)
-        owner.candidate = { ...owner.candidate, prf: secret }
-        owner.grant = grant
-        retained = true
-        return
-      }
-      // Real verified assertion + usable PRF precede all candidate generation.
-      const identity = await generateLocalIdentity()
-      try {
-        this.#check(owner)
-        const seeds = identity.copySeeds()
-        owner.buffers.add(seeds.encryption); owner.buffers.add(seeds.signing)
-        try {
-          const bundle = Object.freeze(identity.publicBundle())
-          const prepared = await prepareRecoveryRecord({ accountId: owner.setup!.reservation.account_id, bundleId: identity.bundleId,
-            credentialId: owner.credential!, prf: secret, encryptionSeed: seeds.encryption, signingSeed: seeds.signing,
-            encryptionPublicKeyset: bundle.encryption_public_keyset, signingPublicKeyset: bundle.signing_public_keyset })
-          prepared.code.fill(0) // Optional recovery code is not part of this journey.
-          this.#check(owner)
-          owner.candidate = { bundle, record: Object.freeze(prepared.record), prf: secret }
-          owner.grant = grant
-          retained = true
-        } finally {
-          seeds.encryption.fill(0); seeds.signing.fill(0)
-          owner.buffers.delete(seeds.encryption); owner.buffers.delete(seeds.signing)
-        }
-      } finally { identity.wipe() }
+      await this.#adopt(owner, secret, verified.final_authorization)
+      retained = true
     } finally {
       if (!retained && secret) { secret.fill(0); owner.buffers.delete(secret) }
     }
+  }
+
+  /** Adopts a verified PRF [secret] (already in the owner's buffers) and its grant. */
+  async #adopt(owner: Owner, secret: Uint8Array, grant: string): Promise<void> {
+    if (owner.candidate) {
+      // Reassert the SAME credential. Prove its PRF still opens the frozen
+      // candidate; do not silently reseal/generate against a different result.
+      const caps = await unlockAccount({ record: owner.candidate.record,
+        encryption_public_keyset: owner.candidate.bundle.encryption_public_keyset,
+        signing_public_keyset: owner.candidate.bundle.signing_public_keyset }, secret)
+      caps.lock()
+      this.#check(owner)
+      owner.candidate.prf.fill(0)
+      owner.buffers.delete(owner.candidate.prf)
+      owner.candidate = { ...owner.candidate, prf: secret }
+      owner.grant = grant
+      return
+    }
+    // Real verified assertion + usable PRF precede all candidate generation.
+    const identity = await generateLocalIdentity()
+    try {
+      this.#check(owner)
+      const seeds = identity.copySeeds()
+      owner.buffers.add(seeds.encryption); owner.buffers.add(seeds.signing)
+      try {
+        const bundle = Object.freeze(identity.publicBundle())
+        const prepared = await prepareRecoveryRecord({ accountId: owner.setup!.reservation.account_id, bundleId: identity.bundleId,
+          credentialId: owner.credential!, prf: secret, encryptionSeed: seeds.encryption, signingSeed: seeds.signing,
+          encryptionPublicKeyset: bundle.encryption_public_keyset, signingPublicKeyset: bundle.signing_public_keyset })
+        prepared.code.fill(0) // Optional recovery code is not part of this journey.
+        this.#check(owner)
+        owner.candidate = { bundle, record: Object.freeze(prepared.record), prf: secret }
+        owner.grant = grant
+      } finally {
+        seeds.encryption.fill(0); seeds.signing.fill(0)
+        owner.buffers.delete(seeds.encryption); owner.buffers.delete(seeds.signing)
+      }
+    } finally { identity.wipe() }
   }
 
   async #finalize(owner: Owner): Promise<void> {

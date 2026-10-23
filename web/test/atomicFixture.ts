@@ -23,6 +23,7 @@ export class AtomicFixture {
   creates = 0; assertions = 0; provisions = 0
   grants = 0
   noPrf = false; cancelProvider = false
+  prfAtCreation = false; creationGrant = false
   finalMode: 'ok' | 'lost-before' | 'lost-after' | 'handle' | 'expired-grant' | 'malformed' = 'ok'
   readMode: 'ok' | 'missing' | 'wrong-account' | 'wrong-bundle' | 'wrong-credential' | 'wrong-anchor' | 'corrupt' | 'offline' = 'ok'
   pause: (point: string) => Promise<void> = async () => undefined
@@ -31,7 +32,7 @@ export class AtomicFixture {
   api: ApiTransport & ByteTransport = { request: (input) => this.read(input), requestBytes: async () => { throw new Error('fixture has no blob API') } }
   google: GoogleIdentityPort = { requestIdToken: async () => { this.calls.push('google/provider'); await this.pause('google/provider'); return 'synthetic-Google-proof' } }
   passkeys: PasskeyPort = { canAuthenticate: () => true,
-    create: async () => { this.creates++; this.calls.push('passkey/create'); const result = this.assertion(null); await this.pause('passkey/create'); return result },
+    create: async () => { this.creates++; this.calls.push('passkey/create'); const result = this.assertion(this.prfAtCreation ? new Uint8Array(32).fill(7) : null); await this.pause('passkey/create'); return result },
     get: async () => {
       this.assertions++; this.calls.push('passkey/get')
       if (this.cancelProvider) throw new AuthError('PASSKEY_CANCELLED')
@@ -73,7 +74,8 @@ export class AtomicFixture {
       ? { user: { id: b64(uuidToBytes(this.reservation.account_id)) } } : { allowCredentials: [{ id: CREDENTIAL, type: 'public-key' }] }, expires_at: deadline }
     else if (action === 'credential/verify') {
       this.reservation.credential_ids = [CREDENTIAL]
-      result.body = { credential_id: CREDENTIAL, registered: true, recoverable: false }
+      result.body = { credential_id: CREDENTIAL, registered: true, recoverable: false,
+        ...(this.creationGrant ? { final_authorization: `rgf_${b64(new Uint8Array(32).fill(200))}`, expires_at: deadline } : {}) }
     } else if (action === 'setup/verify') {
       this.grants++
       result.body = { credential_id: CREDENTIAL, authentication_verified: true, final_authorization: `rgf_${b64(new Uint8Array(32).fill(this.grants))}`, expires_at: deadline }

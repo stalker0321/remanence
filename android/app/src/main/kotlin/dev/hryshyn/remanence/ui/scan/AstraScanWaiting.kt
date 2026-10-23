@@ -89,20 +89,15 @@ fun ScanWaitingGroup(
         return
     }
 
-    AstraEnterTransition(motion = motion, modifier = modifier) {
+    // The postcard owns this entrance. Status text and Stop remain stationary;
+    // matching -> pending -> accepted do not restart or stack object motion.
+    Box(modifier) {
         // The column fills the waiting width so CenterHorizontally has a
         // full-width scope to center the height-led portrait card in.
         Column(Modifier.fillMaxWidth()) {
-            val density = LocalDensity.current
-            val carryShiftPx = with(density) { 8.dp.toPx() }
+            val presence = remember { Animatable(if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else AstraMotionSpec.ARRIVAL_ALPHA) }
 
-            // Entry presence: the captured front becomes the wait.
-            val presence = remember { Animatable(0f) }
-            // Cross-state carry: re-settles on every waiting transition.
-            val carry = remember { Animatable(1f) }
-            var entered by remember { mutableStateOf(false) }
-
-            LaunchedEffect(Unit) {
+            LaunchedEffect(motion) {
                 val durationMs = AstraMotionSpec.imageTravelMs(motion)
                 if (durationMs <= 0) {
                     presence.snapTo(1f)
@@ -111,26 +106,6 @@ fun ScanWaitingGroup(
                     presence.animateTo(1f, astraTween<Float>(durationMs, AstraGentleEasing))
                 } else {
                     presence.animateTo(1f, astraTween<Float>(durationMs, AstraDissolveEasing))
-                }
-            }
-            LaunchedEffect(state::class.simpleName) {
-                if (!entered) {
-                    entered = true
-                } else if (motion == AstraMotionSpec.Resolved.FULL) {
-                    val handoffMs = if (state is ScanMatchUiState.Accepted) {
-                        AstraMotionSpec.openingMs(motion)
-                    } else {
-                        AstraMotionSpec.imageTravelMs(motion)
-                    }
-                    val handoffEasing = if (state is ScanMatchUiState.Accepted) {
-                        AstraDissolveEasing
-                    } else {
-                        AstraTravelEasing
-                    }
-                    carry.snapTo(0f)
-                    carry.animateTo(1f, astraTween<Float>(handoffMs, handoffEasing))
-                } else {
-                    carry.snapTo(1f)
                 }
             }
 
@@ -147,26 +122,15 @@ fun ScanWaitingGroup(
                     .align(Alignment.CenterHorizontally)
                     .heightIn(min = 180.dp, max = 275.dp)
                     .graphicsLayer {
-                        alpha = presence.value
+                        alpha = if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else presence.value
                         val entryScale = if (fullMotion) {
                             AstraMotionSpec.FOCUS_SELECT_SCALE_FROM +
                                 (1f - AstraMotionSpec.FOCUS_SELECT_SCALE_FROM) * presence.value
                         } else {
                             1f
                         }
-                        val carryScale = if (fullMotion) {
-                            AstraMotionSpec.FOCUS_SELECT_SCALE_FROM +
-                                (1f - AstraMotionSpec.FOCUS_SELECT_SCALE_FROM) * carry.value
-                        } else {
-                            1f
-                        }
-                        scaleX = entryScale * carryScale
-                        scaleY = entryScale * carryScale
-                        translationY = if (fullMotion) {
-                            (1f - carry.value) * carryShiftPx
-                        } else {
-                            0f
-                        }
+                        scaleX = entryScale
+                        scaleY = entryScale
                     },
             )
             Spacer(Modifier.height(16.dp))

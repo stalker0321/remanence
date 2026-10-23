@@ -30,14 +30,36 @@ class AstraEnterMotionChangeTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
     @Test fun removingAnimationsDuringArrivalImmediatelyRevealsContent() {
+        verifyPreferenceChange("enter")
+    }
+
+    @Test fun contextPreferenceChangeDoesNotReplayTheSameRoute() {
+        verifyPreferenceChange("context")
+    }
+
+    @Test fun stepPreferenceChangeDoesNotReplayTheSameStep() {
+        verifyPreferenceChange("step")
+    }
+
+    private fun verifyPreferenceChange(surface: String) {
         val motion = mutableStateOf(AstraMotionSpec.Resolved.FULL)
+        val step = mutableStateOf(0)
         rule.mainClock.autoAdvance = false
         rule.setContent {
             Box(Modifier.size(96.dp).background(Color.White)) {
-                AstraEnterTransition(motion.value) {
+                val probe: @androidx.compose.runtime.Composable () -> Unit = {
                     Box(Modifier.size(48.dp).background(Color.Red).testTag("probe"))
                 }
+                when (surface) {
+                    "context" -> AstraContextArrival(motion.value, contentKey = "unchanged", content = probe)
+                    "step" -> AstraStepArrival(motion.value, stepKey = step.value, content = probe)
+                    else -> AstraEnterTransition(motion.value, content = probe)
+                }
             }
+        }
+        if (surface == "step") {
+            rule.mainClock.advanceTimeBy(32)
+            rule.runOnUiThread { step.value++ }
         }
         rule.mainClock.advanceTimeBy(32)
         assertTrue(opacity() < 1f)

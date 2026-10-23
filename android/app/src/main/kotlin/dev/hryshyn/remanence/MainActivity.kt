@@ -285,6 +285,8 @@ private fun RootSurface(
     }
 
     RootScreen(
+        onOpenSettings = rootViewModel::openSettings,
+        onOpenHistory = rootViewModel::openHistory,
         showPublicHome = homeIntent == null,
         authState = authState,
         destination = destination,
@@ -449,12 +451,7 @@ private fun RootSurface(
                     showRecoveryNote = showRecoveryNote,
                 )
             }
-            if (authenticated != null) {
-                AuthenticatedHomeChrome(authenticated.handle, { logoutRequested = true }, home,
-                    onSettings = rootViewModel::openSettings, onHistory = rootViewModel::openHistory)
-            } else {
-                home()
-            }
+            home()
         },
         historyContent = {
             val owner = (authState as? AuthUiState.Authenticated)?.userId
@@ -463,8 +460,6 @@ private fun RootSurface(
                 historyViewModel.bind(owner)
                 historyViewModel.refresh()
             }
-            dev.hryshyn.remanence.ui.hold.ProductFrame(dev.hryshyn.remanence.ui.hold.ProductSection.SENT,
-                rootViewModel::returnToHome, {}, rootViewModel::openSettings) {
             dev.hryshyn.remanence.ui.history.HistoryScreen(
                 state = if (state.owner == owner) state else dev.hryshyn.remanence.ui.history.HistoryUiState(),
                 onBack = {
@@ -480,12 +475,10 @@ private fun RootSurface(
                 onCreate = { rootViewModel.requestHomeIntent(HomeIntent.MAKE) },
                 showHeader = false,
             )
-            }
         },
         settingsContent = {
             val signedIn = authState as? AuthUiState.Authenticated
-            if (signedIn != null) dev.hryshyn.remanence.ui.hold.ProductFrame(dev.hryshyn.remanence.ui.hold.ProductSection.SETTINGS,
-                rootViewModel::returnToHome, rootViewModel::openHistory, {}) {
+            if (signedIn != null) {
             dev.hryshyn.remanence.ui.settings.SettingsScreen(signedIn.handle, appLocale,
                 onLocaleSelected, signedIn.activeKeyBundleId?.let { container.recoveryReadiness.isReady(signedIn.userId, it) } == true,
                 rootViewModel::returnToHome, rootViewModel::logout,

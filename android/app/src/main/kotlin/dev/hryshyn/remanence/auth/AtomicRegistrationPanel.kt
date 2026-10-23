@@ -18,6 +18,8 @@ import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.recovery.AndroidRecoveryCredentials
 import dev.hryshyn.remanence.ui.auth.*
 import dev.hryshyn.remanence.ui.hold.*
+import dev.hryshyn.remanence.ui.motion.AstraStepArrival
+import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 
 internal fun atomicRegistrationErrorMessage(reason: String): Int = when (reason) {
     "PRF_UNAVAILABLE" -> R.string.atomic_registration_prf_unavailable
@@ -95,6 +97,9 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
     }
     val scroll = rememberScrollState()
     LaunchedEffect(step, restore, capabilityBlocked) { scroll.scrollTo(0) }
+    // Busy/error ticks do not replay the page. Provider operations remain at
+    // the same composition site while intentional semantic steps arrive.
+    AstraStepArrival(rememberAstraMotion(), Triple(step, restore, capabilityBlocked)) {
     Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(bottom = HoldSpace.Section),
         verticalArrangement = Arrangement.spacedBy(HoldSpace.Section)) {
         Column(verticalArrangement = Arrangement.spacedBy(HoldSpace.Related)) {
@@ -171,6 +176,7 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
             }
             if (view.busy) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("atomic_busy"))
         }
+    }
     }
 }
 

@@ -19,6 +19,10 @@ package dev.hryshyn.remanence.ui.motion
  */
 object AstraMotionSpec {
 
+    /** Photo controls follow a direct, non-bouncy gesture rhythm. */
+    const val PHOTO_PAGE_MS = 280
+    const val PHOTO_ENTER_MS = 240
+
     /** Calmer product routine Carry; originally340ms in the study. */
     const val ROUTINE_CONTEXT_MS = 520
 

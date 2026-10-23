@@ -739,7 +739,10 @@ private fun ContentAndCompositionFlow(
     BackHandler(onBack = back)
     Column(modifier.fillMaxSize().testTag("create_screen_scroll")) {
         HoldFlowHeader(onBack = back, onClose = onExit)
-        Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal =
+        // Animation is keyed, the content is not: retain the preparer/choice
+        // while the ready first sheet replaces the content form.
+        AstraStepArrival(rememberAstraMotion(), listOf(step, cropSlot, reviewing, frozen != null),
+            Modifier.weight(1f).fillMaxWidth().padding(horizontal =
             if (step == CreateViewModel.Step.COMPOSE) 18.dp else HoldSpace.pageGutter())
             .padding(bottom = 16.dp)) {
             if (step == CreateViewModel.Step.CONTENT) {

@@ -53,6 +53,10 @@ class CapsuleOriginalPagerStabilityTest {
     fun landscapeOriginalsFitAndControlsStayInsideWindow() = verifyPaging("uk-landscape", 1.5f)
 
     private fun verifyPaging(locale: String, fontScale: Float = 1f) {
+        // Dialog is another window: host LocalDensity alone is not this proof.
+        val configuration = android.content.res.Configuration(rule.activity.resources.configuration)
+        configuration.fontScale = fontScale
+        rule.activity.resources.updateConfiguration(configuration, rule.activity.resources.displayMetrics)
         val ids = listOf("wide", "tall")
         val images = listOf(320 to 160, 160 to 320).mapIndexed { index, (width, height) ->
             Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply {
@@ -112,7 +116,7 @@ class CapsuleOriginalPagerStabilityTest {
             val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
             try {
                 view.draw(Canvas(bitmap))
-                val dir = File("build/t389-review").apply { mkdirs() }
+                val dir = File("build/t458-viewer").apply { mkdirs() }
                 File(dir, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
                 File(dir, "$name-semantics.txt").writeText(hierarchy)
                 val colors = IntArray(bitmap.width * bitmap.height)
@@ -123,7 +127,7 @@ class CapsuleOriginalPagerStabilityTest {
                 colors.forEachIndexed { index, color -> if (color in markers) { x += index % bitmap.width; y += index / bitmap.width } }
                 assertEquals("uncut original aspect $name", aspect,
                     (x.max() - x.min() + 1f) / (y.max() - y.min() + 1f), .04f)
-                File(dir, "$name-facts.txt").writeText("window=${bitmap.width}x${bitmap.height}\n" +
+                File(dir, "$name-facts.txt").writeText("window=${bitmap.width}x${bitmap.height}\nfontScale=${view.resources.configuration.fontScale}\n" +
                     "photoBounds=${x.min()},${y.min()},${x.max()},${y.max()} aspect=$aspect\n" +
                     markers.joinToString("\n") { "corner=$it pixels=${colors.count { p -> p == it }}" })
             } finally { bitmap.recycle() }

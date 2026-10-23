@@ -2235,6 +2235,7 @@ class CreateViewModel(
         val epoch = generatorSessionEpoch ?: 0L
         val note = if (noteEditor.isEmpty) null else noteEditor.text
         previewJob = viewModelScope.launch {
+            try {
             val result = generatorPreviewCoordinator.compute(ownerId, epoch, ids, note)
             if (generation == previewGeneration) {
                 // A non-empty note previews as NotePending before any Ready;
@@ -2246,6 +2247,17 @@ class CreateViewModel(
                     maybeBuildCropSource(ids)
                 }
                 _generatorPreview.value = result
+            }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Preparation is not publication. Keep the current form and
+                // durable FRONT/capsule ID, with no automatic retry or raw
+                // exception text. An obsolete failure cannot retire a newer
+                // preview, source or retained-original owner.
+                if (generation == previewGeneration) {
+                    _generatorPreview.value = GeneratorPreviewState.Unavailable("preview preparation failed")
+                }
             }
         }
     }
@@ -2261,8 +2273,10 @@ class CreateViewModel(
         val factory = collageSourceFactory ?: return
         if (collageCropSource != null) return
         if (cropSourceBuiltIds == photoIds) return
-        cropSourceBuiltIds = photoIds.toList()
         collageCropSource = factory.create(retainedOriginals)
+        // Commit after construction: an ordinary factory failure must not
+        // poison an explicit note/edit retry for the same selected photos.
+        cropSourceBuiltIds = photoIds.toList()
     }
 
     /** Drops collage holder/source ownership (zeroized/closed). */

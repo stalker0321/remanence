@@ -263,6 +263,85 @@ class CreateCollageDiagnosticsTest {
         return state as GeneratorPreviewState.Ready
     }
 
+    @Test fun ordinaryLoaderFailureIsRedactedAndExplicitRepickRecoversWithoutNewDraft() {
+        val ids = listOf("u1", "u2", "u3")
+        val delegate = previewLoader(ids.associateWith { originalFor(it) })
+        var fail = true
+        val vm = viewModel(GeneratorPreviewLoader { if (fail) error("private source details") else delegate.load(it) })
+        vm.beginSession(1L, senderUserUuid.toString())
+        val capsuleId = vm.capsuleId
+        vm.onPhotosPicked(ids)
+        assertEquals(GeneratorPreviewState.Unavailable("preview preparation failed"), vm.generatorPreview.value)
+        assertEquals(ids, vm.photoSelection.selectedIds)
+        assertEquals(capsuleId, vm.capsuleId)
+        fail = false
+        drivePhotos(vm, ids)
+        assertEquals(capsuleId, vm.capsuleId)
+        assertTrue(vm.uploadStatus.value is CreateViewModel.CreateUploadStatus.NotStarted)
+        vm.endSession()
+    }
+
+    @Test fun factoryFailureDoesNotPoisonSamePhotoNoteRetry() {
+        val ids = listOf("u1", "u2", "u3")
+        var calls = 0
+        val goodFactory = sourceFactory(mutableListOf())
+        val vm = viewModel(previewLoader(ids.associateWith { originalFor(it) }), CollageCropSourceFactory { holder ->
+            calls++
+            if (calls == 1) error("private runtime details")
+            goodFactory.create(holder)
+        })
+        vm.beginSession(1L, senderUserUuid.toString())
+        val capsuleId = vm.capsuleId
+        vm.onPhotosPicked(ids)
+        assertEquals(GeneratorPreviewState.Unavailable("preview preparation failed"), vm.generatorPreview.value)
+        assertNull(vm.collageCropSource)
+        vm.noteEditor.onChange("explicit retry") // Same picker IDs, coordinator cache reused.
+        assertTrue(vm.generatorPreview.value is GeneratorPreviewState.NotePending)
+        assertEquals(2, calls)
+        val source = vm.collageCropSource
+        assertTrue(source != null)
+        vm.noteEditor.onChange("another edit")
+        assertTrue(vm.collageCropSource === source)
+        assertEquals(2, calls)
+        assertEquals(capsuleId, vm.capsuleId)
+        vm.endSession()
+    }
+
+    @Test fun obsoleteNonCooperativeFailureCannotReplaceNewerReadyOrSource() {
+        val old = listOf("u1", "u2", "u3")
+        val fresh = listOf("d1", "d2", "d3")
+        val gate = CompletableDeferred<Unit>()
+        val delegate = previewLoader((old + fresh).associateWith { originalFor(it) })
+        val vm = viewModel(GeneratorPreviewLoader { id ->
+            if (id == old.first()) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                gate.await()
+                error("obsolete private failure")
+            } else delegate.load(id)
+        }, sourceFactory(mutableListOf()))
+        vm.beginSession(1L, senderUserUuid.toString())
+        vm.onPhotosPicked(old)
+        val ready = drivePhotos(vm, fresh)
+        val source = vm.collageCropSource
+        gate.complete(Unit)
+        assertTrue(vm.generatorPreview.value === ready)
+        assertTrue(vm.collageCropSource === source)
+        vm.endSession()
+    }
+
+    @Test fun preparationCancellationRetainsCancellationIdentityNotUnavailable() {
+        val cancelled = kotlinx.coroutines.CancellationException("synthetic cancellation")
+        var completion: Throwable? = null
+        val vm = viewModel(GeneratorPreviewLoader {
+            kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!.invokeOnCompletion { completion = it }
+            throw cancelled
+        })
+        vm.beginSession(1L, senderUserUuid.toString())
+        vm.onPhotosPicked(listOf("u1", "u2", "u3"))
+        org.junit.Assert.assertSame(cancelled, completion)
+        assertFalse(vm.generatorPreview.value is GeneratorPreviewState.Unavailable)
+        vm.endSession()
+    }
+
     @Test
     fun retainCallbackUsesLiveOriginalBytesNotPreviewBytes() = runTest {
         val original = ByteArray(64) { it.toByte() }

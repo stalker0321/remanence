@@ -54,6 +54,8 @@ fun RootScreen(
     showPublicHome: Boolean = false,
     settingsContent: @Composable () -> Unit = {},
     historyContent: @Composable () -> Unit = {},
+    onOpenSettings: (() -> Unit)? = null,
+    onOpenHistory: (() -> Unit)? = null,
 ) {
     if (authState is AuthUiState.Resolving) {
         // Cold-start session check still in flight: hold a neutral frame so
@@ -97,6 +99,29 @@ fun RootScreen(
         enabled = destination == AppDestination.Create || destination == AppDestination.Scan || destination == AppDestination.Settings,
         onBack = onExitFlow,
     )
+
+    // One persistent product shell: navigation never fades or travels with a
+    // page. Only the incoming body arrives; the outgoing body is disposed now.
+    val section = when (destination) {
+        AppDestination.Home -> dev.hryshyn.remanence.ui.hold.ProductSection.HOME
+        AppDestination.History -> dev.hryshyn.remanence.ui.hold.ProductSection.SENT
+        AppDestination.Settings -> dev.hryshyn.remanence.ui.hold.ProductSection.SETTINGS
+        else -> null
+    }
+    if (section != null && onOpenSettings != null && onOpenHistory != null) {
+        dev.hryshyn.remanence.ui.hold.ProductFrame(section, onExitFlow, onOpenHistory, onOpenSettings) {
+            AstraContextArrival(motion, Modifier.fillMaxSize(), contentKey = destination) {
+                key(destination) {
+                    when (destination) {
+                        AppDestination.Settings -> settingsContent()
+                        AppDestination.History -> historyContent()
+                        else -> homeContent()
+                    }
+                }
+            }
+        }
+        return
+    }
 
     // Opening-Carry front holder: remembered outside key(destination) so the
     // Scan branch's disposal cannot wipe the published postcard bounds before

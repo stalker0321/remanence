@@ -300,7 +300,10 @@ export function createRecognitionEngine(deps: RecognitionEngineDeps = {}): Recog
           const references = candidates.map((entry) => S3.reference(entry.capsuleId, toS3Features(entry.fingerprint), matcher.vocabulary))
           const decision = S3.match(matcher.cv, toS3Features(query), references, matcher.vocabulary, frame.components, true)
           assertLive()
-          if (decision.ambiguousIds.length >= 2) return { kind: 'many' }
+          if (decision.ambiguousIds.length >= 2) {
+            const capsuleIds = decision.ambiguousIds.filter((id) => catalogIdSet.has(id))
+            return capsuleIds.length >= 2 ? { kind: 'many', capsuleIds } : { kind: 'many' }
+          }
           if (decision.id !== null) {
             if (!catalogIdSet.has(decision.id)) throw refuse('invalid')
             return { kind: 'one', capsuleId: decision.id }

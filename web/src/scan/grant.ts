@@ -7,6 +7,8 @@ import type { RecognitionIndex } from './recognitionIndex'
 export interface MatchResult {
   kind: 'none' | 'many' | 'one'
   capsuleId?: string
+  /** `many` only: capsules the same postcard matched (one per sender). */
+  capsuleIds?: readonly string[]
 }
 
 /** T328 — optional pre-grant recognition context for a genuine engine. */
@@ -51,14 +53,24 @@ export async function considerCapture(
   capture: StillCapture,
   catalog: IncomingCatalog,
   context?: MatchContext,
+  chosen?: string,
 ): Promise<ScanGrant> {
   if (view.phase === 'signed-out' || view.phase === 'authenticated' || view.accountId === null) {
     throw new ScanError('GRANT_MISMATCH')
   }
   const result = await engine.match(capture, catalog, context)
   if (result.kind === 'none') throw new ScanError('NO_MATCH')
-  if (result.kind !== 'one' || result.capsuleId === undefined) throw new ScanError('AMBIGUOUS')
-  const item = catalog.items.find((candidate) => candidate.capsuleId === result.capsuleId)
+  const own = (capsuleId: string) => catalog.items.some((candidate) => candidate.capsuleId === capsuleId && candidate.recipientUserId === view.accountId)
+  let capsuleId = result.capsuleId
+  if (result.kind === 'many') {
+    // The same postcard from several senders: only the recipient can say whose
+    // capsule this is. A choice counts only if this very capture matched it.
+    const choices = (result.capsuleIds ?? []).filter(own)
+    if (chosen === undefined || !choices.includes(chosen)) throw new ScanError('AMBIGUOUS', choices.length >= 2 ? choices : [])
+    capsuleId = chosen
+  }
+  if (capsuleId === undefined) throw new ScanError('AMBIGUOUS')
+  const item = catalog.items.find((candidate) => candidate.capsuleId === capsuleId)
   if (!item || item.recipientUserId !== view.accountId) throw new ScanError('GRANT_MISMATCH')
   return ScanGrant.issue(view.accountId, item.capsuleId)
 }

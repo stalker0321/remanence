@@ -36,13 +36,14 @@ export async function receivePostcard(
   index?: RecognitionIndex,
   transport?: ApiTransport,
   onAdmission?: () => void,
+  chosen?: string,
 ): Promise<void> {
   if (signal.aborted) throw new ScanError('CANCELLED')
   const view = session.getSnapshot()
   const generation = view.generation
   if (view.phase !== 'keys-unlocked' || view.accountId === null) throw new ScanError('GRANT_MISMATCH')
   if (catalog.items.length === 0) throw new ScanError('EMPTY')
-  const grant = await considerCapture(view, engine, capture, catalog, index ? { index } : undefined)
+  const grant = await considerCapture(view, engine, capture, catalog, index ? { index } : undefined, chosen)
   if (signal.aborted) throw new ScanError('CANCELLED')
   stillUnlocked(session, generation)
   const item = catalog.items.find((candidate) => candidate.capsuleId === grant.capsuleId)

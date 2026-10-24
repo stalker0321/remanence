@@ -26,6 +26,7 @@ import { ScanError } from '../scan/errors'
 import { type RecognitionEngine } from '../scan/grant'
 import { explainScan } from '../scan/notice'
 import { receivePostcard } from '../scan/receive'
+import { senderHandles } from '../scan/senders'
 import { createRecognitionEngine } from '../scan/recognitionEngine'
 import { downloadCiphertext } from '../sync/incoming'
 import { fetchCompleteIncoming, wipeIncomingCatalog } from '../sync/incomingAll'
@@ -299,6 +300,8 @@ export function Scan({
   const [live, setLive] = useState(false)
   const [held, setHeld] = useState(false)
   const [working, setWorking] = useState(false)
+  /** Same postcard from several senders: whose capsule to open. */
+  const [choices, setChoices] = useState<readonly { capsuleId: string; handle: string | null }[]>([])
   const [openStatus, setOpenStatus] = useState<MessageKey>('scanPreparing')
   const [cameraFailure, setCameraFailure] = useState<CameraFailure | null>(null)
 
@@ -395,6 +398,7 @@ export function Scan({
       }
       heldShot.current?.bytes.fill(0)
       heldShot.current = picture
+      setChoices([])
       setHeld(true)
       onNotice('cameraHeld')
     } catch {
@@ -404,7 +408,7 @@ export function Scan({
     }
   }
 
-  async function match() {
+  async function match(chosen?: string) {
     if (busy.current) return
     const picture = heldShot.current
     if (!picture) return
@@ -414,7 +418,9 @@ export function Scan({
     }
     busy.current = true
     setWorking(true)
+    setChoices([])
     setOpenStatus('scanPreparing')
+    let senders = new Map<string, string>()
     const attempt = ++operation.current
     const controller = new AbortController()
     openAbort.current?.abort()
@@ -443,6 +449,7 @@ export function Scan({
           signal: controller.signal,
         })
         if (controller.signal.aborted) return
+        senders = new Map(incoming.items.map((item) => [item.capsuleId, item.senderUserId]))
         await receivePostcard(
           store,
           keys,
@@ -456,6 +463,7 @@ export function Scan({
           index,
           transport,
           () => { if (!controller.signal.aborted && operation.current === attempt) setOpenStatus('openChecking') },
+          chosen,
         )
       } finally {
         index?.dispose()
@@ -470,7 +478,13 @@ export function Scan({
         onNotice('errorRegion')
       }
     } catch (error) {
-      if (!controller.signal.aborted && operation.current === attempt) onNotice(explainScan(error))
+      if (!controller.signal.aborted && operation.current === attempt && error instanceof ScanError && error.code === 'AMBIGUOUS' && error.choices.length >= 2) {
+        const handles = await senderHandles(store, transport, error.choices.map((id) => senders.get(id) ?? ''), controller.signal)
+        if (!controller.signal.aborted && operation.current === attempt) {
+          setChoices(error.choices.map((capsuleId) => ({ capsuleId, handle: handles.get(senders.get(capsuleId) ?? '') ?? null })))
+          onNotice('chooseSender')
+        }
+      } else if (!controller.signal.aborted && operation.current === attempt) onNotice(explainScan(error))
     } finally {
       if (operation.current === attempt) { busy.current = false; setWorking(false) }
     }
@@ -478,6 +492,7 @@ export function Scan({
 
   function close() {
     focusAfterClose.current = true
+    setChoices([])
     release()
     setLive(false)
     setHeld(false)
@@ -499,6 +514,16 @@ export function Scan({
       {held ? <p>{t('cameraHeld')}</p> : null}
       {working ? <p role="status">{t(openStatus)}</p> : null}
       {cameraFailure ? <CameraFeedback failure={cameraFailure} t={t} /> : null}
+      {choices.length >= 2 && held && !working ? (
+        <div className="sender-choice" role="group" aria-label={t('chooseSender')}>
+          <p>{t('chooseSender')}</p>
+          {choices.map((choice, position) => (
+            <button key={choice.capsuleId} type="button" onClick={() => { void match(choice.capsuleId) }}>
+              {choice.handle ? `@${choice.handle}` : `${t('senderUnknown')} ${position + 1}`}<Icon name="arrow" />
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="actions">
         {live ? (
           <>

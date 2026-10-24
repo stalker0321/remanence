@@ -17,7 +17,8 @@ export const scanCodes = [
 export type ScanCode = (typeof scanCodes)[number]
 
 export class ScanError extends Error {
-  constructor(readonly code: ScanCode) {
+  /** AMBIGUOUS only: the capsules the same postcard could open, for the recipient to choose. */
+  constructor(readonly code: ScanCode, readonly choices: readonly string[] = []) {
     super(code)
     this.name = 'ScanError'
   }

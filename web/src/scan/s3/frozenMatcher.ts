@@ -243,12 +243,20 @@ function grabCutQuad(cv: Cv, image: Cv): Pt[] | null {
     for (let i = 0; i < contours.size(); i++) {
       const c = contours.get(i)
       const area = cv.contourArea(c)
-      if (area > contourArea) { contour = c; contourArea = area }
+      if (area > contourArea) {
+        contour?.delete()
+        contour = c
+        contourArea = area
+      } else {
+        c.delete()
+      }
     }
     if (!contour) return null
+    const rect = cv.minAreaRect(contour)
+    contour.delete()
     const areaFraction = contourArea / Math.max(1, smallW * smallH)
     if (areaFraction < 0.06 || areaFraction > 0.88) return null
-    const box = rotatedRectPoints(cv.minAreaRect(contour))
+    const box = rotatedRectPoints(rect)
     const boxMat = pointsMat(cv, box)
     const boxArea = cv.contourArea(boxMat)
     boxMat.delete()
@@ -429,6 +437,7 @@ export function createVocabulary(cv: Cv, blob: Float32Array): Vocabulary {
             const squared = m.distance * m.distance
             counts[m.trainIdx] += query ? Math.exp(-squared / 0.05) : 1
           }
+          pair.delete()
         }
         pairs.delete(); matcher.delete(); rootedMat.delete()
       }
@@ -536,6 +545,7 @@ function verify(cv: Cv, query: Features, queryRooted: Cv | null, ref: Reference)
       const m = pair.get(0)
       good.push({ q: m.queryIdx, t: m.trainIdx, d: m.distance })
     }
+    pair.delete()
   }
   pairs.delete(); matcher.delete(); refRooted.delete()
   good.sort((a, b) => a.d - b.d)

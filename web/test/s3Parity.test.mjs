@@ -42,9 +42,16 @@ describe.runIf(dir && cvDir)('frozen matcher parity run', () => {
       const [x0, y0, x1, y1] = S3.frameBounds(image.cols, image.rows)
       const frame = image.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0)).clone()
       image.delete()
-      const { features, components } = S3.recipientFeatures(cv, frame, localizer.mask(frame))
-      frame.delete()
-      const d = S3.match(cv, features, refs, vocabulary, components)
+      let features, components, d
+      try {
+        ;({ features, components } = S3.recipientFeatures(cv, frame, localizer.mask(frame)))
+        d = S3.match(cv, features, refs, vocabulary, components)
+      } catch (error) {
+        rows.push([q.id, q.expected ?? '', 'error', '', '', 0, 0, 0, 0, 0, 0, 9, String(typeof error === 'number' ? cv.exceptionFromPtr?.(error)?.msg ?? error : error).replace(/,/g, ';')].join(','))
+        continue
+      } finally {
+        frame.delete()
+      }
       const b = d.best
       rows.push([q.id, q.expected ?? '', d.accepted ? 'matched' : 'unknown', d.id ?? '', b?.id ?? '', (b?.finalScore ?? 0).toFixed(4),
         b?.inliers ?? 0, (b?.coverage ?? 0).toFixed(4), (b?.inlierRatio ?? 0).toFixed(4), components, S3.featureCount(features),

@@ -66,7 +66,8 @@ export async function considerCapture(
     // The same postcard from several senders: only the recipient can say whose
     // capsule this is. A choice counts only if this very capture matched it.
     const choices = (result.capsuleIds ?? []).filter(own)
-    if (chosen === undefined || !choices.includes(chosen)) throw new ScanError('AMBIGUOUS', choices.length >= 2 ? choices : [])
+    if (choices.length < 2) throw new ScanError('AMBIGUOUS')
+    if (chosen === undefined || !choices.includes(chosen)) throw new ScanError('AMBIGUOUS', choices)
     capsuleId = chosen
   }
   if (capsuleId === undefined) throw new ScanError('AMBIGUOUS')

@@ -1,12 +1,11 @@
 <resources>
-    <string name="settings_access_saved">Восстановление проверено</string>
-    <string name="settings_access_needed">Нужно настроить восстановление</string>
-    <string name="settings_privacy_detail">Приватность и данные аккаунта</string>
+    <string name="settings_access_saved">доступ проверен</string>
+    <string name="settings_access_needed">нужно настроить доступ</string>
+    <string name="settings_privacy_detail">приватность и данные аккаунта</string>
     <string name="settings_design_title">настройки</string>
     <string name="settings_design_account">аккаунт</string>
     <string name="settings_design_language">язык</string>
-    <string name="settings_design_access">доступ к аккаунту</string>
+    <string name="settings_design_access">доступ</string>
     <string name="settings_design_privacy">приватность</string>
-    <string name="settings_design_about">о Remanence</string>
-    <string name="settings_design_logout">выйти из этого аккаунта</string>
+    <string name="settings_design_logout">выйти из аккаунта</string>
 </resources>

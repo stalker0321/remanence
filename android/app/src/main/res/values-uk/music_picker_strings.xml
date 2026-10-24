@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="music_picker_optional">можна додати музику</string>
-    <string name="music_picker_add">додати музику</string>
-    <string name="music_picker_search_title">знайти музику</string>
-    <string name="music_picker_search_hint">трек або виконавець</string>
-    <string name="music_picker_idle">Знайдіть трек за назвою або виконавцем.</string>
+    <string name="music_picker_optional">пісня, якщо хочете</string>
+    <string name="music_picker_add">додати пісню</string>
+    <string name="music_picker_search_title">знайти пісню</string>
+    <string name="music_picker_search_hint">пісня або виконавець</string>
+    <string name="music_picker_idle">шукайте за назвою або виконавцем</string>
     <string name="music_picker_loading">шукаємо…</string>
     <string name="music_picker_results">знайдено: %1$d</string>
-    <string name="music_picker_empty">Нічого не знайдено. Спробуйте іншу назву або виконавця.</string>
-    <string name="music_picker_unavailable">Пошук музики тимчасово недоступний.</string>
-    <string name="music_picker_rate_limited">Зачекайте трохи, перш ніж шукати знову.</string>
-    <string name="music_picker_auth_invalid">Увійдіть знову, щоб шукати музику.</string>
-    <string name="music_picker_validation_failed">Спробуйте інший запит.</string>
-    <string name="music_picker_error">Не вдалося завершити пошук. Спробуйте знову.</string>
+    <string name="music_picker_empty">нічого не знайшлося. спробуйте іншу назву або виконавця</string>
+    <string name="music_picker_unavailable">пошук музики зараз недоступний</string>
+    <string name="music_picker_rate_limited">зачекайте трохи й спробуйте знову</string>
+    <string name="music_picker_auth_invalid">увійдіть ще раз, щоб шукати</string>
+    <string name="music_picker_validation_failed">спробуйте інший запит</string>
+    <string name="music_picker_error">пошук не спрацював. спробуйте знову</string>
 </resources>

@@ -1,23 +1,14 @@
 <resources>
-    <string name="atomic_registration_title">Set up your account</string>
-    <string name="atomic_registration_prf_unavailable">Your key is saved, but its provider did not supply the protection your postcards need. Setup is incomplete. Verification may fail again.</string>
-    <string name="atomic_registration_failed">Account setup could not complete this step. Check your connection and try later.</string>
-    <string name="atomic_registration_intro">Sign in with Google, then choose a passkey manager. Your account is saved only with a recovery record.</string>
-    <string name="atomic_registration_unknown">The account may already be saved. Check its status, retry the same request, or sign in again to restore the original keys.</string>
-    <string name="atomic_registration_restore">The account is saved. Sign in and restore its original keys before continuing.</string>
-    <string name="atomic_registration_reauthenticate">Confirm your Google account again before continuing. No replacement account was created.</string>
-    <string name="atomic_registration_terminal">This setup ended. You can explicitly start a new setup after confirming ownership.</string>
-    <string name="atomic_registration_ready">Your saved recovery record was opened. Your account is ready.</string>
-    <string name="atomic_registration_handle_error">Choose an available handle: 3–30 letters, digits, dots or underscores.</string>
-    <string name="atomic_registration_upgrade">This server requires a newer account setup. Do not use another registration method to bypass it.</string>
-    <string name="atomic_registration_closed">New account setup is currently closed. Existing accounts can still sign in.</string>
-    <string name="atomic_registration_handle">Handle</string>
-    <string name="atomic_registration_save">Save with a passkey</string>
-    <string name="atomic_registration_restart">Start a new setup</string>
-    <string name="atomic_registration_google">Continue with Google</string>
-    <string name="atomic_registration_check">Check saved account</string>
-    <string name="atomic_registration_retry">Retry the same request</string>
-    <string name="atomic_registration_cancel">Cancel this setup</string>
-    <string name="atomic_registration_leave_hint">Leaving clears local setup keys. It cannot undo an account that was already saved.</string>
-    <string name="atomic_registration_leave">Leave setup</string>
+    <string name="atomic_registration_prf_unavailable">the passkey was saved, but it can’t protect your postcards, so setup isn’t finished. checking again may fail too</string>
+    <string name="atomic_registration_failed">couldn’t finish this step. check your connection and try later</string>
+    <string name="atomic_registration_unknown">your account may already be saved. check, retry the same step, or sign in again</string>
+    <string name="atomic_registration_reauthenticate">confirm your Google account again to continue</string>
+    <string name="atomic_registration_terminal">this sign-up has ended. you can start a new one</string>
+    <string name="atomic_registration_handle_error">pick a free username: 3–30 latin letters, digits, dots or underscores</string>
+    <string name="atomic_registration_upgrade">please update the app to finish sign-up</string>
+    <string name="atomic_registration_closed">new accounts are paused for now. you can still sign in to an existing one</string>
+    <string name="atomic_registration_restart">start again</string>
+    <string name="atomic_registration_check">check</string>
+    <string name="atomic_registration_retry">retry</string>
+    <string name="atomic_registration_leave">leave sign-up</string>
 </resources>

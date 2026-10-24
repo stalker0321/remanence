@@ -1,15 +1,14 @@
 <resources>
-    <string name="access_restore_title">Open your memories</string>
-    <string name="access_open_detail">Sign in to open the postcard meant for you.</string>
-    <string name="access_make_detail">Sign in to leave a memory for someone.</string>
-    <string name="access_default_detail">A place for the memories you share.</string>
-    <string name="access_connection_detail">Connect to the internet to check your session.</string>
-    <string name="access_handle_detail">This is how people will find you and send you postcards.</string>
-    <string name="access_google_again">Choose another Google account</string>
-    <string name="access_keys_detail">Your account is here. Restore your keys to open your postcards on this device.</string>
-    <string name="access_setup_detail">Save a passkey to keep your postcards with you, even on a new device.</string>
-    <string name="access_manager_detail">Choose the password manager you prefer. It doesn’t have to be the one you use to sign in.</string>
-    <string name="access_code_option">Use a recovery code instead</string>
-    <string name="access_verified_detail">Your passkey has been checked. You’re ready to continue.</string>
-    <string name="access_passkey_detail">Already have a Remanence passkey? You can use it here.</string>
+    <string name="access_restore_title">open your postcards</string>
+    <string name="access_open_detail">sign in to open the postcard sent to you</string>
+    <string name="access_make_detail">sign in to make a postcard for someone</string>
+    <string name="access_default_detail">a place for what you share</string>
+    <string name="access_connection_detail">connect to the internet to check your sign-in</string>
+    <string name="access_handle_detail">people will find you and send you postcards by it</string>
+    <string name="access_google_again">choose another Google account</string>
+    <string name="access_keys_detail">you’re signed in. confirm with your passkey to open your postcards on this phone</string>
+    <string name="access_setup_detail">save a passkey so your postcards stay with you, even on a new phone</string>
+    <string name="access_manager_detail">pick any password manager you like. it doesn’t have to be the one you sign in with</string>
+    <string name="access_code_option">use a recovery code instead</string>
+    <string name="access_verified_detail">your passkey is checked. you can continue</string>
 </resources>

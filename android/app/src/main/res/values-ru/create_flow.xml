@@ -1,23 +1,22 @@
 <resources>
     <string name="create_check_recipient">проверьте получателя</string>
     <string name="create_your_postcard">ваша открытка</string>
-    <string name="create_capture_body">снимите лицевую сторону перед отправкой.</string>
+    <string name="create_capture_body">сфотографируйте лицевую сторону, прежде чем отправить её</string>
     <string name="create_use_postcard">выбрать эту открытку</string>
-    <string name="create_this_one">выбрать</string>
+    <string name="create_this_one">этот</string>
     <string name="create_continue">дальше</string>
-    <string name="create_preparing_expressions">ищем подходящие варианты…</string>
-    <string name="create_no_fitting_expression">Этим фотографиям и словам нужно чуть больше места. Попробуйте сократить записку или выбрать другие фотографии.</string>
+    <string name="create_preparing_expressions">собираем варианты…</string>
+    <string name="create_no_fitting_expression">этим фото и словам не хватает места. попробуйте текст короче или другие фото</string>
     <string name="create_previous_expression">предыдущий вариант</string>
     <string name="create_next_expression">следующий вариант</string>
     <string name="create_selected_expression">выбрано</string>
-    <string name="create_browse_again">посмотреть другие</string>
-    <string name="create_for_one_person">для одного человека</string>
-    <string name="create_choose_photographs">выберите фотографии, которыми хотите поделиться.</string>
-    <string name="create_photographs_count">выберите 3–5 фотографий · %1$d</string>
-    <string name="create_change_photographs">изменить фотографии</string>
-    <string name="create_review_title">всё готово.</string>
-    <string name="create_review_body">прикрепите капсулу, затем отправьте открытку. получатель отсканирует её лицевую сторону и увидит то, что вы выбрали.</string>
-    <string name="create_attach_capsule">прикрепить капсулу</string>
-    <string name="create_back_to_expression">вернуться к варианту</string>
-    <string name="create_note_too_long">Записка немного длинная. Попробуйте её сократить.</string>
+    <string name="create_for_one_person">для того, о ком думаете</string>
+    <string name="create_choose_photographs">выберите фото, которые хотите отправить</string>
+    <string name="create_photographs_count">от 3 до 5 фото · %1$d</string>
+    <string name="create_change_photographs">изменить фото</string>
+    <string name="create_review_title">всё готово</string>
+    <string name="create_review_body">прикрепите и отправьте бумажную открытку. получатель сфотографирует лицевую сторону и увидит то, что вы выбрали</string>
+    <string name="create_attach_capsule">прикрепить</string>
+    <string name="create_back_to_expression">назад к варианту</string>
+    <string name="create_note_too_long">текст длинноват, попробуйте сократить</string>
 </resources>

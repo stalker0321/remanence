@@ -1,23 +1,22 @@
 <resources>
     <string name="create_check_recipient">check the recipient</string>
     <string name="create_your_postcard">your postcard</string>
-    <string name="create_capture_body">capture the picture side before posting it.</string>
+    <string name="create_capture_body">take a photo of the picture side before you post it</string>
     <string name="create_use_postcard">use this postcard</string>
     <string name="create_this_one">this one</string>
     <string name="create_continue">continue</string>
-    <string name="create_preparing_expressions">finding an expression…</string>
-    <string name="create_no_fitting_expression">These photographs and words need a little more room. Try a shorter note or different photographs.</string>
-    <string name="create_previous_expression">previous expression</string>
-    <string name="create_next_expression">next expression</string>
+    <string name="create_preparing_expressions">putting it together…</string>
+    <string name="create_no_fitting_expression">these photos and words need a bit more room. try a shorter note or other photos</string>
+    <string name="create_previous_expression">previous layout</string>
+    <string name="create_next_expression">next layout</string>
     <string name="create_selected_expression">selected</string>
-    <string name="create_browse_again">browse again</string>
-    <string name="create_for_one_person">for one person</string>
-    <string name="create_choose_photographs">choose the photographs you want to send.</string>
-    <string name="create_photographs_count">choose 3–5 photographs · %1$d</string>
-    <string name="create_change_photographs">change photographs</string>
-    <string name="create_review_title">ready when you are.</string>
-    <string name="create_review_body">attach it here, then send the physical postcard. they’ll scan the front to open what you chose.</string>
-    <string name="create_attach_capsule">attach the capsule</string>
-    <string name="create_back_to_expression">back to the expression</string>
-    <string name="create_note_too_long">That note is a little too long. Try shortening it.</string>
+    <string name="create_for_one_person">just for them</string>
+    <string name="create_choose_photographs">choose the photos you want to send</string>
+    <string name="create_photographs_count">3 to 5 photos · %1$d</string>
+    <string name="create_change_photographs">change photos</string>
+    <string name="create_review_title">ready when you are</string>
+    <string name="create_review_body">attach it, then post the paper postcard. they’ll take a photo of the front to open what you chose</string>
+    <string name="create_attach_capsule">attach</string>
+    <string name="create_back_to_expression">back to the layout</string>
+    <string name="create_note_too_long">that’s a bit long, try shortening it</string>
 </resources>

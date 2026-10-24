@@ -1,3 +1,3 @@
 <resources>
-    <string name="receiver_scan_capture_body">Снимите лицевую сторону полученной открытки, чтобы открыть воспоминание.</string>
+    <string name="receiver_scan_capture_body">сфотографируйте лицевую сторону, чтобы открыть</string>
 </resources>

@@ -1,5 +1,5 @@
 <resources>
-    <string name="capsule_audit_preparing_scan">готовим сканер…</string>
-    <string name="capsule_audit_unsupported">эта версия не может показать оформление капсулы.</string>
-    <string name="capsule_audit_unsupported_detail">обнови Remanence и попробуй снова. капсула не изменилась.</string>
+    <string name="capsule_audit_preparing_scan">готовим камеру…</string>
+    <string name="capsule_audit_unsupported">эта версия не может показать эту открытку</string>
+    <string name="capsule_audit_unsupported_detail">обновите remanence и попробуйте снова. в открытке ничего не изменилось</string>
 </resources>

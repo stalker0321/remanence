@@ -1,20 +1,16 @@
 <resources>
-    <string name="recovery_title">Збережіть доступ до спогадів</string>
-    <string name="recovery_test_title">Відновлення · тестова збірка</string>
-    <string name="recovery_setup_hint">Виберіть сховище passkey у системному діалозі. Воно може відрізнятися від акаунта для входу. Зберігати фразу відновлення не потрібно.</string>
-    <string name="recovery_prf_missing">Ключ доступу збережено, але його провайдер не надав потрібного захисту спогадів. Налаштування не завершено. Повторна перевірка може не допомогти. Наявний ключ не замінено.</string>
-    <string name="recovery_failed">Відновлення не завершено. Наявні ключі не замінені. Перевірте підключення та спосіб відновлення.</string>
-    <string name="recovery_old_android">Для відновлення через passkey потрібен Android 9 або новіший. На цьому пристрої не можна завершити налаштування passkey.</string>
-    <string name="recovery_verified">Доступ збережено, відновлення перевірено. Додатковий код зберігати необов’язково.</string>
-    <string name="recovery_verification_pending">Passkey збережено, але перевірку ще не завершено. Повторіть спробу, щоб завершити перевірку того самого passkey.</string>
-    <string name="recovery_save">Зберегти або перевірити passkey</string>
-    <string name="recovery_show_code">Показати необов’язковий код відновлення</string>
-    <string name="recovery_another_manager">Вибрати інший менеджер passkey</string>
-    <string name="recovery_restored">Доступ відновлено.</string>
-    <string name="recovery_restore_signed_in">Відновити спогади через passkey</string>
-    <string name="recovery_sign_in">Увійти й відновити через passkey</string>
-    <string name="recovery_code_label">Код відновлення</string>
-    <string name="recovery_code_restore">Відновити через код</string>
-    <string name="recovery_code_hint">Необов’язковий додатковий захист. Для відновлення через код також потрібен вхід до акаунта. Зберігати код для продовження не потрібно.</string>
-    <string name="recovery_hide_code">Приховати код</string>
+    <string name="recovery_title">збережіть доступ до листівок</string>
+    <string name="recovery_prf_missing">ключ доступу збережено, але він не може захистити ваші листівки, тож налаштування не завершено. повтор, найімовірніше, не допоможе</string>
+    <string name="recovery_failed">не вдалося відновити доступ. перевірте інтернет і спробуйте знову</string>
+    <string name="recovery_old_android">для ключів доступу потрібен Android 9 або новіший</string>
+    <string name="recovery_verified">доступ збережено й перевірено. код відновлення можна не зберігати</string>
+    <string name="recovery_verification_pending">ключ збережено, але ще не перевірено. спробуйте знову, щоб перевірити той самий</string>
+    <string name="recovery_show_code">показати код відновлення</string>
+    <string name="recovery_another_manager">обрати інший менеджер паролів</string>
+    <string name="recovery_restored">доступ відновлено</string>
+    <string name="recovery_restore_signed_in">відновити ключем доступу</string>
+    <string name="recovery_code_label">код відновлення</string>
+    <string name="recovery_code_restore">відновити за кодом</string>
+    <string name="recovery_code_hint">запасний варіант, необов’язковий. щоб ним скористатися, однаково треба увійти в акаунт</string>
+    <string name="recovery_hide_code">сховати код</string>
 </resources>

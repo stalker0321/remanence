@@ -1,16 +1,16 @@
 <resources>
-    <string name="media_collage_description">Композиція листівки</string>
-    <string name="media_crop_photo">Кадрувати фото %1$d з %2$d</string>
-    <string name="media_crop_position">Рамка: %1$d%% зліва, %2$d%% згори; ширина %3$d%%, висота %4$d%%</string>
-    <string name="media_crop_left">Посунути рамку ліворуч</string>
-    <string name="media_crop_right">Посунути рамку праворуч</string>
-    <string name="media_crop_up">Посунути рамку вгору</string>
-    <string name="media_crop_down">Посунути рамку вниз</string>
-    <string name="media_crop_zoom_in">Наблизити</string>
-    <string name="media_crop_zoom_out">Віддалити</string>
-    <string name="media_crop_hint">Перетягуйте рамку або змінюйте розмір щипком. Також доступні дії рамки, клавіші стрілок і + / −.</string>
-    <string name="media_photo_previous">Попереднє фото</string>
-    <string name="media_photo_next">Наступне фото</string>
-    <string name="media_photo_position">Фото %1$d з %2$d</string>
-    <string name="media_export_interrupted">Збереження перервано. Залиште спогад відкритим і знову виберіть «Зберегти зображення».</string>
+    <string name="media_collage_description">колаж листівки</string>
+    <string name="media_crop_photo">кадрувати фото %1$d з %2$d</string>
+    <string name="media_crop_position">рамка: %1$d%% зліва, %2$d%% згори, ширина %3$d%%, висота %4$d%%</string>
+    <string name="media_crop_left">посунути рамку ліворуч</string>
+    <string name="media_crop_right">посунути рамку праворуч</string>
+    <string name="media_crop_up">посунути рамку вгору</string>
+    <string name="media_crop_down">посунути рамку вниз</string>
+    <string name="media_crop_zoom_in">наблизити</string>
+    <string name="media_crop_zoom_out">віддалити</string>
+    <string name="media_crop_hint">перетягніть рамку або змініть розмір двома пальцями</string>
+    <string name="media_photo_previous">попереднє фото</string>
+    <string name="media_photo_next">наступне фото</string>
+    <string name="media_photo_position">фото %1$d з %2$d</string>
+    <string name="media_export_interrupted">збереження перервалося. не закривайте листівку й збережіть знову</string>
 </resources>

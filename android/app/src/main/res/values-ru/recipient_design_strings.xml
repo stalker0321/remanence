@@ -1,8 +1,7 @@
 <resources>
-    <string name="capsule_view_original">Посмотреть фото целиком</string>
+    <string name="capsule_view_original">посмотреть фото целиком</string>
     <string name="recipient_design_or">или</string>
-    <string name="create_photo_selection_label">Фото %1$d из %2$d</string>
-    <string name="recipient_design_self_title">для себя</string>
-    <string name="recipient_design_self_action">выбрать свой аккаунт</string>
-    <string name="recipient_design_self_unavailable">Аккаунт изменился или недоступен. Найдите получателя заново.</string>
+    <string name="create_photo_selection_label">фото %1$d из %2$d</string>
+    <string name="recipient_design_self_action">отправить на свой аккаунт</string>
+    <string name="recipient_design_self_unavailable">не получилось выбрать ваш аккаунт. найдите получателя заново</string>
 </resources>

@@ -1,20 +1,16 @@
 <resources>
-    <string name="recovery_title">Save access to your memories</string>
-    <string name="recovery_test_title">Recovery · experimental test build</string>
-    <string name="recovery_setup_hint">Choose where to save your passkey in the system dialog. It can be different from the account you used to sign in. No recovery phrase is required.</string>
-    <string name="recovery_prf_missing">The passkey was saved, but its provider did not supply the protection your memories need. Setup is not complete. Repeating verification may not help. Your existing key has not been replaced.</string>
-    <string name="recovery_failed">Recovery did not complete. Existing keys were not replaced. Check the connection and recovery method.</string>
-    <string name="recovery_old_android">Passkey recovery requires Android 9 or newer. This device cannot complete passkey setup.</string>
-    <string name="recovery_verified">Access saved and recovery verified. An additional recovery code is optional.</string>
-    <string name="recovery_verification_pending">Passkey saved, but verification is not complete yet. Retry to finish verifying the same passkey.</string>
-    <string name="recovery_save">Save or verify passkey</string>
-    <string name="recovery_show_code">Show optional recovery code</string>
-    <string name="recovery_another_manager">Choose another passkey manager</string>
-    <string name="recovery_restored">Access restored.</string>
-    <string name="recovery_restore_signed_in">Restore memories with your passkey</string>
-    <string name="recovery_sign_in">Sign in and restore with a passkey</string>
-    <string name="recovery_code_label">Recovery code</string>
-    <string name="recovery_code_restore">Restore with recovery code</string>
-    <string name="recovery_code_hint">Optional extra protection. Code recovery also requires signing in to your account. You do not need to save this code to continue.</string>
-    <string name="recovery_hide_code">Hide optional code</string>
+    <string name="recovery_title">keep access to your postcards</string>
+    <string name="recovery_prf_missing">the passkey was saved, but it can’t protect your postcards, so setup isn’t finished. trying again probably won’t help</string>
+    <string name="recovery_failed">couldn’t restore access. check your connection and try again</string>
+    <string name="recovery_old_android">passkeys need Android 9 or newer</string>
+    <string name="recovery_verified">access is saved and checked. you don’t have to keep a recovery code</string>
+    <string name="recovery_verification_pending">the passkey is saved but not checked yet. try again to check the same one</string>
+    <string name="recovery_show_code">show a recovery code</string>
+    <string name="recovery_another_manager">choose another password manager</string>
+    <string name="recovery_restored">access restored</string>
+    <string name="recovery_restore_signed_in">restore with your passkey</string>
+    <string name="recovery_code_label">recovery code</string>
+    <string name="recovery_code_restore">restore with a recovery code</string>
+    <string name="recovery_code_hint">an extra backup, not required. you’ll still need to sign in to use it</string>
+    <string name="recovery_hide_code">hide code</string>
 </resources>

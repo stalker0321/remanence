@@ -1,8 +1,7 @@
 <resources>
-    <string name="capsule_view_original">View original photo</string>
+    <string name="capsule_view_original">see the whole photo</string>
     <string name="recipient_design_or">or</string>
-    <string name="create_photo_selection_label">Photo %1$d of %2$d</string>
-    <string name="recipient_design_self_title">for myself</string>
-    <string name="recipient_design_self_action">choose my account</string>
-    <string name="recipient_design_self_unavailable">Your account changed or is unavailable. Look up the recipient again.</string>
+    <string name="create_photo_selection_label">photo %1$d of %2$d</string>
+    <string name="recipient_design_self_action">send to my own account</string>
+    <string name="recipient_design_self_unavailable">couldn’t use your account here. find the recipient again</string>
 </resources>

@@ -1,23 +1,14 @@
 <resources>
-    <string name="atomic_registration_prf_unavailable">Ключ збережено, але провайдер не надав потрібного захисту листівок. Налаштування не завершено. Повторна перевірка може не допомогти.</string>
-    <string name="atomic_registration_failed">Не вдалося завершити цей крок налаштування акаунта. Перевір підключення та спробуй пізніше.</string>
-    <string name="atomic_registration_title">Налаштування облікового запису</string>
-    <string name="atomic_registration_intro">Увійдіть через Google, потім виберіть менеджер ключів доступу. Обліковий запис зберігається лише разом із записом відновлення.</string>
-    <string name="atomic_registration_unknown">Обліковий запис уже міг зберегтися. Перевірте стан, повторіть той самий запит або увійдіть знову, щоб відновити початкові ключі.</string>
-    <string name="atomic_registration_restore">Обліковий запис збережено. Увійдіть і відновіть його початкові ключі, щоб продовжити.</string>
-    <string name="atomic_registration_reauthenticate">Підтвердьте обліковий запис Google ще раз. Новий обліковий запис замість попереднього не створено.</string>
-    <string name="atomic_registration_terminal">Це налаштування завершено. Після підтвердження власника можна явно почати нове.</string>
-    <string name="atomic_registration_ready">Збережений запис відновлення відкрито. Обліковий запис готовий.</string>
-    <string name="atomic_registration_handle_error">Виберіть вільне ім’я: 3–30 латинських літер, цифр, крапок або підкреслень.</string>
-    <string name="atomic_registration_upgrade">Сервер вимагає оновленого налаштування облікового запису. Не обходьте цю вимогу іншим способом реєстрації.</string>
-    <string name="atomic_registration_closed">Створення нових облікових записів зараз закрито. До наявних можна увійти.</string>
-    <string name="atomic_registration_handle">Ім’я облікового запису</string>
-    <string name="atomic_registration_save">Зберегти з ключем доступу</string>
-    <string name="atomic_registration_restart">Почати нове налаштування</string>
-    <string name="atomic_registration_google">Продовжити з Google</string>
-    <string name="atomic_registration_check">Перевірити збереження</string>
-    <string name="atomic_registration_retry">Повторити той самий запит</string>
-    <string name="atomic_registration_cancel">Скасувати це налаштування</string>
-    <string name="atomic_registration_leave_hint">Після виходу локальні ключі налаштування видаляються. Це не скасовує вже збережений обліковий запис.</string>
-    <string name="atomic_registration_leave">Вийти з налаштування</string>
+    <string name="atomic_registration_prf_unavailable">ключ збережено, але він не може захистити ваші листівки, тож налаштування не завершено. повторна перевірка теж може не пройти</string>
+    <string name="atomic_registration_failed">не вдалося завершити цей крок. перевірте інтернет і спробуйте пізніше</string>
+    <string name="atomic_registration_unknown">акаунт міг уже зберегтися. перевірте, повторіть цей самий крок або увійдіть знову</string>
+    <string name="atomic_registration_reauthenticate">підтвердьте акаунт Google ще раз, щоб продовжити</string>
+    <string name="atomic_registration_terminal">ця реєстрація завершилася. можна почати нову</string>
+    <string name="atomic_registration_handle_error">оберіть вільне ім’я: 3–30 латинських літер, цифр, крапок або підкреслень</string>
+    <string name="atomic_registration_upgrade">оновіть застосунок, щоб завершити реєстрацію</string>
+    <string name="atomic_registration_closed">нові акаунти зараз не створюються. до наявного увійти можна</string>
+    <string name="atomic_registration_restart">почати знову</string>
+    <string name="atomic_registration_check">перевірити</string>
+    <string name="atomic_registration_retry">повторити</string>
+    <string name="atomic_registration_leave">вийти з реєстрації</string>
 </resources>

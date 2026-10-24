@@ -1,15 +1,14 @@
 <resources>
-    <string name="access_restore_title">Открыть воспоминания</string>
-    <string name="access_open_detail">Войди, чтобы открыть открытку для тебя.</string>
-    <string name="access_make_detail">Войди, чтобы оставить кому-то воспоминание.</string>
-    <string name="access_default_detail">Место для воспоминаний, которыми вы делитесь.</string>
-    <string name="access_connection_detail">Подключись к интернету, чтобы проверить вход в аккаунт.</string>
-    <string name="access_handle_detail">По этому нику тебя найдут и смогут отправить тебе открытку.</string>
-    <string name="access_google_again">Выбрать другой аккаунт Google</string>
-    <string name="access_keys_detail">Ты вошёл в аккаунт. Восстанови ключи, чтобы открыть свои открытки на этом устройстве.</string>
-    <string name="access_setup_detail">Сохрани passkey, чтобы открытки оставались с тобой и на новом устройстве.</string>
-    <string name="access_manager_detail">Выбери удобный менеджер паролей. Он не обязательно должен совпадать со способом входа.</string>
-    <string name="access_code_option">Использовать код восстановления</string>
-    <string name="access_verified_detail">Passkey проверен. Можно продолжать.</string>
-    <string name="access_passkey_detail">Уже есть passkey Remanence? Можно войти с его помощью.</string>
+    <string name="access_restore_title">откройте свои открытки</string>
+    <string name="access_open_detail">войдите, чтобы открыть открытку, которую вам прислали</string>
+    <string name="access_make_detail">войдите, чтобы собрать открытку для кого-то</string>
+    <string name="access_default_detail">место для того, чем вы делитесь</string>
+    <string name="access_connection_detail">подключитесь к интернету, чтобы проверить вход</string>
+    <string name="access_handle_detail">по нему вас найдут и смогут прислать открытку</string>
+    <string name="access_google_again">выбрать другой аккаунт Google</string>
+    <string name="access_keys_detail">вы вошли. подтвердите ключом доступа, чтобы открывать открытки на этом телефоне</string>
+    <string name="access_setup_detail">сохраните ключ доступа, чтобы открытки остались с вами и на новом телефоне</string>
+    <string name="access_manager_detail">выберите любой удобный менеджер паролей. не обязательно тот, через который вы входите</string>
+    <string name="access_code_option">использовать код восстановления</string>
+    <string name="access_verified_detail">ключ доступа проверен, можно продолжать</string>
 </resources>

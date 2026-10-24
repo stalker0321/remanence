@@ -1,12 +1,11 @@
 <resources>
-    <string name="settings_access_saved">Відновлення перевірено</string>
-    <string name="settings_access_needed">Потрібно налаштувати відновлення</string>
-    <string name="settings_privacy_detail">Приватність і дані акаунта</string>
+    <string name="settings_access_saved">доступ перевірено</string>
+    <string name="settings_access_needed">треба налаштувати доступ</string>
+    <string name="settings_privacy_detail">приватність і дані акаунта</string>
     <string name="settings_design_title">налаштування</string>
     <string name="settings_design_account">акаунт</string>
     <string name="settings_design_language">мова</string>
-    <string name="settings_design_access">доступ до акаунту</string>
+    <string name="settings_design_access">доступ</string>
     <string name="settings_design_privacy">приватність</string>
-    <string name="settings_design_about">про Remanence</string>
-    <string name="settings_design_logout">вийти з цього акаунта</string>
+    <string name="settings_design_logout">вийти з акаунта</string>
 </resources>

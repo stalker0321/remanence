@@ -1,12 +1,11 @@
 <resources>
-    <string name="settings_access_saved">Recovery verified</string>
-    <string name="settings_access_needed">Recovery setup needed</string>
-    <string name="settings_privacy_detail">Privacy &amp; account data</string>
+    <string name="settings_access_saved">access checked</string>
+    <string name="settings_access_needed">access needs setting up</string>
+    <string name="settings_privacy_detail">privacy and account data</string>
     <string name="settings_design_title">settings</string>
     <string name="settings_design_account">account</string>
     <string name="settings_design_language">language</string>
-    <string name="settings_design_access">account access</string>
+    <string name="settings_design_access">access</string>
     <string name="settings_design_privacy">privacy</string>
-    <string name="settings_design_about">about Remanence</string>
-    <string name="settings_design_logout">log out of this account</string>
+    <string name="settings_design_logout">sign out</string>
 </resources>

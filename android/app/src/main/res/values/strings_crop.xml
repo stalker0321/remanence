@@ -1,9 +1,8 @@
 <resources>
-    <string name="crop_photo_number">Photo %1$d</string>
-    <string name="crop_one_photograph">one photograph</string>
+    <string name="crop_photo_number">photo %1$d</string>
+    <string name="crop_one_photograph">one photo</string>
     <string name="crop_cancel">cancel</string>
-    <string name="crop_reset">reset crop</string>
+    <string name="crop_reset">reset</string>
     <string name="crop_done">done</string>
-    <string name="crop_original_photo">Original photo</string>
-    <string name="crop_gesture_hint">Drag the frame. Pinch to adjust the crop.</string>
+    <string name="crop_original_photo">original photo</string>
 </resources>

@@ -1,17 +1,17 @@
 <resources>
-    <string name="mvp_other_sign_in">Інші способи входу</string>
-    <string name="mvp_settings">Налаштування</string>
-    <string name="mvp_handle_permanent">Ваш хендл постійний, змінити його не можна.</string>
-    <string name="mvp_recovery_ready">Доступ до спогадів збережено, відновлення перевірено.</string>
-    <string name="mvp_recovery_not_ready">Відновлення ще не перевірено.</string>
-    <string name="mvp_privacy_summary">Фото й вміст капсул шифруються на вашому пристрої. Вхід до акаунта й відкриття зашифрованих спогадів — окремі кроки.</string>
-    <string name="mvp_google_continue">Продовжити з Google</string>
-    <string name="mvp_handle_title">Виберіть хендл</string>
-    <string name="mvp_handle_label">Хендл</string>
-    <string name="mvp_continue">Продовжити</string>
-    <string name="mvp_google_retry">Вхід не завершено. Спробуйте ще раз.</string>
-    <string name="mvp_google_conflict">Хендл може бути зайнятий, або цей email належить наявному акаунту. Акаунти не об’єднуються автоматично.</string>
-    <string name="mvp_setup_saved">Акаунт і хендл збережені. Завершіть збереження доступу, щоб користуватися Remanence.</string>
-    <string name="mvp_working">Зачекайте…</string>
-    <string name="mvp_retry_connection">Повторити підключення</string>
+    <string name="mvp_other_sign_in">інші способи входу</string>
+    <string name="mvp_settings">налаштування</string>
+    <string name="mvp_handle_permanent">ім’я не можна змінити</string>
+    <string name="mvp_recovery_ready">доступ збережено й перевірено</string>
+    <string name="mvp_recovery_not_ready">доступ ще не перевірено</string>
+    <string name="mvp_privacy_summary">фото й слова шифруються на телефоні, перш ніж його залишити</string>
+    <string name="mvp_google_continue">продовжити через Google</string>
+    <string name="mvp_handle_title">оберіть ім’я</string>
+    <string name="mvp_handle_label">ім’я</string>
+    <string name="mvp_continue">продовжити</string>
+    <string name="mvp_google_retry">не вдалося увійти. спробуйте ще раз</string>
+    <string name="mvp_google_conflict">це ім’я може бути зайняте, або на цю пошту вже є акаунт</string>
+    <string name="mvp_setup_saved">акаунт та ім’я збережено. залишився один крок</string>
+    <string name="mvp_working">секунду…</string>
+    <string name="mvp_retry_connection">спробувати знову</string>
 </resources>

@@ -1,8 +1,8 @@
 <resources>
     <string name="capsule_export_share">share</string>
-    <string name="capsule_export_apps">Share with an app</string>
-    <string name="capsule_export_file">Save image</string>
-    <string name="capsule_export_warning">Export the current view as an image, without buttons. Anyone with the exported image can see it; Remanence encryption no longer protects that copy.</string>
+    <string name="capsule_export_apps">share to an app</string>
+    <string name="capsule_export_file">save image</string>
+    <string name="capsule_export_warning">this saves what you see as an image. anyone who gets the image can see it, it’s no longer encrypted</string>
     <string name="capsule_export_working">preparing…</string>
-    <string name="capsule_export_failed">The image could not be exported. Keep the capsule open and try again.</string>
+    <string name="capsule_export_failed">couldn’t save the image. keep the postcard open and try again</string>
 </resources>

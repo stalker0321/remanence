@@ -535,7 +535,6 @@ export function Scan({
         ) : (
           <button ref={cameraButton} type="button" className="primary" onClick={() => { void open() }}>{t('useCamera')}</button>
         )}
-        <a href={href('home')} onClick={close}>{t('back')}</a>
       </div>
       {store.getSnapshot().phase === 'signed-out' || store.getSnapshot().phase === 'authenticated' ? <aside className="scan-account"><p>{t('scanAccountHint')}</p><div className="actions"><a className="button" href={href('account')} onClick={close}>{t(store.getSnapshot().phase === 'signed-out' ? 'signInToOpen' : 'unlockToOpen')}<Icon name="arrow" /></a></div></aside> : null}
       </div>
@@ -1179,7 +1178,6 @@ export function Create({
         <div className="empty-state"><Icon name="key" /><p>{t('createLocked')}</p>
         <div className="actions">
           <a className="button primary" href={href('account')}>{t(view.phase === 'signed-out' ? 'signInToMake' : 'unlockToMake')}<Icon name="arrow" /></a>
-          <a href={href('home')}>{t('back')}</a>
         </div>
         </div>
       </section>
@@ -1435,15 +1433,8 @@ export function Create({
             </div>
           <div className="actions"><button type="button" className="quiet" disabled={sendPhase !== 'idle' || busy} onClick={() => showCreateStep('composition')}>{t('createBackComposition')}</button></div>
           </div>
-          <div className="actions">
-            <a href={href('home')}>{t('back')}</a>
-          </div>
         </>
-      ) : (
-        <div className="actions">
-          <a href={href('home')}>{t('back')}</a>
-        </div>
-      )}
+      ) : null}
     </section>
   )
 }

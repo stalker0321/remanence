@@ -55,9 +55,6 @@ export function Settings({ t, language, onSelectLanguage, handle, signedIn, sess
       </section>
       <ShellStatus t={t} details />
       </div>
-      <div className="actions">
-        <a href={href('home')}>{t('back')}</a>
-      </div>
     </>
   )
 }

@@ -4,13 +4,15 @@ import { describe, expect, it } from 'vitest'
 import { catalog, languages } from '../src/i18n/catalog'
 import { translate } from '../src/i18n/translate'
 import { Icon, StepTrail } from '../src/ui/Primitives'
-import { uxEn, uxRu, uxUk } from '../src/ui/uxMessages'
+import en from '../src/i18n/locales/en.json'
+import ru from '../src/i18n/locales/ru.json'
+import uk from '../src/i18n/locales/uk.json'
 
 describe('product presentation, not controller authority', () => {
   it('keeps every new navigation/state explanation available in all three languages', () => {
-    expect(Object.keys(uxRu).sort()).toEqual(Object.keys(uxEn).sort())
-    expect(Object.keys(uxUk).sort()).toEqual(Object.keys(uxEn).sort())
-    for (const language of languages) for (const key of Object.keys(uxEn) as (keyof typeof uxEn)[]) {
+    expect(Object.keys(ru).sort()).toEqual(Object.keys(en).sort())
+    expect(Object.keys(uk).sort()).toEqual(Object.keys(en).sort())
+    for (const language of languages) for (const key of Object.keys(en) as (keyof typeof en)[]) {
       expect(translate(language, key).trim().length).toBeGreaterThan(0)
       expect(catalog[language][key]).not.toBeUndefined()
     }

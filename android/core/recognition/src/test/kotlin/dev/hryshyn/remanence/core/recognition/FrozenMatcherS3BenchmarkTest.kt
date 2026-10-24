@@ -46,6 +46,7 @@ class FrozenMatcherS3BenchmarkTest {
         val threads = System.getenv("REMANENCE_BENCH_THREADS")?.toInt() ?: 3
         val tag = System.getenv("REMANENCE_BENCH_TAG") ?: "s3"
         val limit = System.getenv("REMANENCE_BENCH_LIMIT")?.toInt() ?: Int.MAX_VALUE
+        val senderMode = System.getenv("REMANENCE_S3_SENDER") ?: "grabcut"
         val manifest = Json.parseToJsonElement(File(root, "manifest.json").readText()).jsonObject
         val gallery = manifest["gallery"]!!.jsonArray.map { it.jsonObject }
         val queries = manifest["queries"]!!.jsonArray.map { it.jsonObject }.take(limit)
@@ -59,10 +60,17 @@ class FrozenMatcherS3BenchmarkTest {
         val references = gallery.map { g ->
             pool.submit<FrozenMatcherS3.Reference> {
                 val image = decode(File(root, "img/${g.str("id")}.jpg"))
-                val crop = FrozenMatcherS3.autoCrop(image)
-                val features = FrozenMatcherS3.gridFeatures(crop)
-                synchronized(galleryRows) { galleryRows.append("${g.str("card_id")},${features.count},${crop.cols()},${crop.rows()}\n") }
-                image.release(); crop.release()
+                val features = when (senderMode) {
+                    // Frozen reference: GrabCut auto-crop, else the whole image.
+                    "grabcut" -> FrozenMatcherS3.autoCrop(image).let { crop -> FrozenMatcherS3.gridFeatures(crop).also { crop.release() } }
+                    // Localizer mask over the whole sender photo.
+                    "onnx_full" -> onnxFeatures(image, sessions.get())
+                    // Sender framed like the recipient: 2:3 frame, then the mask.
+                    "onnx_frame" -> frameOf(image).let { frame -> onnxFeatures(frame, sessions.get()).also { frame.release() } }
+                    else -> error("REMANENCE_S3_SENDER=$senderMode")
+                }
+                synchronized(galleryRows) { galleryRows.append("${g.str("card_id")},${features.count},${features.width},${features.height}\n") }
+                image.release()
                 FrozenMatcherS3.reference(g.str("card_id")!!, features, vocabulary)
             }
         }.map { it.get() }
@@ -73,16 +81,9 @@ class FrozenMatcherS3BenchmarkTest {
         val rows = queries.withIndex().map { (i, q) ->
             pool.submit<String> {
                 val image = decode(File(root, "img/${q.str("id")}.jpg"))
-                val bounds = FrameGeometry.bounds(image.cols(), image.rows())
-                val frame = Mat(image, Rect(bounds.x0, bounds.y0, bounds.x1 - bounds.x0, bounds.y1 - bounds.y0)).clone()
+                val frame = frameOf(image)
                 image.release()
-                val bgr = ByteArray(3 * frame.cols() * frame.rows())
-                frame.get(0, 0, bgr)
-                val mask = when (val result = sessions.get().localize(bgr, frame.cols(), frame.rows())) {
-                    is FrozenLocalizer.LocalizerResult.Proposal -> result.mask
-                    is FrozenLocalizer.LocalizerResult.Unknown -> null
-                }
-                val (features, quality) = FrozenMatcherS3.recipientFeatures(frame, mask)
+                val (features, quality) = FrozenMatcherS3.recipientFeatures(frame, maskOf(frame, sessions.get()))
                 frame.release()
                 val expected = q.str("expected")
                 val picked = if (candidateCount <= 0) cards else {
@@ -97,16 +98,36 @@ class FrozenMatcherS3BenchmarkTest {
                     if (d.baselineAccepted) "matched" else "unknown", if (d.baselineAccepted) b?.id.orEmpty() else "",
                     b?.id.orEmpty(), "%.4f".format(b?.finalScore ?: 0.0), "${b?.inliers ?: 0}", "%.4f".format(b?.coverage ?: 0.0),
                     "%.4f".format(b?.inlierRatio ?: 0.0), "%.4f".format(d.separation), "${quality.components}", "${features.count}",
-                    d.gateReject?.code.orEmpty(), "${b?.coversFrameCentre ?: false}",
+                    d.gateReject?.code.orEmpty(), "${b?.coversFrameCentre ?: false}", "%.4f".format(b?.centreDistance ?: 9.0),
                 ).joinToString(",")
             }
         }.map { it.get() }
         pool.shutdown()
         File(root, "s3-$tag.csv").writeText(
-            "id,expected,status,card_id,baseline_status,baseline_card_id,best,score,inliers,coverage,inlier_ratio,separation,components,kept,gate,centred\n" +
+            "id,expected,status,card_id,baseline_status,baseline_card_id,best,score,inliers,coverage,inlier_ratio,separation,components,kept,gate,centred,centre_distance\n" +
                 rows.joinToString("\n") + "\n",
         )
         File(root, "s3-$tag.txt").writeText("candidates=$candidateCount seconds=%.0f\n".format((System.nanoTime() - started) / 1e9))
+    }
+
+    private fun frameOf(image: Mat): Mat {
+        val bounds = FrameGeometry.bounds(image.cols(), image.rows())
+        return Mat(image, Rect(bounds.x0, bounds.y0, bounds.x1 - bounds.x0, bounds.y1 - bounds.y0)).clone()
+    }
+
+    private fun maskOf(image: Mat, session: FrozenLocalizerSession): ByteArray? {
+        val bgr = ByteArray(3 * image.cols() * image.rows())
+        image.get(0, 0, bgr)
+        return when (val result = session.localize(bgr, image.cols(), image.rows())) {
+            is FrozenLocalizer.LocalizerResult.Proposal -> result.mask
+            is FrozenLocalizer.LocalizerResult.Unknown -> null
+        }
+    }
+
+    private fun onnxFeatures(image: Mat, session: FrozenLocalizerSession): FrozenMatcherS3.Features {
+        val f = FrozenMatcherS3.recipientFeatures(image, maskOf(image, session)).first
+        // A reference is described in its own crop coordinates.
+        return FrozenMatcherS3.Features(f.xy, f.descriptors, f.width, f.height)
     }
 
     /** `vision.decode(max_side=960)`: upright BGR, longest side at most 960. */

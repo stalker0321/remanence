@@ -80,6 +80,8 @@ object FrozenMatcherS3 {
         val vetoed: Boolean,
         /** The whole reference card, projected into the frame, contains the frame centre. */
         val coversFrameCentre: Boolean = false,
+        /** Distance from the frame centre to the projected card, over the frame diagonal; 0 when inside. */
+        val centreDistance: Double = Double.POSITIVE_INFINITY,
     )
 
     data class Decision(
@@ -409,8 +411,15 @@ object FrozenMatcherS3 {
         Core.perspectiveTransform(card, cardProjected, homography)
         val cardInFrame = cardProjected.toArray().map { Point(it.x + query.originX, it.y + query.originY) }
         card.release(); cardProjected.release()
-        val centred = cardInFrame.all { it.x.isFinite() && it.y.isFinite() } && convex(cardInFrame) &&
-            contains(cardInFrame, Point(query.frameWidth / 2.0, query.frameHeight / 2.0))
+        val frameCentre = Point(query.frameWidth / 2.0, query.frameHeight / 2.0)
+        val cardValid = cardInFrame.all { it.x.isFinite() && it.y.isFinite() } && convex(cardInFrame)
+        val centred = cardValid && contains(cardInFrame, frameCentre)
+        val centreDistance = when {
+            !cardValid -> Double.POSITIVE_INFINITY
+            centred -> 0.0
+            else -> cardInFrame.indices.minOf { i -> segmentDistance(frameCentre, cardInFrame[i], cardInFrame[(i + 1) % 4]) } /
+                hypot(query.frameWidth.toDouble(), query.frameHeight.toDouble())
+        }
         homography.release(); corners.release()
         val poly = projected.toArray()
         projected.release()
@@ -439,6 +448,7 @@ object FrozenMatcherS3 {
             geometryReason = "verified",
             vetoed = outside,
             coversFrameCentre = centred,
+            centreDistance = centreDistance,
         )
     }
 
@@ -473,6 +483,14 @@ object FrozenMatcherS3 {
             sum += a.x * b.y - b.x * a.y
         }
         return sum / 2.0
+    }
+
+    private fun segmentDistance(p: Point, a: Point, b: Point): Double {
+        val dx = b.x - a.x
+        val dy = b.y - a.y
+        val len = dx * dx + dy * dy
+        val t = if (len == 0.0) 0.0 else (((p.x - a.x) * dx + (p.y - a.y) * dy) / len).coerceIn(0.0, 1.0)
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
     }
 
     /** Point inside a convex polygon (either winding). */

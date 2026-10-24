@@ -12,9 +12,15 @@ export function isLanguage(value: string | null): value is Language {
   return languages.some((language) => language === value)
 }
 
-export function readLanguage(port: PreferencePort): Language {
+/** The stored choice, else the first supported browser language, else English. */
+export function readLanguage(port: PreferencePort, preferred: readonly string[] = []): Language {
   const stored = port.get(LANGUAGE_KEY)
-  return isLanguage(stored) ? stored : 'en'
+  if (isLanguage(stored)) return stored
+  for (const tag of preferred) {
+    const base = tag.toLowerCase().split('-')[0] ?? ''
+    if (isLanguage(base)) return base
+  }
+  return 'en'
 }
 
 export function writeLanguage(port: PreferencePort, language: Language): void {

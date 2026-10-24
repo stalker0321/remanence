@@ -21,7 +21,7 @@ const preferences: PreferencePort = {
   remove: (key) => window.localStorage.removeItem(key),
 }
 
-const language = readLanguage(preferences)
+const language = readLanguage(preferences, navigator.languages ?? [navigator.language])
 document.documentElement.lang = language
 const store = new SessionStore(language)
 const keys = new MemoryKeys()

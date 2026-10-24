@@ -23,6 +23,9 @@ describe('languages', () => {
   it('stores only the language preference', () => {
     const port = memoryPort()
     expect(readLanguage(port)).toBe('en')
+    expect(readLanguage(port, ['uk-UA', 'en'])).toBe('uk')
+    expect(readLanguage(port, ['de-DE', 'ru'])).toBe('ru')
+    expect(readLanguage(port, ['de-DE'])).toBe('en')
     writeLanguage(port, 'ru')
     expect(readLanguage(port)).toBe('ru')
     port.set('remanence.language', 'nope')

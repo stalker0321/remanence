@@ -41,6 +41,7 @@ input,textarea { min-width:0; }
 .main-nav a { display:flex; min-height:44px; align-items:center; padding:.5rem .8rem; border-radius:.45rem; text-decoration:none; font-size:.86rem; line-height:1.3; }
 .main-nav a:hover { background:#e9e8ef80; }
 .main-nav a[aria-current] { background:var(--lilac); }
+.main-nav .ui-icon { display:none; }
 .header-tools { display:flex; gap:.6rem; align-items:center; min-width:0; }
 .account-link { display:flex; align-items:center; gap:.4rem; min-height:44px; text-decoration:none; font-size:.83rem; max-width:12rem; }
 .account-link span { overflow-wrap:anywhere; }
@@ -49,7 +50,7 @@ input,textarea { min-width:0; }
 .route-content { min-width:0; outline:none; min-height:55vh; }
 .route-content h1 { scroll-margin-block-start:1rem; }
 .route-content h1:focus { outline:none; }
-.route-content h1:focus-visible { outline:2px solid var(--lilac-deep); outline-offset:6px; }
+/* Headings take focus on route changes for screen readers; they are not controls. */
 .skip-content { position:fixed; z-index:20; top:.5rem; left:.5rem; background:var(--paper); }
 .skip-content:not(:focus) { width:1px; height:1px; min-height:0; padding:0; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .ui-icon { width:1.3em; height:1.3em; flex:0 0 auto; }
@@ -398,13 +399,23 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
   .mark { font-size:1.45rem; }
   .account-link { max-width:8rem; font-size:.75rem; }
   .account-link .ui-icon { display:none; }
-  .main-nav { justify-content:space-between; gap:.2rem; }
-  .main-nav a { padding:.5rem .65rem; font-size:.82rem; }
+  /* Phones and the installed app: thumb-reach tab bar. */
+  .shell { padding-bottom:calc(5.5rem + env(safe-area-inset-bottom)); }
+  .main-nav {
+    position:fixed; z-index:1; inset:auto 0 0 0; margin:0; gap:0; justify-content:space-around; flex-wrap:nowrap;
+    padding:.35rem max(.5rem,env(safe-area-inset-right)) max(.35rem,env(safe-area-inset-bottom)) max(.5rem,env(safe-area-inset-left));
+    background:var(--paper); border-top:1px solid var(--line);
+  }
+  .main-nav a { flex:1 1 0; flex-direction:column; gap:.15rem; min-width:0; padding:.35rem .2rem; font-size:.7rem; text-align:center; }
+  .main-nav a span { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .main-nav .ui-icon { display:block; width:1.45rem; height:1.45rem; }
+  .main-nav a[aria-current] { background:transparent; color:var(--lilac-deep); }
+  .main-nav a[aria-current] .ui-icon { background:var(--lilac); border-radius:1rem; padding:.1rem .9rem; box-sizing:content-box; }
   .home-intro { margin-bottom:1.2rem; }
   .home-intro h1 { font-size:.9rem; }
   .home-actions { grid-template-columns:minmax(0,1fr); gap:1.5rem; }
   .action-card { min-height:13rem; padding:clamp(20px,4vw,32px); }
-  .action-card--create { margin:0 0 0 .7rem; }
+  .action-card--create { margin:0; }
   .action-index { margin-bottom:.9rem; }
   .action-card h2 { font-size:2rem; overflow-wrap:anywhere; }
   .action-card p { font-size:.9rem; max-width:28ch; }

@@ -176,7 +176,8 @@ export function App({
         <a className="mark" href={href('home')} aria-label={`remanence · ${t('navHome')}`} aria-current={route === 'home' ? 'page' : undefined}>remanence<span className="mark-dot" aria-hidden="true">.</span></a>
         <nav className="main-nav" aria-label={t('navMain')}>
           {(['scan', 'create', 'history', 'settings'] as const).map((item) => <a key={item} href={href(item)} aria-current={route === item ? 'page' : undefined}>
-            {t(({ scan: 'navScan', create: 'navMake', history: 'navHistory', settings: 'settingsTitle' } as const)[item])}
+            <Icon name={({ scan: 'scan', create: 'postcard', history: 'history', settings: 'settings' } as const)[item]} />
+            <span>{t(({ scan: 'navScan', create: 'navMake', history: 'navHistory', settings: 'settingsTitle' } as const)[item])}</span>
           </a>)}
         </nav>
         <div className="header-tools">

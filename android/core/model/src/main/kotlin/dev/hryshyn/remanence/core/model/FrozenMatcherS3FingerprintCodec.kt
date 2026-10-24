@@ -26,7 +26,8 @@ object FrozenMatcherS3FingerprintCodec {
     const val PROFILE_ID: String = "postcard-frozen-matcher-s3"
     const val MAX_SERIALIZED_BYTES: Int = 1 shl 20
     const val MIN_KEYPOINTS: Int = 1
-    const val MAX_KEYPOINTS: Int = 1_500
+    // The frozen grid keeps at most 45 keypoints in each of 6x6 cells.
+    const val MAX_KEYPOINTS: Int = 1_620
     const val DESCRIPTOR_BYTES: Int = 128
     const val MICRO_UNITS: Int = 1_000_000
     const val MAX_CANONICAL_DIMENSION_PX: Int = 100_000

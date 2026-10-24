@@ -2744,7 +2744,8 @@ class CreateViewModel(
                         photoHeightsPx = photoHeightsPx,
                         noteUtf8 = inputs.noteText,
                         frontFingerprintBytes = frontForPublish,
-                        frontFingerprintProfileId = RecognitionProfile.SIFT_ROOTSIFT_V1_ID,
+                        frontFingerprintProfileId =
+                            dev.hryshyn.remanence.core.model.FrontFingerprintCodecs.profileOf(frontForPublish),
                         signingKeyset = sender.signingPrivateHandle,
                         recipientEncryptionPublicKeyset =
                             parsePublicHandle(snapshot.encryptionPublicKeysetB64Url),

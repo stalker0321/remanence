@@ -9,10 +9,10 @@ package dev.hryshyn.remanence.core.model
  */
 object CanonicalSiftFingerprintValidator {
     fun requireCanonical(profileId: String, bytes: ByteArray) {
-        require(profileId == SiftRootSiftFingerprintCodec.PROFILE_ID) {
+        require(profileId in FrontFingerprintCodecs.SUPPORTED_PROFILES) {
             "unsupported fingerprint profile"
         }
-        val parsed = SiftRootSiftFingerprintCodec.parse(bytes)
+        val parsed = FrontFingerprintCodecs.parse(bytes)
         try {
             require(parsed.profileId == profileId) {
                 "fingerprint profile does not match bytes"

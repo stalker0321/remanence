@@ -195,6 +195,12 @@ class ScanViewModel internal constructor(
      */
     private val matcherShadow: MatcherShadowRunner? = null,
     /**
+     * Frozen matcher (S3) vocabulary. When present, S3 queries are decided by
+     * [dev.hryshyn.remanence.core.recognition.FrozenMatcherS3VisualEngine];
+     * crypto verification and grants stay with the local engine.
+     */
+    private val s3Vocabulary: () -> dev.hryshyn.remanence.core.recognition.FrozenMatcherS3.Vocabulary? = { null },
+    /**
      * T186 M14d-scan: re-admission verifier for PENDING candidates
      * (admitted-row gate on live keys — no bearer; directory/bundle
      * lookups travel the bridge ports). Null
@@ -234,6 +240,10 @@ class ScanViewModel internal constructor(
      * opening. Lives from an accepted capture until the next capture, reset
      * or teardown; never stored or sent anywhere.
      */
+    private val s3Engine by lazy {
+        s3Vocabulary()?.let { dev.hryshyn.remanence.core.recognition.FrozenMatcherS3VisualEngine(it) }
+    }
+
     private val _openingPostcard = MutableStateFlow<dev.hryshyn.remanence.capture.CapturedPostcard?>(null)
     val openingPostcard: StateFlow<dev.hryshyn.remanence.capture.CapturedPostcard?> = _openingPostcard.asStateFlow()
 
@@ -641,7 +651,7 @@ class ScanViewModel internal constructor(
                     val originRows = capsuleRows.filter { it.origin == origin }
                     val frontRow = originRows.singleOrNull() ?: continue
                     rawCandidateCount++
-                    if (frontRow.fingerprintProfileId != profile.profileId) {
+                    if (frontRow.fingerprintProfileId !in dev.hryshyn.remanence.core.model.FrontFingerprintCodecs.SUPPORTED_PROFILES) {
                         profileSkippedCandidateCount++
                         continue
                     }
@@ -659,7 +669,7 @@ class ScanViewModel internal constructor(
                     try {
                         var parsedFront: SiftRootSiftFingerprint? = null
                         val candidate = try {
-                            val parsed = SiftRootSiftFingerprintCodec.parse(frontBytes)
+                            val parsed = dev.hryshyn.remanence.core.model.FrontFingerprintCodecs.parse(frontBytes)
                             parsedFront = parsed
                             val parsedCandidate = IndexedCandidate(
                                 capsuleId = UUID.fromString(capsuleId),
@@ -999,13 +1009,19 @@ class ScanViewModel internal constructor(
                     // The slot is populated immediately after parse and before
                     // the next suspend point, retaining ownership through any
                     // cancellation at the dispatcher boundary.
-                    val parsedQuery = SiftRootSiftFingerprintCodec.parse(queryBytes)
+                    val parsedQuery = dev.hryshyn.remanence.core.model.FrontFingerprintCodecs.parse(queryBytes)
                     ownedQuery.set(parsedQuery)
-                    engine.evaluateVisual(
-                        queryFront = parsedQuery,
-                        candidates = candidateIndex.candidates,
-                        cancellationCheck = { currentCoroutineContext().ensureActive() },
-                    )
+                    val s3 = s3Engine
+                    if (s3 != null && dev.hryshyn.remanence.core.recognition.FrozenMatcherS3Fingerprint.isS3(parsedQuery)) {
+                        // Frozen matcher: S3 query against the S3 candidates.
+                        s3.evaluate(parsedQuery, candidateIndex.candidates)
+                    } else {
+                        engine.evaluateVisual(
+                            queryFront = parsedQuery,
+                            candidates = candidateIndex.candidates,
+                            cancellationCheck = { currentCoroutineContext().ensureActive() },
+                        )
+                    }
                 }
                 if (generation != matchGeneration) return@launch
 

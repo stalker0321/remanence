@@ -344,7 +344,7 @@ internal class PendingAdmittedCandidateProvider(
                 }
                 var parsed: SiftRootSiftFingerprint? = null
                 try {
-                    parsed = SiftRootSiftFingerprintCodec.parse(frontBytes)
+                    parsed = dev.hryshyn.remanence.core.model.FrontFingerprintCodecs.parse(frontBytes)
                     return IndexedCandidate(
                         capsuleId = capsuleUuid,
                         front = parsed,

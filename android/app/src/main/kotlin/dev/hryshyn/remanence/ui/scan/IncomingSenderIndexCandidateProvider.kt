@@ -257,7 +257,7 @@ internal class IncomingSenderIndexCandidateProvider(
             if (snapshot.capsuleId != candidate.capsuleId) return null
 
             frontBytes = snapshot.frontFingerprint
-            val front = SiftRootSiftFingerprintCodec.parse(frontBytes)
+            val front = dev.hryshyn.remanence.core.model.FrontFingerprintCodecs.parse(frontBytes)
             parsedFront = front
             val capsuleId = candidate.capsuleId.toString()
             val indexed = IndexedCandidate(

@@ -109,6 +109,10 @@ class RemanenceViewModelFactory(
         HomeCapabilityViewModel::class.java ->
             HomeCapabilityViewModel(container.identityAvailability) as T
         CreateViewModel::class.java -> CreateViewModel(
+            // New capsules carry a frozen-matcher (S3) FRONT fingerprint.
+            frontProcessor = dev.hryshyn.remanence.create.FrozenMatcherS3StillProcessor(
+                role = dev.hryshyn.remanence.create.FrozenMatcherS3StillProcessor.Role.SENDER,
+            ),
             // Admission is checked separately for friendly UI. The request itself
             // must let the shared interceptor source the current open-domain bearer.
             directory = { rawHandle -> container.directoryRepository.lookup(rawHandle) },
@@ -264,6 +268,13 @@ class RemanenceViewModelFactory(
             // Product Processing is intentionally neutral. Do not decode a
             // display bitmap that no production surface consumes.
             captureDisplayDecoder = dev.hryshyn.remanence.capture.CaptureDisplayDecoder { null },
+            // Scans go through the frozen postcard matcher (S3).
+            frontProcessor = dev.hryshyn.remanence.create.FrozenMatcherS3StillProcessor(
+                role = dev.hryshyn.remanence.create.FrozenMatcherS3StillProcessor.Role.RECIPIENT,
+                modelBytes = { dev.hryshyn.remanence.create.FrozenMatcherS3Assets.model(container.appContext) },
+                captureOpeningPostcard = true,
+            ),
+            s3Vocabulary = { dev.hryshyn.remanence.create.FrozenMatcherS3Assets.vocabulary(container.appContext) },
             persistence = container.fingerprintPersistence,
             database = container.database,
             profile = dev.hryshyn.remanence.core.recognition.RecognitionProfile.postcardSiftRootSiftV1(),
@@ -353,24 +364,8 @@ class RemanenceViewModelFactory(
             // seam stays null until the lead delivers provenance-valid S5
             // bytes (T017/T081/T116: never fabricated here), so today the
             // shadow reports a bounded unavailable outcome without touching v1.
-            matcherShadow = dev.hryshyn.remanence.scan.matcher.MatcherShadowRunner(
-                config = dev.hryshyn.remanence.scan.matcher.MatcherShadowConfig.telemetryOnly(),
-                stages = dev.hryshyn.remanence.scan.matcher.AndroidMatcherShadowStages(
-                    modelBytes = {
-                        try {
-                            container.appContext.assets
-                                .open(
-                                    dev.hryshyn.remanence.core.recognition.FrozenLocalizer
-                                        .MODEL_ASSET_PATH,
-                                ).use { it.readBytes() }
-                        } catch (_: Throwable) {
-                            null
-                        }
-                    },
-                    catalogIndex = { null },
-                ),
-                sink = dev.hryshyn.remanence.scan.matcher.MatcherShadowTelemetry.sink,
-            ),
+            // The frozen matcher now decides scans; the telemetry shadow is retired.
+            matcherShadow = null,
         ) as T
         else -> throw IllegalArgumentException("unknown ViewModel: ${modelClass.name}")
     }

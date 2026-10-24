@@ -319,7 +319,12 @@ object FrozenMatcherS3 {
     }
 
     class Reference(val id: String, val features: Features, val histogram: FloatArray) {
-        internal val rooted: Mat by lazy { root(features.descriptors, features.count) }
+        private val rootedLazy = lazy { root(features.descriptors, features.count) }
+        internal val rooted: Mat by rootedLazy
+
+        fun release() {
+            if (rootedLazy.isInitialized()) rooted.release()
+        }
     }
 
     fun reference(id: String, features: Features, vocabulary: Vocabulary) =
@@ -327,7 +332,25 @@ object FrozenMatcherS3 {
 
     // ------------------------------------------------------------------ matching
 
-    fun match(query: Features, references: List<Reference>, vocabulary: Vocabulary, components: Int): Decision {
+    /**
+     * Product addition to the frozen pipeline: the matched card must reach the
+     * frame centre (distance over the frame diagonal), so a neighbouring card
+     * in the same photo cannot be accepted. Chosen on odd identities, held out
+     * on even ones (dataset: 897 -> 876 correct, 3 -> 0 wrong/false accepts).
+     */
+    const val MAX_CENTRE_DISTANCE = 0.15
+
+    /**
+     * Several references may describe one card (sender and recipient
+     * baselines share an id); the runner-up is the best *other* card.
+     */
+    fun match(
+        query: Features,
+        references: List<Reference>,
+        vocabulary: Vocabulary,
+        components: Int,
+        requireCentred: Boolean = false,
+    ): Decision {
         require(references.isNotEmpty()) { "no references" }
         val qh = vocabulary.histogram(query, query = true)
         val scores = references.map { r -> r.histogram.indices.sumOf { r.histogram[it].toDouble() * qh[it] } }
@@ -337,7 +360,7 @@ object FrozenMatcherS3 {
         qRooted?.release()
         val ranked = results.withIndex().sortedWith(compareByDescending<IndexedValue<Candidate>> { it.value.finalScore }.thenBy { it.index }).map { it.value }
         val best = ranked.first()
-        val runner = ranked.getOrNull(1)?.finalScore ?: 0.0
+        val runner = ranked.firstOrNull { it.id != best.id }?.finalScore ?: 0.0
         val separation = best.finalScore / max(runner, 1.0)
         val baseline = best.finalScore >= THRESHOLD && separation >= MARGIN && best.inliers >= 12 &&
             best.coverage >= .04 && best.inlierRatio >= .3
@@ -345,7 +368,8 @@ object FrozenMatcherS3 {
             baseline,
             StrictCombinedEvidence(best.geometryVerified, best.finalScore, best.inlierRatio, best.coverage, components),
         )
-        val accepted = gate is StrictCombinedDecision.Keep
+        val accepted = gate is StrictCombinedDecision.Keep &&
+            (!requireCentred || best.centreDistance <= MAX_CENTRE_DISTANCE)
         return Decision(
             baselineAccepted = baseline,
             accepted = accepted,

@@ -22,6 +22,9 @@
  */
 
 import type { RecognitionEngine, MatchResult } from './grant'
+import * as S3 from './s3/frozenMatcher'
+import { loadFrozenMatcher, type FrozenMatcherAssets } from './s3/s3Assets'
+import { isS3, queryFrame as s3QueryFrame, toFeatures as toS3Features } from './s3/s3Fingerprint'
 import type { StillCapture } from './camera'
 import type { IncomingCatalog } from '../sync/incoming'
 import type { RecognitionIndex } from './recognitionIndex'
@@ -280,6 +283,30 @@ export function createRecognitionEngine(deps: RecognitionEngineDeps = {}): Recog
         }
 
         const query = queryDomain!
+        if (isS3(query)) {
+          // Frozen postcard matcher: one card opens, the same postcard from
+          // several senders is a choice, anything uncertain is no match.
+          const frame = s3QueryFrame(query)
+          const candidates = snapshotEntries.filter((entry) => isS3(entry.fingerprint))
+          if (frame === null || candidates.length === 0) return { kind: 'none' }
+          let matcher: FrozenMatcherAssets
+          try {
+            matcher = await loadFrozenMatcher(signal)
+          } catch {
+            if (signal?.aborted === true) throw refuse('cancelled')
+            throw refuse('unavailable')
+          }
+          assertLive()
+          const references = candidates.map((entry) => S3.reference(entry.capsuleId, toS3Features(entry.fingerprint), matcher.vocabulary))
+          const decision = S3.match(matcher.cv, toS3Features(query), references, matcher.vocabulary, frame.components, true)
+          assertLive()
+          if (decision.ambiguousIds.length >= 2) return { kind: 'many' }
+          if (decision.id !== null) {
+            if (!catalogIdSet.has(decision.id)) throw refuse('invalid')
+            return { kind: 'one', capsuleId: decision.id }
+          }
+          return { kind: 'none' }
+        }
         const scored: ScoredCandidateRow[] = []
         for (let indexRef = 0; indexRef < snapshotEntries.length; indexRef++) {
           assertLive()

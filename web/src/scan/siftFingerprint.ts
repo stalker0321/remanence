@@ -19,6 +19,18 @@ export const SIFT_FINGERPRINT_PROFILE_ID = 'postcard-sift-rootsift-v1'
 export const SIFT_FINGERPRINT_FORMAT_VERSION = 3
 export const DESCRIPTOR_BYTES = 128
 export const MAX_KEYPOINTS = 1500
+/** Frozen postcard matcher (S3): same wire shape, format 4, up to 6x6x45 keypoints. */
+export const S3_FINGERPRINT_PROFILE_ID = 'postcard-frozen-matcher-s3'
+export const S3_FINGERPRINT_FORMAT_VERSION = 4
+export const S3_MAX_KEYPOINTS = 1620
+const PROFILE_VERSIONS: Readonly<Record<string, number>> = {
+  [SIFT_FINGERPRINT_PROFILE_ID]: SIFT_FINGERPRINT_FORMAT_VERSION,
+  [S3_FINGERPRINT_PROFILE_ID]: S3_FINGERPRINT_FORMAT_VERSION,
+}
+const PROFILE_MAX_KEYPOINTS: Readonly<Record<string, number>> = {
+  [SIFT_FINGERPRINT_PROFILE_ID]: MAX_KEYPOINTS,
+  [S3_FINGERPRINT_PROFILE_ID]: S3_MAX_KEYPOINTS,
+}
 export const MIN_KEYPOINTS = 1
 export const MAX_SERIALIZED_BYTES = 1 << 20
 const MICRO_UNITS = 1_000_000
@@ -88,11 +100,12 @@ function validateKeypoint(keypoint: SiftFingerprintKeypoint): void {
 }
 
 function validate(fingerprint: SiftFingerprint): void {
-  if (fingerprint.profileId !== SIFT_FINGERPRINT_PROFILE_ID) throw refuse('profile')
+  const maxKeypoints = PROFILE_MAX_KEYPOINTS[fingerprint.profileId]
+  if (maxKeypoints === undefined) throw refuse('profile')
   if (!inRange(fingerprint.canonicalWidthPx, 1, MAX_CANONICAL_DIMENSION_PX)) throw refuse('range')
   if (!inRange(fingerprint.canonicalHeightPx, 1, MAX_CANONICAL_DIMENSION_PX)) throw refuse('range')
   if (typeof fingerprint.coarseHash64 !== 'bigint' || fingerprint.coarseHash64 < INT64_MIN || fingerprint.coarseHash64 > INT64_MAX) throw refuse('range')
-  if (fingerprint.keypoints.length < MIN_KEYPOINTS || fingerprint.keypoints.length > MAX_KEYPOINTS) throw refuse('range')
+  if (fingerprint.keypoints.length < MIN_KEYPOINTS || fingerprint.keypoints.length > maxKeypoints) throw refuse('range')
   if (fingerprint.quantizedSiftDescriptors.length !== fingerprint.keypoints.length) throw refuse('descriptors')
   for (const keypoint of fingerprint.keypoints) validateKeypoint(keypoint)
   for (const row of fingerprint.quantizedSiftDescriptors) {
@@ -136,8 +149,8 @@ function keypointBytes(keypoint: SiftFingerprintKeypoint): Uint8Array {
 export function serializeSiftFingerprint(fingerprint: SiftFingerprint): Uint8Array {
   validate(fingerprint)
   const chunks: Uint8Array[] = [
-    protoVarint(1, SIFT_FINGERPRINT_FORMAT_VERSION),
-    protoBytes(2, utf8(SIFT_FINGERPRINT_PROFILE_ID)),
+    protoVarint(1, PROFILE_VERSIONS[fingerprint.profileId]!),
+    protoBytes(2, utf8(fingerprint.profileId)),
   ]
   if (fingerprint.canonicalWidthPx !== 0) chunks.push(protoVarint(3, fingerprint.canonicalWidthPx))
   if (fingerprint.canonicalHeightPx !== 0) chunks.push(protoVarint(4, fingerprint.canonicalHeightPx))
@@ -248,7 +261,8 @@ export function parseSiftFingerprint(bytes: Uint8Array): SiftFingerprint {
         if (wire !== 2) throw refuse('encoding')
         // Bound the repeated keypoint count BEFORE reading/copying/parsing the
         // message, so an oversized input can never allocate past MAX_KEYPOINTS.
-        if (keypoints.length >= MAX_KEYPOINTS) throw refuse('range')
+        // The profile precedes keypoints in canonical bytes; cap by it.
+        if (keypoints.length >= (PROFILE_MAX_KEYPOINTS[profileId] ?? MAX_KEYPOINTS)) throw refuse('range')
         keypoints.push(parseKeypoint(reader.lengthDelimited()))
         continue
       }
@@ -283,7 +297,11 @@ export function parseSiftFingerprint(bytes: Uint8Array): SiftFingerprint {
     rawDescriptors?.fill(0)
     throw error
   }
-  if (formatVersion !== SIFT_FINGERPRINT_FORMAT_VERSION) {
+  if (PROFILE_VERSIONS[profileId] === undefined) {
+    rawDescriptors?.fill(0)
+    throw refuse('profile')
+  }
+  if (formatVersion !== PROFILE_VERSIONS[profileId]) {
     rawDescriptors?.fill(0)
     throw refuse('version')
   }

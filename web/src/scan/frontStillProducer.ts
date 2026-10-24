@@ -18,7 +18,11 @@ import { orderClockwiseFromTopLeft, type Point2D } from './cornerGeometry'
 import { selectCrop, type CropCandidate, type ProposalSource } from './cropSelection'
 import { planWarp, targetCorners } from './warpGeometry'
 import { extractWithRuntime, rint, SiftExtractionError } from './siftExtractor'
-import { serializeSiftFingerprint, SIFT_FINGERPRINT_PROFILE_ID } from './siftFingerprint'
+import { serializeSiftFingerprint, SIFT_FINGERPRINT_PROFILE_ID, S3_FINGERPRINT_PROFILE_ID, type SiftFingerprint } from './siftFingerprint'
+import * as S3 from './s3/frozenMatcher'
+import type { Localizer } from './s3/frozenMatcher'
+import { loadFrozenMatcher, type FrozenMatcherAssets } from './s3/s3Assets'
+import { toFingerprint as toS3Fingerprint } from './s3/s3Fingerprint'
 import {
   createCaptureQualityMeter,
   evaluateCaptureQualityGate,
@@ -316,7 +320,7 @@ export async function produceFrontStillFingerprint(
     ...options,
     quality: false,
     meter: undefined,
-  })
+  }, 'sender')
   // The core's promise boundary is an await: recheck the original fence and
   // signal before attaching caller owner metadata, wiping the transferred
   // wire if the visit changed or was cancelled in between.
@@ -344,7 +348,7 @@ export async function produceLocalizedFingerprint(
   // Capture the original owner fence/signal before any await.
   const signal = options.signal
   const jpeg = captureJpegBytes(source)
-  const localized = await produceLocalizedFromOwnedJpeg(jpeg, options)
+  const localized = await produceLocalizedFromOwnedJpeg(jpeg, options, 'recipient')
   // The core promise boundary is an await. Recheck the ORIGINAL captured
   // fence/signal at this output handover and wipe the transferred wire if the
   // owner went stale or the visit was cancelled in between (identity-free
@@ -363,6 +367,7 @@ export async function produceLocalizedFingerprint(
 async function produceLocalizedFromOwnedJpeg(
   jpeg: Uint8Array,
   options: ProduceFrontStillOptions,
+  role: FrozenMatcherRole,
 ): Promise<LocalizedFingerprint> {
   const fence = options.fence
   const signal = options.signal
@@ -399,6 +404,9 @@ async function produceLocalizedFromOwnedJpeg(
       }
       throwIfFence(fence)
       throwIfAborted(signal)
+      // Production fingerprints come from the frozen postcard matcher (S3);
+      // the legacy contour/warp path remains behind the runtime test seam.
+      if (runtimeOption === undefined) return await extractFrozenMatcher(frame, role, fence, signal)
       let runtime: CvContourRuntime
       // A supplied meter is only active with the captured explicit opt-in.
       // quality:false/absent must never measure (default behavior unchanged).
@@ -429,6 +437,81 @@ async function produceLocalizedFromOwnedJpeg(
     }
   } finally {
     jpeg.fill(0)
+  }
+}
+
+type FrozenMatcherRole = 'sender' | 'recipient'
+
+/**
+ * Frozen postcard matcher fingerprint over an owned working frame: the sender
+ * describes the GrabCut-cropped card; the recipient query describes the card
+ * the ONNX localizer finds inside the centred 2:3 frame.
+ */
+async function extractFrozenMatcher(
+  frame: OwnedRgbaFrame,
+  role: FrozenMatcherRole,
+  fence: () => boolean,
+  signal?: AbortSignal,
+): Promise<LocalizedFingerprint> {
+  let matcher: FrozenMatcherAssets
+  let localizer: Localizer | null = null
+  try {
+    matcher = await loadFrozenMatcher(signal)
+    if (role === 'recipient') localizer = await matcher.localizer()
+  } catch {
+    if (signal?.aborted) throw refuse('cancelled')
+    throw refuse('unavailable')
+  }
+  throwIfFence(fence)
+  throwIfAborted(signal)
+  const cv = matcher.cv
+  const bgr = S3.bgr960(cv, frame.rgba, frame.width, frame.height)
+  let fingerprint: SiftFingerprint
+  let features: S3.Features
+  try {
+    if (role === 'sender') {
+      features = S3.senderFeatures(cv, bgr)
+      if (S3.featureCount(features) < 12) throw refuse('features')
+      fingerprint = toS3Fingerprint(features)
+    } else {
+      const [x0, y0, x1, y1] = S3.frameBounds(bgr.cols, bgr.rows)
+      const framed = bgr.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0)).clone()
+      try {
+        const recipient = S3.recipientFeatures(cv, framed, localizer!.mask(framed))
+        features = recipient.features
+        if (S3.featureCount(features) < 1) throw refuse('features')
+        fingerprint = toS3Fingerprint(features, {
+          originX: features.originX, originY: features.originY,
+          frameWidth: features.frameWidth, frameHeight: features.frameHeight, components: recipient.components,
+        })
+      } finally {
+        framed.delete()
+      }
+    }
+  } catch (error) {
+    if (error instanceof FrontStillError) throw error
+    throw refuse('features')
+  } finally {
+    bgr.delete()
+  }
+  throwIfFence(fence)
+  throwIfAborted(signal)
+  const wire = serializeSiftFingerprint(fingerprint)
+  for (const row of fingerprint.quantizedSiftDescriptors) row.fill(0)
+  return {
+    wire,
+    profileId: S3_FINGERPRINT_PROFILE_ID,
+    provenance: {
+      source: 'GUIDE_FALLBACK',
+      corners: [{ x: 0, y: 0 }, { x: frame.width, y: 0 }, { x: frame.width, y: frame.height }, { x: 0, y: frame.height }],
+      areaRatio: 1,
+      rectangularity: 1,
+      confidence: null,
+      workingWidth: frame.width,
+      workingHeight: frame.height,
+      warpedWidth: features.width,
+      warpedHeight: features.height,
+    },
   }
 }
 

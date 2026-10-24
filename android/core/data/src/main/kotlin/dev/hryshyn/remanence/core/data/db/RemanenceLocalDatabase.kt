@@ -45,6 +45,8 @@ abstract class RemanenceLocalDatabase : RoomDatabase() {
 
     abstract fun recognitionFingerprintDao(): RecognitionFingerprintDao
 
+    abstract fun sentPostcardDao(): SentPostcardDao
+
     abstract fun syncCursorDao(): SyncCursorDao
 
     abstract fun recipientTombstoneDao(): RecipientTombstoneDao

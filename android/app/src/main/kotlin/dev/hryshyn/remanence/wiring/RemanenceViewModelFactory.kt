@@ -115,7 +115,7 @@ class RemanenceViewModelFactory(
             ),
             alreadySentFront = { owner, recipient, front ->
                 dev.hryshyn.remanence.create.SentPostcardGuard.alreadySent(
-                    capsuleIds = container.database.outboxCapsuleDao().capsuleIdsForRecipient(owner, recipient).toSet(),
+                    capsuleIds = container.database.sentPostcardDao().capsuleIdsForRecipient(owner, recipient).toSet(),
                     rows = container.database.recognitionFingerprintDao().getAllForOwner(owner),
                     decrypt = container.fingerprintPersistence::decrypt,
                     vocabulary = { dev.hryshyn.remanence.create.FrozenMatcherS3Assets.vocabulary(container.appContext) },

@@ -86,10 +86,16 @@ def test_public_policy_pages_work_without_account_and_without_secrets(me_env, pa
     assert "pm_at_" not in response.text and "pm_rt_" not in response.text
 
 
-def test_beta_config_keeps_production_recovery_gate():
+def test_recovery_and_google_onboarding_are_production_features():
     from pydantic import ValidationError
+    prod = Settings(mode="prod", database_url="postgresql+psycopg://local@localhost/local", blob_root="/tmp/local", recovery_enabled=True,
+        google_sign_in_enabled=True, google_client_ids=["web.apps.googleusercontent.com"],
+        registration_atomic_required=True, registration_atomic_admission_enabled=True)
+    assert prod.mode is AppMode.PROD
+    # Google onboarding still needs recovery: an account must be recoverable.
     with pytest.raises(ValidationError):
-        Settings(mode="prod", database_url="postgresql+psycopg://local@localhost/local", blob_root="/tmp/local", recovery_enabled=True)
+        Settings(mode="prod", database_url="postgresql+psycopg://local@localhost/local", blob_root="/tmp/local",
+            google_sign_in_enabled=True, google_client_ids=["web.apps.googleusercontent.com"])
     cfg = Settings(mode="beta", database_url="postgresql+psycopg://local@localhost/local", blob_root="/tmp/local", recovery_enabled=True,
         google_sign_in_enabled=True, google_client_ids=["web.apps.googleusercontent.com"], google_presenter_ids=["android.apps.googleusercontent.com"])
     assert cfg.mode is AppMode.BETA

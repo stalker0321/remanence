@@ -187,9 +187,8 @@ def test_inactive_routes_and_database_unavailable_are_private(me_env):
     cfg = client.app.state.settings
     cfg.recovery_enabled = cfg.google_sign_in_enabled = True
     cfg.google_client_ids = ["synthetic.apps.googleusercontent.com"]
-    cfg.mode = AppMode.BETA
-    assert client.get(path).status_code == 404
-    cfg.mode = AppMode.DEV
+    # Registration is available in every mode once Google and recovery are on.
+    cfg.mode = AppMode.PROD
     client.app.state.session_factory = None
     response = client.get(path)
     assert response.status_code == 503 and response.json() == {"reason": "SETUP_UNAVAILABLE"}

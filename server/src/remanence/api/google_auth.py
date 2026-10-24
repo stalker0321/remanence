@@ -26,7 +26,6 @@ from remanence.auth.tokens import generate_access_token, generate_refresh_token,
 from remanence.users.models import User
 from remanence.users.handles import normalize_handle
 from remanence.registration_setup.service import AtomicRegistration, SetupFailure, required_policy, lock_subject
-from remanence.settings import AppMode
 
 
 def enabled(request: Request, response: Response):
@@ -161,8 +160,6 @@ def options(payload: Empty, request: Request, db: Session = Depends(get_db_sessi
 
 @router.post("/v1/auth/google/verify", dependencies=[Depends(auth_limit)])
 def verify(payload: GoogleProof, request: Request, db: Session = Depends(get_db_session)):
-    if payload.onboarding_version is not None and request.app.state.settings.mode not in (AppMode.TEST, AppMode.DEV):
-        raise HTTPException(404)
     burned = False
     policy = False
     try:

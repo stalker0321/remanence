@@ -92,8 +92,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def require_datastore_for_non_test(self) -> Self:
         if self.registration_atomic_required or self.registration_atomic_admission_enabled:
-            if self.mode not in (AppMode.TEST, AppMode.DEV) or not self.google_sign_in_enabled or not self.recovery_enabled:
-                raise ValueError("atomic registration requires explicit DEV/TEST Google recovery")
+            if not self.google_sign_in_enabled or not self.recovery_enabled:
+                raise ValueError("atomic registration requires Google sign-in and recovery")
         if self.registration_atomic_admission_enabled and not self.registration_atomic_required:
             raise ValueError("atomic admission requires the legacy safety fence")
         if self.send_access_mode is SendAccessMode.ENFORCE and self.mode is not AppMode.TEST:
@@ -102,12 +102,10 @@ class Settings(BaseSettings):
             if self.music_catalog_path is None or not self.music_catalog_path.is_absolute():
                 raise ValueError("full catalog search requires an absolute music_catalog_path")
         if self.google_sign_in_enabled:
-            if self.mode is AppMode.PROD or not self.recovery_enabled:
-                raise ValueError("Google onboarding requires explicit DEV/TEST/BETA recovery")
+            if not self.recovery_enabled:
+                raise ValueError("Google onboarding requires recovery")
             if not self.google_client_ids or any(not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", v) for v in self.google_client_ids + self.google_presenter_ids):
                 raise ValueError("explicit Google OAuth client IDs required")
-        if self.recovery_enabled and self.mode is AppMode.PROD:
-            raise ValueError("recovery requires explicit DEV/TEST/BETA mode")
         if not self.recovery_rp_id or not self.recovery_origins:
             raise ValueError("explicit recovery RP/origins required")
         if self.recovery_enabled:

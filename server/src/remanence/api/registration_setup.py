@@ -11,7 +11,6 @@ from remanence.api.dependencies import (AuthenticationRequiredError, get_db_sess
     get_access_bearer_token, get_authenticated_principal)
 from remanence.registration_setup.schemas import EpochRequest, SetupOptions, SetupVerify, FinalRequest
 from remanence.registration_setup.service import AtomicRegistration, SetupFailure
-from remanence.settings import AppMode
 
 
 class RegistrationNoStoreMiddleware:
@@ -30,7 +29,7 @@ class RegistrationNoStoreMiddleware:
 
 def enabled(request: Request):
     cfg = request.app.state.settings
-    if cfg.mode not in (AppMode.DEV, AppMode.TEST) or not cfg.google_sign_in_enabled or not cfg.recovery_enabled:
+    if not cfg.google_sign_in_enabled or not cfg.recovery_enabled:
         raise HTTPException(404)
 
 

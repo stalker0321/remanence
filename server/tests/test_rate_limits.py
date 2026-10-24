@@ -55,3 +55,10 @@ def test_recovery_test_page_is_off_by_default():
     client = _client()
     client.app.state.settings = client.app.state.settings.model_copy(update={"recovery_enabled": True})
     assert client.get("/recovery-test/").status_code == 404
+
+
+def test_password_auth_closes_once_atomic_registration_is_required():
+    client = _client()
+    client.app.state.settings = client.app.state.settings.model_copy(update={"registration_atomic_required": True})
+    assert client.post("/v1/auth/login", json={}).status_code == 404
+    assert client.post("/v1/auth/register", json={}).status_code == 404

@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import SecretStr
 from sqlalchemy.exc import IntegrityError
@@ -89,8 +89,18 @@ def refresh(
     )
 
 
+def password_auth_fence(request: Request) -> None:
+    """Password login/registration closes once atomic registration is required.
+
+    Product accounts are created through Google + passkey atomic registration;
+    these legacy routes would bypass it (and recovery).
+    """
+    if request.app.state.settings.registration_atomic_required:
+        raise HTTPException(status_code=404)
+
+
 @router.post(
-    "/v1/auth/login", dependencies=[Depends(auth_limit)],
+    "/v1/auth/login", dependencies=[Depends(auth_limit), Depends(password_auth_fence)],
     response_model=LoginResponse,
     status_code=200,
 )
@@ -173,7 +183,7 @@ def login(
 
 
 @router.post(
-    "/v1/auth/register", dependencies=[Depends(auth_limit)],
+    "/v1/auth/register", dependencies=[Depends(auth_limit), Depends(password_auth_fence)],
     response_model=RegistrationResponse,
     status_code=201,
 )

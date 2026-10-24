@@ -236,8 +236,18 @@ def test_fault_at_each_permanent_row_rolls_back_all(atomic, table):
     assert final(atomic, a, body).status_code == 201
 
 
+def seed_legacy_account(atomic, **kwargs):
+    """An account that predates required atomic registration."""
+    cfg = atomic[0].app.state.settings
+    atomic[0].app.state.settings = cfg.model_copy(update={"registration_atomic_required": False})
+    try:
+        return _seed(atomic[0], **kwargs)
+    finally:
+        atomic[0].app.state.settings = cfg
+
+
 def test_handle_conflict_preserves_grant_and_exact_candidate(atomic):
-    _seed(atomic[0], handle="taken")
+    seed_legacy_account(atomic, handle="taken")
     before = counts(atomic[1])
     a, body, _ = candidate(atomic, handle="taken")
     reply = final(atomic, a, body)

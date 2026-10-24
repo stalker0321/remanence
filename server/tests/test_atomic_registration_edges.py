@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from test_me_endpoint import me_env, _seed
 from test_google_auth import google_env, options
-from test_atomic_registration import atomic, reserve, proof, candidate, final, grant, post, counts, headers, url
+from test_atomic_registration import seed_legacy_account, atomic, reserve, proof, candidate, final, grant, post, counts, headers, url
 from test_passkey_recovery import Authenticator, b64
 from remanence.registration_setup.models import RegistrationReservation as Reservation, RegistrationChallenge as Challenge
 from remanence.registration_setup.service import AtomicRegistration
@@ -196,7 +196,7 @@ def test_inactive_routes_and_database_unavailable_are_private(me_env):
 
 
 def test_directory_has_no_account_or_public_bundle_until_permanent_commit(atomic):
-    observer = _seed(atomic[0], email="observer@example.com", handle="observer")
+    observer = seed_legacy_account(atomic, email="observer@example.com", handle="observer")
     observer_headers = {"Authorization": "Bearer " + observer["access_token"]}
     a, body, _ = candidate(atomic)
     paths = ["/v1/directory/handles/" + body["handle"], "/v1/directory/users/" + a["reservation"]["account_id"],

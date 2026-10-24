@@ -52,7 +52,7 @@ import { browserPhotoCodec } from '../create/browserPhoto'
 import { PhotoIntake, PhotoNormalizer, type PhotoCodec, type IntakeFence, type IntakeOutcome } from '../create/normalize'
 import { PhotoIntakeActivity } from '../create/intakeActivity'
 import { MUSIC_QUERY_MAX_CODE_POINTS, MUSIC_SEARCH_DEBOUNCE_MS, musicCoverKey, musicLine, MusicDraft, searchMusic } from '../create/music'
-import { NOTE_MAX_UTF8_BYTES, type NoteDraft } from '../create/note'
+import type { NoteDraft } from '../create/note'
 import { PHOTO_COUNT_MAX, type PhotoDraft } from '../create/photos'
 import { arrayBuffer } from '../protocol/bytes'
 import { RecipientDraft, lookupRecipient, type RecipientSnapshot } from '../create/recipient'
@@ -590,6 +590,7 @@ export function Create({
   const [handle, setHandle] = useState('')
   const [busy, setBusy] = useState(false)
   const [stamp, setStamp] = useState(0)
+  const [noteAtLimit, setNoteAtLimit] = useState(false)
   const [live, setLive] = useState(false)
   const [pictured, setPictured] = useState(false)
   const [cameraFailure, setCameraFailure] = useState<CameraFailure | null>(null)
@@ -1270,13 +1271,12 @@ export function Create({
               disabled={sendPhase === 'working'}
               onChange={(event) => {
                 invalidateSend()
-                note.edit(event.target.value)
+                setNoteAtLimit(note.edit(event.target.value))
                 setStamp((value) => value + 1)
               }}
             />
           </label>
-          <p className="field-hint">{t('createNoteHint')} · {note.bytes()} / {NOTE_MAX_UTF8_BYTES}</p>
-          {note.fits() ? null : <p>{t('noteTooLong')}</p>}
+          <p className="field-hint">{noteAtLimit ? t('noteTooLong') : t('createNoteHint')}</p>
           </section>
           <div className="draft-section photo-draft" aria-busy={photoIntakePending}>
             <label>

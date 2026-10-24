@@ -9,7 +9,7 @@ export function noteUtf8Bytes(text: string): number {
   return encoder.encode(text).byteLength
 }
 
-/** Editable note. Over-limit text stays for editing and is not an accepted note. */
+/** Editable note. Input past the byte limit is cut at the last whole character that fits. */
 export class NoteDraft {
   #text = ''
 
@@ -31,8 +31,22 @@ export class NoteDraft {
     return this.#text.length === 0 ? null : this.#text
   }
 
-  edit(text: string): void {
-    this.#text = text
+  /** @returns true when the input was cut to fit the limit. */
+  edit(text: string): boolean {
+    if (noteUtf8Bytes(text) <= NOTE_MAX_UTF8_BYTES) {
+      this.#text = text
+      return false
+    }
+    let kept = ''
+    let bytes = 0
+    for (const character of text) {
+      const size = noteUtf8Bytes(character)
+      if (bytes + size > NOTE_MAX_UTF8_BYTES) break
+      kept += character
+      bytes += size
+    }
+    this.#text = kept
+    return true
   }
 
   wipe(): void {

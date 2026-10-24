@@ -25,7 +25,7 @@ describe('product presentation, not controller authority', () => {
     }))
     expect(html.match(/aria-current="step"/g)).toHaveLength(1)
     expect(html.match(/data-complete="true"/g)).toHaveLength(1)
-    expect(html).toContain('put it together')
+    expect(html).toContain('photos and words')
     expect(html).not.toMatch(/<(button|a|input)\b/)
   })
 

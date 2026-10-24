@@ -4,7 +4,7 @@ import { NOTE_MAX_UTF8_BYTES, NoteDraft, noteUtf8Bytes } from '../src/create/not
 import { SessionStore } from '../src/session/session'
 
 describe('create note', () => {
-  it('counts UTF-8 bytes and keeps an over-limit draft', () => {
+  it('counts UTF-8 bytes and stops the note at the limit', () => {
     expect(NOTE_MAX_UTF8_BYTES).toBe(limits.note_max_utf8_bytes)
     expect(noteUtf8Bytes('я')).toBe(2)
     expect(noteUtf8Bytes('🙂')).toBe(4)
@@ -13,11 +13,12 @@ describe('create note', () => {
     expect(note.bytes()).toBe(1000)
     expect(note.fits()).toBe(true)
     expect(note.accepted()).toBe('я'.repeat(500))
-    note.edit(`${'я'.repeat(500)}!`)
-    expect(note.bytes()).toBe(1001)
-    expect(note.fits()).toBe(false)
-    expect(note.accepted()).toBeNull()
-    expect(note.text()).toBe(`${'я'.repeat(500)}!`)
+    expect(note.edit(`${'я'.repeat(500)}!`)).toBe(true)
+    expect(note.text()).toBe('я'.repeat(500))
+    expect(note.fits()).toBe(true)
+    expect(note.edit(`${'a'.repeat(997)}🙂`)).toBe(true)
+    expect(note.text()).toBe('a'.repeat(997))
+    expect(note.edit('short')).toBe(false)
     note.edit('')
     expect(note.accepted()).toBeNull()
     expect(note.fits()).toBe(true)

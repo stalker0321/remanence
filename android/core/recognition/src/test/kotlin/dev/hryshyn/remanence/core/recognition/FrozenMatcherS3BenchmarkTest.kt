@@ -49,7 +49,17 @@ class FrozenMatcherS3BenchmarkTest {
         val senderMode = System.getenv("REMANENCE_S3_SENDER") ?: "grabcut"
         val manifest = Json.parseToJsonElement(File(root, "manifest.json").readText()).jsonObject
         val gallery = manifest["gallery"]!!.jsonArray.map { it.jsonObject }
-        val queries = manifest["queries"]!!.jsonArray.map { it.jsonObject }.take(limit)
+        val allQueries = manifest["queries"]!!.jsonArray.map { it.jsonObject }
+        // REMANENCE_S3_DUPLICATES=true: each card also has a second sender, who
+        // photographed the same design separately (that card's first query).
+        val duplicates = System.getenv("REMANENCE_S3_DUPLICATES") == "true"
+        val secondSender = if (duplicates) {
+            allQueries.filter { it.str("expected") != null }.groupBy { it.str("expected")!! }.mapValues { it.value.first() }
+        } else {
+            emptyMap()
+        }
+        val secondIds = secondSender.values.map { it.str("id") }.toSet()
+        val queries = allQueries.filter { it.str("id") !in secondIds }.take(limit)
         val vocabulary = FrozenMatcherS3.Vocabulary(floats(File(root, "s3_centers.f32")), floats(File(root, "s3_idf.f32")))
         val model = File(System.getenv("REMANENCE_S3_MODEL") ?: "../../app/src/main/assets/${FrozenLocalizer.MODEL_ASSET_PATH}").readBytes()
         val pool = Executors.newFixedThreadPool(threads)
@@ -74,6 +84,14 @@ class FrozenMatcherS3BenchmarkTest {
                 FrozenMatcherS3.reference(g.str("card_id")!!, features, vocabulary)
             }
         }.map { it.get() }
+        val seconds = secondSender.map { (card, q) ->
+            pool.submit<FrozenMatcherS3.Reference> {
+                val image = decode(File(root, "img/${q.str("id")}.jpg"))
+                val features = FrozenMatcherS3.autoCrop(image).let { crop -> FrozenMatcherS3.gridFeatures(crop).also { crop.release() } }
+                image.release()
+                FrozenMatcherS3.reference("$card#b", features, vocabulary)
+            }
+        }.map { it.get() }
         File(root, "s3-gallery-$tag.csv").writeText(galleryRows.toString())
         val byId = references.associateBy { it.id }
         val cards = references.map { it.id }.sorted()
@@ -91,20 +109,21 @@ class FrozenMatcherS3BenchmarkTest {
                     val others = cards.filter { it != expected }.shuffled(random).take(if (expected != null) candidateCount - 1 else candidateCount)
                     listOfNotNull(expected) + others
                 }
-                val d = FrozenMatcherS3.match(features, picked.map { byId.getValue(it) }, vocabulary, quality.components)
+                val refs = picked.map { byId.getValue(it) } + seconds.filter { it.id.substringBefore('#') in picked }
+                val d = FrozenMatcherS3.match(features, refs, vocabulary, quality.components)
                 val b = d.best
                 listOf(
                     q.str("id"), expected.orEmpty(), if (d.accepted) "matched" else "unknown", d.id.orEmpty(),
                     if (d.baselineAccepted) "matched" else "unknown", if (d.baselineAccepted) b?.id.orEmpty() else "",
                     b?.id.orEmpty(), "%.4f".format(b?.finalScore ?: 0.0), "${b?.inliers ?: 0}", "%.4f".format(b?.coverage ?: 0.0),
                     "%.4f".format(b?.inlierRatio ?: 0.0), "%.4f".format(d.separation), "${quality.components}", "${features.count}",
-                    d.gateReject?.code.orEmpty(), "${b?.coversFrameCentre ?: false}", "%.4f".format(b?.centreDistance ?: 9.0),
+                    d.gateReject?.code.orEmpty(), "${b?.coversFrameCentre ?: false}", "%.4f".format(b?.centreDistance ?: 9.0), d.ambiguousIds.joinToString("|"),
                 ).joinToString(",")
             }
         }.map { it.get() }
         pool.shutdown()
         File(root, "s3-$tag.csv").writeText(
-            "id,expected,status,card_id,baseline_status,baseline_card_id,best,score,inliers,coverage,inlier_ratio,separation,components,kept,gate,centred,centre_distance\n" +
+            "id,expected,status,card_id,baseline_status,baseline_card_id,best,score,inliers,coverage,inlier_ratio,separation,components,kept,gate,centred,centre_distance,ambiguous\n" +
                 rows.joinToString("\n") + "\n",
         )
         File(root, "s3-$tag.txt").writeText("candidates=$candidateCount seconds=%.0f\n".format((System.nanoTime() - started) / 1e9))

@@ -7,8 +7,9 @@ import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
  * returned in the [LocalMatchEngine] result shape so crypto verification and
  * grant issue stay with [LocalMatchEngine.completeVisual].
  *
- * Candidates that are not S3 fingerprints are ignored. The frozen matcher
- * never offers a chooser: it opens one card or asks for a recapture.
+ * Candidates that are not S3 fingerprints are ignored. One card opens; the
+ * same postcard from several senders becomes a chooser; anything uncertain
+ * asks for a recapture.
  */
 class FrozenMatcherS3VisualEngine(private val vocabulary: FrozenMatcherS3.Vocabulary) {
 
@@ -28,6 +29,17 @@ class FrozenMatcherS3VisualEngine(private val vocabulary: FrozenMatcherS3.Vocabu
             requireCentred = true,
         )
         references.forEach { it.release() }
+        if (decision.ambiguousIds.size >= 2) {
+            // The same postcard from several senders: the recipient chooses.
+            val scores = decision.candidates.groupBy { it.id }.mapValues { (_, c) -> c.maxOf { it.finalScore } }
+            val rows = decision.ambiguousIds.map { id -> java.util.UUID.fromString(id) to scores.getValue(id) }
+            val origin = if (usable.any { it.recipientPreferred && it.capsuleId.toString() in decision.ambiguousIds }) {
+                CandidateOrigin.RECIPIENT_PREFERRED
+            } else {
+                CandidateOrigin.SENDER_FALLBACK
+            }
+            return VisualScanResult.Ambiguous(origin, rows, singleRecaptureFirst = false)
+        }
         val id = decision.id ?: return VisualScanResult.RecaptureRequired(MatchDiagnosticOutcome.RECAPTURE)
         val winner = usable.filter { it.capsuleId.toString() == id }
         val origin = if (winner.any { it.recipientPreferred }) CandidateOrigin.RECIPIENT_PREFERRED else CandidateOrigin.SENDER_FALLBACK

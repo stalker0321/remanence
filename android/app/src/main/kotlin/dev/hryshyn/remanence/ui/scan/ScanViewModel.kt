@@ -244,6 +244,18 @@ class ScanViewModel internal constructor(
         s3Vocabulary()?.let { dev.hryshyn.remanence.core.recognition.FrozenMatcherS3VisualEngine(it) }
     }
 
+    /** Debug builds: where the time of the last scan went, shown under the status. */
+    private val _scanTimings = MutableStateFlow<String?>(null)
+    val scanTimings: StateFlow<String?> = _scanTimings.asStateFlow()
+    private var scanStartedNanos = 0L
+    private val timingMarks = ArrayList<String>()
+
+    private fun markTiming(label: String) {
+        if (!dev.hryshyn.remanence.BuildConfig.DEBUG || scanStartedNanos == 0L) return
+        timingMarks += "$label ${(System.nanoTime() - scanStartedNanos) / 1_000_000} ms"
+        _scanTimings.value = timingMarks.joinToString(" · ")
+    }
+
     private val _openingPostcard = MutableStateFlow<dev.hryshyn.remanence.capture.CapturedPostcard?>(null)
     val openingPostcard: StateFlow<dev.hryshyn.remanence.capture.CapturedPostcard?> = _openingPostcard.asStateFlow()
 
@@ -263,6 +275,18 @@ class ScanViewModel internal constructor(
 
     private val queuedStill = AtomicReference<ScannedSide?>()
     private val frontProcessor = frontProcessor
+
+    init {
+        // The frozen matcher's localizer and vocabulary take seconds to load;
+        // do it while the camera opens instead of on the first capture.
+        val s3Processor = frontProcessor as? dev.hryshyn.remanence.create.FrozenMatcherS3StillProcessor
+        if (s3Processor != null) {
+            viewModelScope.launch(cpuDispatcher) {
+                runCatching { s3Processor.warmUp() }
+                runCatching { s3Engine }
+            }
+        }
+    }
     /**
      * FIX-REVIEW-01: generation guard so a stale asynchronous match result can
      * never overwrite a newer capture flow started by reset/re-entry.
@@ -382,7 +406,10 @@ class ScanViewModel internal constructor(
         val shadowInput = matcherShadow?.snapshot(jpegBytes)
         val generation = deliveryGeneration
         viewModelScope.launch {
+            scanStartedNanos = System.nanoTime()
+            timingMarks.clear()
             val accepted = acceptProcessed(jpegBytes, frontProcessor, generation)
+            markTiming("снимок")
             if (accepted && captureSession.readyForMatching) {
                 evaluateMatch()
                 startMatcherShadow(generation, shadowInput)
@@ -1014,7 +1041,15 @@ class ScanViewModel internal constructor(
                     val s3 = s3Engine
                     if (s3 != null && dev.hryshyn.remanence.core.recognition.FrozenMatcherS3Fingerprint.isS3(parsedQuery)) {
                         // Frozen matcher: S3 query against the S3 candidates.
-                        s3.evaluate(parsedQuery, candidateIndex.candidates)
+                        val started = System.nanoTime()
+                        s3.evaluate(parsedQuery, candidateIndex.candidates).also {
+                            runCatching {
+                                android.util.Log.i(
+                                    "RemanenceS3",
+                                    "match ${candidateIndex.candidates.size} candidates ${(System.nanoTime() - started) / 1_000_000} ms",
+                                )
+                            }
+                        }
                     } else {
                         engine.evaluateVisual(
                             queryFront = parsedQuery,
@@ -1028,7 +1063,9 @@ class ScanViewModel internal constructor(
                 // This resumes on the ViewModel's owner/UI context. Crypto,
                 // grant publication, and UI state therefore remain outside
                 // the CPU-only visual evaluation boundary.
+                markTiming("поиск")
                 val result = engine.completeVisual(visualResult)
+                markTiming("проверка")
                 if (generation == matchGeneration) {
                     applyResult(
                         result = result,
@@ -1214,6 +1251,7 @@ class ScanViewModel internal constructor(
             }
             pendingIncoming = null
             cancelPendingWatcher()
+            markTiming("капсула")
             _terminal.value = ScanTerminalState.Granted(
                 grantId = result.grantId,
                 capsuleId = result.capsuleId.toString(),

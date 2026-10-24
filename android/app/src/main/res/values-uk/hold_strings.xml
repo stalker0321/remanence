@@ -84,6 +84,7 @@
     <string name="hold_capture_reason_too_dark">Потрібне яскравіше рівне світло без тіней.</string>
     <string name="hold_capture_reason_glare_excessive">Нахиліть листівку або приберіть джерело відблиску.</string>
     <string name="hold_capture_reason_features_insufficient">Потрібні друковані деталі, фокус, добре світло й уся листівка всередині рамки.</string>
+    <string name="hold_capture_reason_already_sent">Ти вже надсилав цю листівку цій людині. Обери іншу листівку.</string>
     <string name="hold_scan_opening">відкриваємо вашу листівку…</string>
     <string name="hold_scan_index_body">на пристрої ще немає потрібних даних. під’єднайтеся до інтернету й спробуйте знову.</string>
     <string name="hold_scan_material_online">листівку знайдено. завантажуємо вкладення; після перевірки воно відкриється.</string>

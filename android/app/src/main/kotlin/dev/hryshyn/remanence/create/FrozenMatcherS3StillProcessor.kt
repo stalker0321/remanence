@@ -11,14 +11,13 @@ import dev.hryshyn.remanence.core.recognition.FrozenLocalizer
 import dev.hryshyn.remanence.core.recognition.FrozenLocalizerSession
 import dev.hryshyn.remanence.core.recognition.FrozenMatcherS3
 import dev.hryshyn.remanence.core.recognition.FrozenMatcherS3Fingerprint
+import dev.hryshyn.remanence.core.recognition.MaskQuad
 import dev.hryshyn.remanence.core.recognition.OrtLocalizerRuntime
 import dev.hryshyn.remanence.core.recognition.PointD
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.StillCapturePipeline
 import org.opencv.core.CvType
 import org.opencv.core.Mat
-import org.opencv.core.MatOfPoint
-import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
 import org.opencv.core.Rect
 import org.opencv.core.Size
@@ -45,8 +44,26 @@ class FrozenMatcherS3StillProcessor(
     private val pipeline = StillCapturePipeline()
     private var session: FrozenLocalizerSession? = null
 
+    /** Loads the localizer ahead of the first capture (model read + ONNX session). */
+    @Synchronized
+    fun warmUp() {
+        if (role != Role.RECIPIENT || session != null) return
+        val started = System.nanoTime()
+        session = modelBytes()?.let { bytes -> runCatching { FrozenLocalizerSession(OrtLocalizerRuntime.open(bytes)) }.getOrNull() }
+        log("warm-up ${(System.nanoTime() - started) / 1_000_000} ms, ready=${session != null}")
+    }
+
     @Synchronized
     override fun process(jpegBytes: ByteArray): ProcessedStill {
+        val started = System.nanoTime()
+        try {
+            return processTimed(jpegBytes)
+        } finally {
+            log("$role capture ${(System.nanoTime() - started) / 1_000_000} ms")
+        }
+    }
+
+    private fun processTimed(jpegBytes: ByteArray): ProcessedStill {
         val working = try {
             pipeline.process(jpegBytes)
         } catch (_: IllegalArgumentException) {
@@ -91,7 +108,7 @@ class FrozenMatcherS3StillProcessor(
                 features.originX, features.originY, features.frameWidth, features.frameHeight, quality.components,
             )
             val opening = if (captureOpeningPostcard && mask != null) {
-                openingPostcard(mask, frame.cols(), frame.rows(), bounds, image.cols(), pixels, width, height)
+                openingPostcard(mask, frame.cols(), frame.rows(), bounds, image, pixels, width, height)
             } else {
                 null
             }
@@ -127,31 +144,32 @@ class FrozenMatcherS3StillProcessor(
     }
 
     /**
-     * The card outline from the localizer mask (largest component's minimum
-     * rectangle), mapped back onto the working photo; null unless it has
-     * postcard proportions.
+     * The card outline for the opening animation: a perspective quad from the
+     * localizer mask (reference `mask_to_quad`), pulled in slightly so mask
+     * bleed never shows the table. A card running past the 2:3 frame is
+     * re-localized on the whole photo. Null unless it has postcard proportions.
      */
     private fun openingPostcard(
         mask: ByteArray,
         frameW: Int,
         frameH: Int,
         bounds: FrameGeometry.Bounds,
-        imageW: Int,
+        image: Mat,
         pixels: IntArray,
         width: Int,
         height: Int,
     ): CapturedPostcard? = runCatching {
-        val maskMat = Mat(frameH, frameW, CvType.CV_8UC1).apply { put(0, 0, mask) }
-        val contours = ArrayList<MatOfPoint>()
-        Imgproc.findContours(maskMat, contours, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
-        maskMat.release()
-        val largest = contours.maxByOrNull { Imgproc.contourArea(it) } ?: return null
-        if (Imgproc.contourArea(largest) < MIN_OUTLINE_AREA * frameW * frameH) return null
-        val box = Array(4) { Point() }
-        Imgproc.minAreaRect(MatOfPoint2f(*largest.toArray())).points(box)
-        val toPhoto = width.toDouble() / imageW
-        val quad = OpeningQuad.order(box.map { PointD((it.x + bounds.x0) * toPhoto, (it.y + bounds.y0) * toPhoto) })
-        if (OpeningQuad.aspect(quad) !in OpeningQuad.MIN_ASPECT..OpeningQuad.MAX_ASPECT) return null
+        var quad = MaskQuad.fromMask(mask, frameW, frameH)?.map { Point(it.x + bounds.x0, it.y + bounds.y0) }
+            ?: return null
+        val touchesFrame = quad.any { p ->
+            p.x <= bounds.x0 + EDGE_PX || p.x >= bounds.x1 - EDGE_PX || p.y <= bounds.y0 + EDGE_PX || p.y >= bounds.y1 - EDGE_PX
+        }
+        if (touchesFrame) {
+            localize(image)?.let { whole -> MaskQuad.fromMask(whole, image.cols(), image.rows()) }?.let { quad = it }
+        }
+        val toPhoto = width.toDouble() / image.cols()
+        val ordered = OpeningQuad.order(MaskQuad.inset(quad, INSET).map { PointD(it.x * toPhoto, it.y * toPhoto) })
+        if (OpeningQuad.aspect(ordered) !in OpeningQuad.MIN_ASPECT..OpeningQuad.MAX_ASPECT) return null
         val scale = minOf(1.0, OPENING_PHOTO_EDGE_PX / max(width, height))
         val full = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
         val photo = if (scale < 1.0) {
@@ -159,7 +177,7 @@ class FrozenMatcherS3StillProcessor(
         } else {
             full
         }
-        CapturedPostcard(photo, quad.map { PointD(it.x * scale, it.y * scale) })
+        CapturedPostcard(photo, ordered.map { PointD(it.x * scale, it.y * scale) })
     }.getOrNull()
 
     private fun toBgr960(argb: IntArray, width: Int, height: Int): Mat {
@@ -179,9 +197,14 @@ class FrozenMatcherS3StillProcessor(
         return out
     }
 
+    private fun log(message: String) {
+        runCatching { android.util.Log.i("RemanenceS3", message) }
+    }
+
     private companion object {
         const val MIN_SENDER_FEATURES = 12
-        const val MIN_OUTLINE_AREA = 0.02
+        const val EDGE_PX = 3
+        const val INSET = 0.015
         const val OPENING_PHOTO_EDGE_PX = 1280.0
     }
 }

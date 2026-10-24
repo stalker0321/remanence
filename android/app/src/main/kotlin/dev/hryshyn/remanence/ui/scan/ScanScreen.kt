@@ -125,6 +125,7 @@ fun ScanScreen(
     // their own entries. The camera lifecycle below is untouched.
     val entryMotion = rememberScanEntryMotion(rememberAstraMotion())
     val openingPostcard by viewModel.openingPostcard.collectAsStateWithLifecycle()
+    val scanTimings by viewModel.scanTimings.collectAsStateWithLifecycle()
 
     BoxWithConstraints(modifier.fillMaxSize()) {
     val previewBudget = (maxHeight - 160.dp).coerceAtLeast(64.dp)
@@ -197,6 +198,7 @@ fun ScanScreen(
                 state = current,
                 motion = rememberAstraMotion(),
                 openingPostcard = openingPostcard,
+                debugTimings = scanTimings,
                 // Real recovery: reset the whole flow, same as recapture.
                 onStopScanning = viewModel::resetSession,
                 modifier = Modifier.fillMaxWidth(),

@@ -82,6 +82,7 @@ fun ScanWaitingGroup(
     onStopScanning: () -> Unit,
     modifier: Modifier = Modifier,
     openingPostcard: dev.hryshyn.remanence.capture.CapturedPostcard? = null,
+    debugTimings: String? = null,
 ) {
     if (state !is ScanMatchUiState.Matching &&
         state !is ScanMatchUiState.Accepted &&
@@ -231,6 +232,14 @@ fun ScanWaitingGroup(
                     )
                     .semantics { invisibleToUser() }
                     .testTag("scan_wait_static"),
+                )
+            }
+            if (debugTimings != null) {
+                Text(
+                    debugTimings,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("scan_debug_timings"),
                 )
             }
             Spacer(Modifier.height(12.dp))

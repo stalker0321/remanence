@@ -84,6 +84,7 @@
     <string name="hold_capture_reason_too_dark">Нужен более яркий ровный свет без теней.</string>
     <string name="hold_capture_reason_glare_excessive">Наклоните открытку или уберите источник блика.</string>
     <string name="hold_capture_reason_features_insufficient">Нужны печатные детали, фокус, хороший свет и вся открытка внутри рамки.</string>
+    <string name="hold_capture_reason_already_sent">Ты уже отправлял эту открытку этому человеку. Выбери другую открытку.</string>
     <string name="hold_scan_opening">открываем вашу открытку…</string>
     <string name="hold_scan_index_body">на устройстве ещё нет нужных данных. подключитесь к интернету и попробуйте снова.</string>
     <string name="hold_scan_material_online">открытка найдена. загружаем вложение; после проверки оно откроется.</string>

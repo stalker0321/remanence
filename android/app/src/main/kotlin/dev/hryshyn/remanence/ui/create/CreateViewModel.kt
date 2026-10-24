@@ -196,6 +196,12 @@ class CreateViewModel(
     private val pickedThumbnailLoader: (suspend (String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null,
     /** Actual currently signed-in account, absent means no self shortcut. */
     private val selfRecipientAccountProvider: suspend () -> SelfRecipientAccount? = { null },
+    /**
+     * One postcard per sender and recipient: true when [frontBytes] shows a
+     * postcard this owner already sent to [recipientUserId]. Runs on the
+     * capture worker before the FRONT is persisted; null disables the check.
+     */
+    private val alreadySentFront: (suspend (ownerUserId: String, recipientUserId: String, frontBytes: ByteArray) -> Boolean)? = null,
 ) : ViewModel() {
     private val telemetrySession = telemetryCoordinator?.newSession()
 
@@ -1005,7 +1011,27 @@ class CreateViewModel(
 
     val frontAttempt = CaptureAttemptController()
 
-    private val frontFlow = FrontCaptureFlow(frontProcessor, cpuDispatcher, ioDispatcher)
+    private val frontFlow = FrontCaptureFlow(
+        dev.hryshyn.remanence.capture.StillProcessor { jpeg ->
+            val result = frontProcessor.process(jpeg)
+            val check = alreadySentFront
+            val owner = sessionOwner?.toRestString()
+            val recipient = confirmedRecipient.value?.userId?.toRestString()
+            val duplicate = result is dev.hryshyn.remanence.capture.ProcessedStill.Accepted &&
+                check != null && owner != null && recipient != null &&
+                runCatching { kotlinx.coroutines.runBlocking { check(owner, recipient, result.serializedBytes) } }.getOrDefault(false)
+            if (duplicate) {
+                (result as dev.hryshyn.remanence.capture.ProcessedStill.Accepted).serializedBytes.fill(0)
+                dev.hryshyn.remanence.capture.ProcessedStill.Rejected(
+                    setOf(dev.hryshyn.remanence.core.recognition.QualityReason.ALREADY_SENT_TO_RECIPIENT),
+                )
+            } else {
+                result
+            }
+        },
+        cpuDispatcher,
+        ioDispatcher,
+    )
 
     private var frontFingerprintId: String? = null
 

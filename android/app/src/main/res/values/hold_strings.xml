@@ -84,6 +84,7 @@
     <string name="hold_capture_reason_too_dark">Use brighter, even light and remove shadows.</string>
     <string name="hold_capture_reason_glare_excessive">Tilt the postcard or move the light to remove glare.</string>
     <string name="hold_capture_reason_features_insufficient">Use printed detail, focus, good light, and keep the full card inside the outline.</string>
+    <string name="hold_capture_reason_already_sent">You have already sent this postcard to this person. Choose a different postcard.</string>
     <string name="hold_scan_opening">opening your postcard…</string>
     <string name="hold_scan_index_body">the information needed to check this postcard is not on this device yet. connect and try again.</string>
     <string name="hold_scan_material_online">found the postcard. downloading the attachment; it will open after verification.</string>

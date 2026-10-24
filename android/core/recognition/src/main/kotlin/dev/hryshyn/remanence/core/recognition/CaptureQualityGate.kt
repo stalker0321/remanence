@@ -10,6 +10,8 @@ enum class QualityReason {
     TOO_DARK,
     GLARE_EXCESSIVE,
     FEATURES_INSUFFICIENT,
+    /** Create only: this sender already sent this postcard to this recipient. */
+    ALREADY_SENT_TO_RECIPIENT,
 }
 
 data class CaptureQualityInput(

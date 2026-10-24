@@ -27,6 +27,7 @@ internal fun guidanceResource(reason: QualityReason): Int = when (reason) {
     QualityReason.TOO_DARK -> R.string.hold_capture_reason_too_dark
     QualityReason.GLARE_EXCESSIVE -> R.string.hold_capture_reason_glare_excessive
     QualityReason.FEATURES_INSUFFICIENT -> R.string.hold_capture_reason_features_insufficient
+    QualityReason.ALREADY_SENT_TO_RECIPIENT -> R.string.hold_capture_reason_already_sent
 }
 
 /**

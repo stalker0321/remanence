@@ -95,6 +95,12 @@ object FrozenMatcherS3 {
         val separation: Double,
         val gateReject: StrictCombinedRejectReason?,
         val candidates: List<Candidate>,
+        /**
+         * The same postcard from several senders: two or more cards each pass
+         * every floor and gate on their own but cannot be separated, so the
+         * recipient chooses. Empty otherwise.
+         */
+        val ambiguousIds: List<String> = emptyList(),
     )
 
     // ------------------------------------------------------------------ features
@@ -370,16 +376,42 @@ object FrozenMatcherS3 {
         )
         val accepted = gate is StrictCombinedDecision.Keep &&
             (!requireCentred || best.centreDistance <= MAX_CENTRE_DISTANCE)
+        fun strong(c: Candidate): Boolean =
+            c.finalScore >= THRESHOLD && c.inliers >= 12 && c.coverage >= .04 && c.inlierRatio >= .3 &&
+                StrictCombinedGate.decide(
+                    true,
+                    StrictCombinedEvidence(c.geometryVerified, c.finalScore, c.inlierRatio, c.coverage, components),
+                ) is StrictCombinedDecision.Keep &&
+                (!requireCentred || c.centreDistance <= MAX_CENTRE_DISTANCE)
+        // The same postcard from several senders: every other card that is a
+        // full match on its own makes this a choice, however strong the best.
+        val strongIds = ranked.filter(::strong).map { it.id }.distinct()
+        val ambiguous = if (strong(best) && strongIds.size >= 2) strongIds else emptyList()
         return Decision(
             baselineAccepted = baseline,
-            accepted = accepted,
-            id = if (accepted) best.id else null,
+            accepted = accepted && ambiguous.isEmpty(),
+            id = if (accepted && ambiguous.isEmpty()) best.id else null,
             best = best,
             runnerUpScore = runner,
             separation = separation,
             gateReject = (gate as? StrictCombinedDecision.Reject)?.reason,
             candidates = ranked,
+            ambiguousIds = ambiguous,
         )
+    }
+
+    /**
+     * True when two sender photos show the same postcard: [candidate] matched
+     * against [reference] alone passes the frozen floors and strict_combined.
+     */
+    fun sameCard(candidate: Features, reference: Features, vocabulary: Vocabulary): Boolean {
+        if (candidate.count < 4 || reference.count < 4) return false
+        val ref = reference("reference", reference, vocabulary)
+        try {
+            return match(candidate, listOf(ref), vocabulary, components = 1).accepted
+        } finally {
+            ref.release()
+        }
     }
 
     /** `vision.verify` + `engine.projected_bbox_outside`. */

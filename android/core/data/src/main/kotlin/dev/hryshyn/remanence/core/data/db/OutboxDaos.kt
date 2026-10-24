@@ -52,6 +52,10 @@ abstract class OutboxCapsuleDao {
         findOwnersOfImmutableIds(capsuleId, "")
 
     /** Owner-scoped teardown: removes only rows belonging to [ownerUserId]. */
+    /** Capsules this owner has created for [recipientUserId], in any state. */
+    @Query("SELECT capsule_id FROM outbox_capsule WHERE owner_user_id = :ownerUserId AND recipient_user_id = :recipientUserId")
+    abstract suspend fun capsuleIdsForRecipient(ownerUserId: String, recipientUserId: String): List<String>
+
     @Query("DELETE FROM outbox_capsule WHERE owner_user_id = :ownerUserId")
     abstract suspend fun clearForOwner(ownerUserId: String)
 

@@ -113,6 +113,15 @@ class RemanenceViewModelFactory(
             frontProcessor = dev.hryshyn.remanence.create.FrozenMatcherS3StillProcessor(
                 role = dev.hryshyn.remanence.create.FrozenMatcherS3StillProcessor.Role.SENDER,
             ),
+            alreadySentFront = { owner, recipient, front ->
+                dev.hryshyn.remanence.create.SentPostcardGuard.alreadySent(
+                    capsuleIds = container.database.outboxCapsuleDao().capsuleIdsForRecipient(owner, recipient).toSet(),
+                    rows = container.database.recognitionFingerprintDao().getAllForOwner(owner),
+                    decrypt = container.fingerprintPersistence::decrypt,
+                    vocabulary = { dev.hryshyn.remanence.create.FrozenMatcherS3Assets.vocabulary(container.appContext) },
+                    front = front,
+                )
+            },
             // Admission is checked separately for friendly UI. The request itself
             // must let the shared interceptor source the current open-domain bearer.
             directory = { rawHandle -> container.directoryRepository.lookup(rawHandle) },

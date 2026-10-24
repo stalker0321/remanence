@@ -59,6 +59,23 @@ describe('scan grant', () => {
     expect(session.getSnapshot().phase).toBe('keys-unlocked')
   })
 
+  it('lets the recipient choose among capsules the same capture matched', async () => {
+    const OTHER = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    const FOREIGN = 'bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    const two = catalog()
+    two.items.push({ ...two.items[0]!, capsuleId: OTHER, senderUserId: '50515253-5455-5657-5859-5a5b5c5d5e5f' })
+    const session = unlocked()
+    const view = session.getSnapshot()
+    const many = { match: () => Promise.resolve({ kind: 'many' as const, capsuleIds: [CAPSULE, OTHER, FOREIGN] }) }
+    await expect(considerCapture(view, many, capture, two)).rejects.toMatchObject({ code: 'AMBIGUOUS', choices: [CAPSULE, OTHER] })
+    await expect(considerCapture(view, many, capture, two, undefined, FOREIGN)).rejects.toMatchObject({ code: 'AMBIGUOUS' })
+    const grant = await considerCapture(view, many, capture, two, undefined, OTHER)
+    expect(grant.allows(view, OTHER)).toBe(true)
+    expect(grant.allows(view, CAPSULE)).toBe(false)
+    const single = { match: () => Promise.resolve({ kind: 'many' as const, capsuleIds: [CAPSULE] }) }
+    await expect(considerCapture(view, single, capture, two, undefined, CAPSULE)).rejects.toMatchObject({ code: 'AMBIGUOUS' })
+  })
+
   it('admits only the matched capsule for this unlocked account', async () => {
     const session = unlocked()
     const grant = await considerCapture(

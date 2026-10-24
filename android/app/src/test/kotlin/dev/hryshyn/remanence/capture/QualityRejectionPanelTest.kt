@@ -98,6 +98,8 @@ class QualityRejectionPanelTest {
                 QualityReason.GLARE_EXCESSIVE to "Tilt the postcard or move the light to remove glare.",
                 QualityReason.FEATURES_INSUFFICIENT to
                     "Use printed detail, focus, good light, and keep the full card inside the outline.",
+                QualityReason.ALREADY_SENT_TO_RECIPIENT to
+                    "You have already sent this postcard to this person. Choose a different postcard.",
             ),
             QualityReason.entries.associateWith { guidanceFor(it) },
         )

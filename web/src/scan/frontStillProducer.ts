@@ -475,7 +475,9 @@ async function extractFrozenMatcher(
       fingerprint = toS3Fingerprint(features)
     } else {
       const [x0, y0, x1, y1] = S3.frameBounds(bgr.cols, bgr.rows)
-      const framed = bgr.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0)).clone()
+      const view = bgr.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0))
+      const framed = view.clone()
+      view.delete()
       try {
         const recipient = S3.recipientFeatures(cv, framed, localizer!.mask(framed))
         features = recipient.features

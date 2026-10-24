@@ -40,7 +40,9 @@ describe.runIf(dir && cvDir)('frozen matcher parity run', () => {
     for (const q of manifest.queries.slice(0, limit)) {
       const image = load(q.id)
       const [x0, y0, x1, y1] = S3.frameBounds(image.cols, image.rows)
-      const frame = image.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0)).clone()
+      const view = image.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0))
+      const frame = view.clone()
+      view.delete()
       image.delete()
       let features, components, d
       try {

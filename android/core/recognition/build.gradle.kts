@@ -70,4 +70,15 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    // Dataset benchmarks hold ~1.5k fingerprints in memory.
+    maxHeapSize = (findProperty("remanence.testMaxHeap") as? String) ?: "1g"
+}
+
+// Unit tests run on a desktop JVM: swap the Android ONNX Runtime AAR (device
+// natives only) for the desktop artifact with the same API and version.
+configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
+    exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
+}
+dependencies {
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:${libs.versions.onnxruntimeAndroid.get()}")
 }

@@ -96,7 +96,7 @@ class AstraScanArrivalTest {
         ),
         ChooserHintRow(
             candidateId = "cap-b",
-            primarySenderLabel = "unverified sender",
+            primarySenderLabel = "sender not confirmed",
             senderIdentityVerified = false,
             claimedSenderHandle = "olena",
             yearAndDateLabel = "2026",

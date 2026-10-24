@@ -1,7 +1,8 @@
 # Interface copy: voice and translation
 
-Applies to the web app (`web/src/i18n/locales/*.json`). The Android strings
-(`android/app/src/main/res/values*/strings.xml`) should follow the same rules.
+Applies to the web app (`web/src/i18n/locales/*.json`) and the Android app
+(`android/app/src/main/res/values*/*.xml`). Pending-gift strings
+(`pending_strings.xml`) still need this pass before that feature ships.
 
 ## Voice
 
@@ -21,9 +22,10 @@ warm, plain and short.
   relatives.
 - **Errors are clear first.** Say what happened and what to do next. No
   jokes in errors, nothing cute about money, accounts or losing work.
-- **No developer words.** Never: keys, unlock, shell, fingerprint, session,
-  directory, server reply, visit, UTF-8. The user signs in, confirms with a
-  passkey, opens and sends postcards.
+- **No developer words.** Never: keys, unlock, capsule, handle, shell,
+  fingerprint, session, directory, server reply, visit, UTF-8. The user signs
+  in, confirms with a passkey, opens and sends postcards; what's attached is
+  "what's inside".
 - **Don't sound generated.** No dramatic dashes, no "and that's it", no
   three-part slogans, no reassurance filler ("everything is fine", "nothing
   was shown"). Say it once.

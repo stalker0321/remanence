@@ -59,7 +59,7 @@ class RecipientConfirmationScreenTest {
         composeRule.onNodeWithTag("confirm_handle_text", useUnmergedTree = true).assertIsDisplayed()
         // The frozen card labels the resolved handle without exposing an ID.
         composeRule.onNodeWithTag("confirm_account_cue_text", useUnmergedTree = true)
-            .assertTextEquals("their handle")
+            .assertTextEquals("their username")
         composeRule.onNodeWithTag("confirm_handle_text", useUnmergedTree = true)
             .assertTextEquals("@mykola")
         val cue = composeRule.onNodeWithTag("confirm_button")

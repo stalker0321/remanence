@@ -31,7 +31,7 @@ class MediaStringsParityTest {
         // Receiver gets a dedicated instruction; existing sender instruction stays correct.
         listOf("values", "values-ru", "values-uk").forEach { locale ->
             val sender = File(root, "$locale/create_flow.xml").readText()
-            val expected = when (locale) { "values-ru" -> "перед отправкой"; "values-uk" -> "перед надсиланням"; else -> "before posting" }
+            val expected = when (locale) { "values-ru" -> "прежде чем отправить"; "values-uk" -> "перш ніж надіслати"; else -> "before you post" }
             assertTrue(sender.contains(expected))
             assertFalse(File(root, "$locale/receiver_scan_strings.xml").readText().contains(expected))
         }

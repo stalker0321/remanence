@@ -95,9 +95,9 @@ class CollageChoiceHostTest {
 
     @Test fun photoHotspotsHaveDistinctLocalizedNamesAndSelectTheirOwnPhoto() = hotspotLabels("Crop photo", "of")
     @Test @Config(qualifiers = "ru")
-    fun russianPhotoHotspots() = hotspotLabels("Кадрировать фото", "из")
+    fun russianPhotoHotspots() = hotspotLabels("кадрировать фото", "из")
     @Test @Config(qualifiers = "uk")
-    fun ukrainianPhotoHotspots() = hotspotLabels("Кадрувати фото", "з")
+    fun ukrainianPhotoHotspots() = hotspotLabels("кадрувати фото", "з")
 
     private fun hotspotLabels(prefix: String, separator: String) {
         val session = CollageChoiceSession()

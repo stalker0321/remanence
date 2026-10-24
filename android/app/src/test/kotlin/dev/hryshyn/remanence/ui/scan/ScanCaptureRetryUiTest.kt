@@ -194,9 +194,9 @@ class ScanCaptureRetryUiTest {
             composeRule.waitForIdle()
             val locale = ApplicationProvider.getApplicationContext<Context>().resources.configuration.locales[0].language
             val copy = when (locale) {
-                "ru" -> "Снимите лицевую сторону полученной открытки, чтобы открыть воспоминание."
-                "uk" -> "Сфотографуйте лицьовий бік отриманої листівки, щоб відкрити спогад."
-                else -> "Capture the picture side of the postcard you received to open the memory."
+                "ru" -> "сфотографируйте лицевую сторону, чтобы открыть"
+                "uk" -> "сфотографуйте лицьовий бік, щоб відкрити"
+                else -> "take a photo of the picture side to open it"
             }
             composeRule.onNodeWithText(copy).performScrollTo().assertIsDisplayed()
             val tree = composeRule.onRoot(useUnmergedTree = true).printToString()

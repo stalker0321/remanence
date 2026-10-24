@@ -149,7 +149,7 @@ class HistoryScreenTest {
         vm.refresh(); mount(copy = { null })
         rule.onNodeWithTag("history_row_${historyItem().key}").performClick()
         rule.onNodeWithTag("history_copy").performScrollTo().performClick()
-        rule.onNodeWithTag("history_copy_result").assertTextEquals("Could not copy the code.")
+        rule.onNodeWithTag("history_copy_result").assertTextEquals("couldn’t copy the code")
     }
 
     @Test fun expiredSessionOffersWorkingReturnHomeNotAnInertRetry() {

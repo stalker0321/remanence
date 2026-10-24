@@ -23,13 +23,13 @@ class AtomicProviderCopyTest {
     private var reason by mutableStateOf("PROVIDER_CANCELLED")
 
     @Test fun englishFailureCopyDoesNotInventUserCancelBackendFailureOrSavedAccount() = checkCopy(
-        "The sign-in or passkey step did not finish.", "The sign-in or passkey provider could not complete this step.")
+        "the passkey step didn’t finish", "the password manager couldn’t finish this step")
     @Test @Config(qualifiers = "ru")
     fun russianFailureCopyIsLocalized() = checkCopy(
-        "Вход или действие с пасскеем не завершены.", "Провайдер входа или пасскеев не смог завершить этот шаг.")
+        "шаг с ключом доступа не закончился", "менеджер паролей не смог закончить этот шаг")
     @Test @Config(qualifiers = "uk")
     fun ukrainianFailureCopyIsLocalized() = checkCopy(
-        "Вхід або дію з паскеєм не завершено.", "Провайдер входу або паскеїв не зміг завершити цей крок.")
+        "крок із ключем доступу не завершився", "менеджер паролів не зміг завершити цей крок")
 
     private fun checkCopy(cancelPrefix: String, failurePrefix: String) {
         var actions = 0

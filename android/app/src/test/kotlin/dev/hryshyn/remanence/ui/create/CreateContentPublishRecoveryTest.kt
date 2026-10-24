@@ -436,7 +436,7 @@ class CreateContentPublishRecoveryTest {
         composeRule.runOnIdle { vm.onPhotosPicked(listOf("a", "b")) }
         composeRule.onNodeWithTag("create_selection_count").assertIsDisplayed()
         composeRule.runOnIdle {
-            assertEquals("choose 3–5 photographs · 2", countText())
+            assertEquals("3 to 5 photos · 2", countText())
             assertFalse(vm.photoSelection.canProceed)
         }
         composeRule.scrollToTag("create_next")
@@ -444,7 +444,7 @@ class CreateContentPublishRecoveryTest {
 
         composeRule.runOnIdle { vm.onPhotosPicked(listOf("a", "b", "c")) }
         composeRule.runOnIdle {
-            assertEquals("choose 3–5 photographs · 3", countText())
+            assertEquals("3 to 5 photos · 3", countText())
             assertTrue(vm.photoSelection.canProceed)
         }
         composeRule.onNodeWithTag("create_next").assertIsEnabled()
@@ -453,7 +453,7 @@ class CreateContentPublishRecoveryTest {
         composeRule.runOnIdle { vm.onPhotosPicked(listOf("1", "2", "3", "4", "5", "6")) }
         composeRule.runOnIdle {
             assertEquals(5, vm.photoSelection.selectedIds.size)
-            assertEquals("choose 3–5 photographs · 5", countText())
+            assertEquals("3 to 5 photos · 5", countText())
         }
     }
 
@@ -620,7 +620,7 @@ class CreateContentPublishRecoveryTest {
         assertEquals(vm.capsuleId, revoke.calls.single().toRestString())
         composeRule.onNodeWithTag("create_revoke_success").assertIsDisplayed()
         composeRule.onNodeWithTag("create_revoke_success")
-            .assertTextContains("already received or decrypted", substring = true)
+            .assertTextContains("their copy stays with them", substring = true)
         composeRule.onNodeWithTag("create_revoke_button").assertIsNotEnabled()
         assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
         assertEquals(OutboxCapsuleState.PUBLISHED, database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString())!!.state)

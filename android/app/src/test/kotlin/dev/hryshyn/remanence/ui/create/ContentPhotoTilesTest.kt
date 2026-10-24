@@ -289,7 +289,7 @@ class ContentPhotoTilesTest {
         composeRule.onNodeWithTag("create_photo_tile_0").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("create_selection_count")
             .assertIsDisplayed()
-            .assertTextContains("choose 3–5 photographs · 4")
+            .assertTextContains("3 to 5 photos · 4")
     }
 
     @Test
@@ -311,7 +311,7 @@ class ContentPhotoTilesTest {
             composeRule.onNodeWithTag("create_photo_tile_failed_$index", useUnmergedTree = true).assertIsDisplayed()
         }
         composeRule.onNodeWithTag("create_selection_count")
-            .assertTextContains("choose 3–5 photographs · 3")
+            .assertTextContains("3 to 5 photos · 3")
     }
 
     @Test

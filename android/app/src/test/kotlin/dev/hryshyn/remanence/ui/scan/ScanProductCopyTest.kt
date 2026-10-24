@@ -156,17 +156,17 @@ class ScanProductCopyTest {
     @Config(qualifiers = "ru-w360dp-h780dp-xhdpi")
     fun russianScanStateCopyIsAuthored() {
         assertEquals("открываем вашу открытку…", context.getString(R.string.hold_scan_opening))
-        assertEquals("сканировать ещё раз", context.getString(R.string.hold_scan_again))
+        assertEquals("снять ещё раз", context.getString(R.string.hold_scan_again))
         assertEquals(
-            "на устройстве ещё нет нужных данных. подключитесь к интернету и попробуйте снова.",
+            "чтобы проверить открытку, нужен интернет. подключитесь и попробуйте снова",
             context.getString(R.string.hold_scan_index_body),
         )
         assertEquals(
-            "открытка найдена. загружаем вложение; после проверки оно откроется.",
+            "открытка найдена. загружаем то, что внутри",
             context.getString(R.string.hold_scan_material_online),
         )
         assertEquals(
-            "открытка найдена, нужен интернет. вложения ещё нет на устройстве.",
+            "открытка найдена, но то, что внутри, ещё не загружено. подключитесь к интернету",
             context.getString(R.string.hold_scan_material_offline),
         )
     }
@@ -175,17 +175,17 @@ class ScanProductCopyTest {
     @Config(qualifiers = "uk-w360dp-h780dp-xhdpi")
     fun ukrainianScanStateCopyIsAuthored() {
         assertEquals("відкриваємо вашу листівку…", context.getString(R.string.hold_scan_opening))
-        assertEquals("сканувати знову", context.getString(R.string.hold_scan_again))
+        assertEquals("зняти ще раз", context.getString(R.string.hold_scan_again))
         assertEquals(
-            "на пристрої ще немає потрібних даних. під’єднайтеся до інтернету й спробуйте знову.",
+            "щоб перевірити листівку, потрібен інтернет. під’єднайтеся й спробуйте знову",
             context.getString(R.string.hold_scan_index_body),
         )
         assertEquals(
-            "листівку знайдено. завантажуємо вкладення; після перевірки воно відкриється.",
+            "листівку знайдено. завантажуємо те, що всередині",
             context.getString(R.string.hold_scan_material_online),
         )
         assertEquals(
-            "листівку знайдено, потрібен інтернет. вкладення ще немає на пристрої.",
+            "листівку знайдено, але те, що всередині, ще не завантажено. під’єднайтеся до інтернету",
             context.getString(R.string.hold_scan_material_offline),
         )
     }

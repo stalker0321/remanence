@@ -38,10 +38,10 @@ class AccessDesignTest {
         rule.setContent { HoldTheme { Surface(Modifier.fillMaxSize()) {
             AccessPage(onBack = {}, footer = { AccessLanguageControl(AppLocale.SYSTEM, {}) }) {
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(32.dp)) {
-                    AccessHeading("let’s get you in", "Sign in to leave a memory for someone.")
+                    AccessHeading("let’s get you in", "sign in to make a postcard for someone")
                     GoogleSignInButton({})
                     panel()
-                    HoldTextButton({}) { androidx.compose.material3.Text("Other sign-in options") }
+                    HoldTextButton({}) { androidx.compose.material3.Text("other ways to sign in") }
                 }
             }
         } } }

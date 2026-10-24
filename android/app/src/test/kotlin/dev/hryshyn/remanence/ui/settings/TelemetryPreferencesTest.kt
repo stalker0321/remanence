@@ -88,8 +88,8 @@ class TelemetryPreferencesTest {
             val values = strings(folder)
             assertEquals(english.keys, values.keys); assertTrue(values.values.all { it.isNotBlank() })
         }
-        assertTrue(english["telemetry_disclosure"]!!.contains("approximate face boxes"))
-        assertTrue(english["telemetry_disclosure"]!!.contains("cannot be withdrawn"))
+        assertTrue(english["telemetry_disclosure"]!!.contains("rough face boxes"))
+        assertTrue(english["telemetry_disclosure"]!!.contains("can’t be taken back"))
     }
 
     @Test fun failedPreferenceSaveShowsWarningAndTurnsBothChoicesOffUntilSuccessfulSave() {

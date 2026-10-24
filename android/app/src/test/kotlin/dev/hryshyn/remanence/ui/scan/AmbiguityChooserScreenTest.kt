@@ -44,7 +44,7 @@ class AmbiguityChooserScreenTest {
         ),
         ChooserHintRow(
             candidateId = "cap-b",
-            primarySenderLabel = "unverified sender",
+            primarySenderLabel = "sender not confirmed",
             senderIdentityVerified = false,
             claimedSenderHandle = "olena",
             yearAndDateLabel = "2026 · March 02",
@@ -124,7 +124,7 @@ class AmbiguityChooserScreenTest {
         }
 
         composeRule.onNodeWithTag("chooser_primary_cap-b", useUnmergedTree = true)
-            .assertTextEquals("unverified sender")
+            .assertTextEquals("sender not confirmed")
         composeRule.onNodeWithTag("chooser_claim_cap-b", useUnmergedTree = true)
             .assertTextEquals(context.getString(R.string.hold_chooser_claim, bidiIsolated("olena")))
     }
@@ -243,7 +243,7 @@ class AmbiguityChooserScreenTest {
         assertEquals("@$rtlName", primary.substringAfter('\u2068').substringBefore('\u2069'))
 
         // The claim suffix stays outside the isolated sender name.
-        assertTrue(claim.endsWith("(not verified)"))
+        assertTrue(claim.endsWith("(not confirmed)"))
         assertEquals(1, claim.count { it == '\u2068' })
         assertEquals(1, claim.count { it == '\u2069' })
         assertEquals(rtlName, claim.substringAfter('\u2068').substringBefore('\u2069'))

@@ -33,11 +33,11 @@ class AuthLocalizationTest {
     @get:Rule val rule = createComposeRule()
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
-    @Test fun englishFieldsAreHumanReadable() = checkRegistration("Enter a valid email address.")
+    @Test fun englishFieldsAreHumanReadable() = checkRegistration("enter a valid email")
     @Test @Config(qualifiers = "ru")
-    fun russianFieldsAndNetworkErrorAreLocalized() = checkRegistration("Введи корректный адрес почты.")
+    fun russianFieldsAndNetworkErrorAreLocalized() = checkRegistration("введите правильный адрес почты")
     @Test @Config(qualifiers = "uk")
-    fun ukrainianFieldsAndNetworkErrorAreLocalized() = checkRegistration("Введи коректну адресу пошти.")
+    fun ukrainianFieldsAndNetworkErrorAreLocalized() = checkRegistration("введіть правильну адресу пошти")
 
     private fun checkRegistration(expectedEmail: String) {
         rule.setContent { MaterialTheme {
@@ -60,8 +60,8 @@ class AuthLocalizationTest {
             LoginScreen(LoginFormState("invalid", "password"),
                 LoginSubmitState.Failed(AuthMessage.WRONG_CREDENTIALS), {}, {}, {})
         } }
-        rule.onNodeWithTag("login_error_email").assertTextEquals("Введи коректну адресу пошти.")
-        rule.onNodeWithTag("login_error_message").assertTextEquals("Неправильна пошта або пароль.")
+        rule.onNodeWithTag("login_error_email").assertTextEquals("введіть правильну адресу пошти")
+        rule.onNodeWithTag("login_error_message").assertTextEquals("неправильна пошта або пароль")
     }
 
     @Test fun focusingFieldScrollsItsHelperIntoShortViewportWithoutChangingFocus() {

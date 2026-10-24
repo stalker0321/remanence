@@ -86,20 +86,20 @@ class QualityRejectionPanelTest {
         assertEquals(
             mapOf(
                 QualityReason.CARD_TOO_SMALL to
-                    "Move closer while keeping all four postcard edges visible.",
+                    "move closer, keeping all four edges in view",
                 QualityReason.CROP_UNCERTAIN to
-                    "Show all four postcard corners and edges; remove any occlusion.",
+                    "show all four corners and edges, with nothing covering the postcard",
                 QualityReason.ANGLE_UNCERTAIN to
-                    "Hold the phone parallel to the postcard and align its edges.",
+                    "hold the phone parallel to the postcard",
                 QualityReason.RESOLUTION_INSUFFICIENT to
-                    "Move closer, use the highest still resolution, and keep the full card visible.",
-                QualityReason.TOO_BLURRY to "Hold the phone steady while the camera focuses.",
-                QualityReason.TOO_DARK to "Use brighter, even light and remove shadows.",
-                QualityReason.GLARE_EXCESSIVE to "Tilt the postcard or move the light to remove glare.",
+                    "move closer and keep the whole postcard in the frame",
+                QualityReason.TOO_BLURRY to "hold the phone still while it focuses",
+                QualityReason.TOO_DARK to "it’s too dark. find brighter, even light",
+                QualityReason.GLARE_EXCESSIVE to "there’s glare. tilt the postcard or move the light",
                 QualityReason.FEATURES_INSUFFICIENT to
-                    "Use printed detail, focus, good light, and keep the full card inside the outline.",
+                    "not enough detail. focus, good light and the whole postcard inside the outline",
                 QualityReason.ALREADY_SENT_TO_RECIPIENT to
-                    "You have already sent this postcard to this person. Choose a different postcard.",
+                    "you’ve already sent this postcard to this person. choose a different one",
             ),
             QualityReason.entries.associateWith { guidanceFor(it) },
         )
@@ -109,7 +109,7 @@ class QualityRejectionPanelTest {
     fun blurryGuidanceDoesNotPromiseAnUnavailableTapToFocusAction() {
         val guidance = guidanceFor(QualityReason.TOO_BLURRY)
 
-        assertEquals("Hold the phone steady while the camera focuses.", guidance)
+        assertEquals("hold the phone still while it focuses", guidance)
         assertFalse(guidance.contains("tap", ignoreCase = true))
     }
 

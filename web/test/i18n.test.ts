@@ -3,6 +3,7 @@ import { catalog, languages, messageKeys } from '../src/i18n/catalog'
 import en from '../src/i18n/locales/en.json'
 import ru from '../src/i18n/locales/ru.json'
 import uk from '../src/i18n/locales/uk.json'
+import context from '../src/i18n/locales/context.json'
 import { readLanguage, writeLanguage, type PreferencePort } from '../src/preferences/language'
 
 function memoryPort(): PreferencePort {
@@ -24,7 +25,7 @@ describe('languages', () => {
   })
 
   it('translates exactly the English keys', () => {
-    for (const locale of [ru, uk]) expect(Object.keys(locale).sort()).toEqual(Object.keys(en).sort())
+    for (const locale of [ru, uk, context]) expect(Object.keys(locale).sort()).toEqual(Object.keys(en).sort())
   })
 
   it('has the same keys in English, Russian, and Ukrainian', () => {

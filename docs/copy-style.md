@@ -48,7 +48,8 @@ Apple show in system dialogs).
 ## Adding a language
 
 1. Copy `web/src/i18n/locales/en.json` to `<code>.json` and translate the
-   values. Keep every key; never add new ones.
+   values. Keep every key; never add new ones. `context.json` says where
+   each string appears and how much room it has.
 2. Import it in `web/src/i18n/catalog.ts`, add the code to `languages`, and add
    its name to `web/src/ui/languageOptions.ts`.
 3. Run the web tests: `test/i18n.test.ts` checks the house style and that the

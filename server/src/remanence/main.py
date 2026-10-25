@@ -24,6 +24,7 @@ from remanence.api.capsules import router as capsules_router
 from remanence.api.history import HistoryPrivacyMiddleware, router as history_router
 from remanence.api.music import router as music_router
 from remanence.api.problems import RequestIdMiddleware, problem_response
+from remanence.api.slow_requests import SlowRequestLogMiddleware
 from remanence.api.users import router as users_router
 from remanence.api.recovery import router as recovery_router
 from remanence.api.safety import router as safety_router
@@ -193,6 +194,7 @@ def create_app(
     app.add_middleware(RequestIdMiddleware, telemetry_app=telemetry)
     app.add_middleware(HistoryPrivacyMiddleware)
     app.add_middleware(RegistrationNoStoreMiddleware)
+    app.add_middleware(SlowRequestLogMiddleware)
     app.state.settings = resolved
     app.state.upload_reservations = (
         upload_reservations if upload_reservations is not None else build_upload_reservation_manager()

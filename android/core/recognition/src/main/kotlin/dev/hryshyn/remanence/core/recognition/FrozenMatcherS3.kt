@@ -346,6 +346,11 @@ object FrozenMatcherS3 {
      */
     const val MAX_CENTRE_DISTANCE = 0.15
 
+    /** Decisive winner: may pass the strict gate with a lower inlier ratio. */
+    const val DECISIVE_MIN_SCORE = 40.0
+    const val DECISIVE_MIN_SEPARATION = 20.0
+    const val DECISIVE_MIN_INLIER_RATIO = 0.6
+
     /**
      * Several references may describe one card (sender and recipient
      * baselines share an id); the runner-up is the best *other* card.
@@ -370,10 +375,21 @@ object FrozenMatcherS3 {
         val separation = best.finalScore / max(runner, 1.0)
         val baseline = best.finalScore >= THRESHOLD && separation >= MARGIN && best.inliers >= 12 &&
             best.coverage >= .04 && best.inlierRatio >= .3
-        val gate = StrictCombinedGate.decide(
-            baseline,
-            StrictCombinedEvidence(best.geometryVerified, best.finalScore, best.inlierRatio, best.coverage, components),
-        )
+        val evidence = StrictCombinedEvidence(best.geometryVerified, best.finalScore, best.inlierRatio, best.coverage, components)
+        val strictGate = StrictCombinedGate.decide(baseline, evidence)
+        // A decisive winner whose only shortfall is the inlier ratio: dark
+        // cards with a repeated pattern (dataset 040, 020) collect many
+        // self-similar matches that geometry cannot confirm. Every other
+        // strict constraint still applies. Chosen on odd card ids, held out on
+        // even ones: +16 correct, 0 wrong, 0 false accepts over 1379 queries.
+        val gate = if (strictGate is StrictCombinedDecision.Reject &&
+            strictGate.reason == StrictCombinedRejectReason.INLIER_RATIO_BELOW_FLOOR &&
+            best.finalScore >= DECISIVE_MIN_SCORE && separation >= DECISIVE_MIN_SEPARATION
+        ) {
+            StrictCombinedGate.decide(baseline, evidence, minInlierRatio = DECISIVE_MIN_INLIER_RATIO)
+        } else {
+            strictGate
+        }
         val accepted = gate is StrictCombinedDecision.Keep &&
             (!requireCentred || best.centreDistance <= MAX_CENTRE_DISTANCE)
         fun strong(c: Candidate): Boolean =

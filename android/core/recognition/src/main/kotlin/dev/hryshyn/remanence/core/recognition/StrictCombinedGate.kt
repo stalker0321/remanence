@@ -100,6 +100,7 @@ object StrictCombinedGate {
     fun decide(
         baselineAccepted: Boolean,
         evidence: StrictCombinedEvidence?,
+        minInlierRatio: Double = MIN_INLIER_RATIO,
     ): StrictCombinedDecision {
         if (!baselineAccepted) {
             return StrictCombinedDecision.Reject(
@@ -125,7 +126,7 @@ object StrictCombinedGate {
         if (ev.finalScore < MIN_SCORE) {
             return reject(StrictCombinedRejectReason.FINAL_SCORE_BELOW_FLOOR)
         }
-        if (ev.inlierRatio < MIN_INLIER_RATIO) {
+        if (ev.inlierRatio < minInlierRatio) {
             return reject(StrictCombinedRejectReason.INLIER_RATIO_BELOW_FLOOR)
         }
         if (ev.coverage < MIN_COVERAGE) {

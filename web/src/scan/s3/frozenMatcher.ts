@@ -22,6 +22,10 @@ export const TOP_K = 8
 export const THRESHOLD = 12
 export const MARGIN = 1.6
 export const MAX_CENTRE_DISTANCE = 0.15
+/** Decisive winner: may pass the strict gate with a lower inlier ratio. */
+export const DECISIVE_MIN_SCORE = 40
+export const DECISIVE_MIN_SEPARATION = 20
+export const DECISIVE_MIN_INLIER_RATIO = 0.6
 const GRID = 6
 const PER_CELL = 45
 const RATIO = 0.75
@@ -605,8 +609,8 @@ function verify(cv: Cv, query: Features, queryRooted: Cv | null, ref: Reference)
 }
 
 /** Frozen strict_combined gate on one candidate. */
-export function strictCombined(c: Candidate, components: number): boolean {
-  if (!c.geometryVerified || c.finalScore < MIN_SCORE || c.inlierRatio < MIN_INLIER_RATIO || c.coverage < MIN_COVERAGE) return false
+export function strictCombined(c: Candidate, components: number, minInlierRatio = MIN_INLIER_RATIO): boolean {
+  if (!c.geometryVerified || c.finalScore < MIN_SCORE || c.inlierRatio < minInlierRatio || c.coverage < MIN_COVERAGE) return false
   if (components > MAX_COMPONENTS && !(c.coverage >= MULTI_MIN_COVERAGE && c.inlierRatio >= MULTI_MIN_INLIER_RATIO)) return false
   return true
 }
@@ -633,7 +637,12 @@ export function match(
   const separation = best.finalScore / Math.max(runner, 1)
   const baseline = best.finalScore >= THRESHOLD && separation >= MARGIN && best.inliers >= 12 && best.coverage >= 0.04 && best.inlierRatio >= 0.3
   const centred = (c: Candidate) => !requireCentred || c.centreDistance <= MAX_CENTRE_DISTANCE
-  const accepted = baseline && strictCombined(best, components) && centred(best)
+  // Decisive winner whose only shortfall is the inlier ratio (dark cards with
+  // a repeated pattern); every other strict constraint still applies. Same
+  // rule as the Android port: +16 correct, 0 wrong, 0 false accepts.
+  const decisive = best.finalScore >= DECISIVE_MIN_SCORE && separation >= DECISIVE_MIN_SEPARATION
+  const strict = strictCombined(best, components) || (decisive && strictCombined(best, components, DECISIVE_MIN_INLIER_RATIO))
+  const accepted = baseline && strict && centred(best)
   const strong = (c: Candidate) => c.finalScore >= THRESHOLD && c.inliers >= 12 && c.coverage >= 0.04 && c.inlierRatio >= 0.3 &&
     strictCombined(c, components) && centred(c)
   const strongIds = [...new Set(ranked.filter(strong).map((c) => c.id))]

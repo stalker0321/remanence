@@ -144,7 +144,11 @@ internal fun CapsuleRoute(
 
     // The route owns the presentation state while it is mounted. System Back
     // must release it before delegating the navigation/authority revocation.
+    val backContext = androidx.compose.ui.platform.LocalContext.current
     BackHandler {
+        if (dev.hryshyn.remanence.BuildConfig.DEBUG) {
+            android.widget.Toast.makeText(backContext.applicationContext, "назад: экран открытки", android.widget.Toast.LENGTH_SHORT).show()
+        }
         (state as? CapsuleRouteState.Ready)?.presentation?.close()
         onReleaseContent()
         onClose()

@@ -93,7 +93,7 @@ class CollageChoiceHostTest {
         composeRule.waitForIdle()
     }
 
-    @Test fun photoHotspotsHaveDistinctLocalizedNamesAndSelectTheirOwnPhoto() = hotspotLabels("Crop photo", "of")
+    @Test fun photoHotspotsHaveDistinctLocalizedNamesAndSelectTheirOwnPhoto() = hotspotLabels("crop photo", "of")
     @Test @Config(qualifiers = "ru")
     fun russianPhotoHotspots() = hotspotLabels("кадрировать фото", "из")
     @Test @Config(qualifiers = "uk")

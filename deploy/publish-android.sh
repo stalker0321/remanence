@@ -33,9 +33,9 @@ mkdir -p "$out"
 aab="$out/Remanence-$code-$sha.aab"
 scp -q "$msi:$qa/$sha/android/app/build/outputs/bundle/beta/app-beta.aab" "$aab"
 
-jarsigner -quiet -keystore "$signing/remanence-upload.p12" -storetype PKCS12 \
+jarsigner -keystore "$signing/remanence-upload.p12" -storetype PKCS12 \
   -storepass:file "$signing/upload.pass" -sigalg SHA256withRSA -digestalg SHA-256 \
-  "$aab" remanence-upload
+  "$aab" remanence-upload >/dev/null
 jarsigner -verify "$aab" >/dev/null
 signer=$(keytool -printcert -jarfile "$aab" | sed -n 's/^\s*SHA256: //p' | head -1)
 [ "$signer" = "82:E3:FA:77:27:BF:53:BD:E5:59:26:AF:9C:1A:07:72:3C:7D:8E:88:93:CB:1B:98:16:13:E5:FD:89:8A:5C:8F" ] \

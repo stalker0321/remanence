@@ -22,9 +22,18 @@ class KekBoundSecretSealer(
 
     private val aead: Aead by lazy { boundary.loadKekAead(alias) }
 
-    override fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray = aead.encrypt(plaintext, aad)
+    override fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray = timed { aead.encrypt(plaintext, aad) }
 
-    override fun unseal(ciphertext: ByteArray, aad: ByteArray): ByteArray = aead.decrypt(ciphertext, aad)
+    override fun unseal(ciphertext: ByteArray, aad: ByteArray): ByteArray = timed { aead.decrypt(ciphertext, aad) }
+
+    private inline fun <T> timed(block: () -> T): T {
+        val started = System.nanoTime()
+        try {
+            return block()
+        } finally {
+            dev.hryshyn.remanence.ui.scan.ScanTiming.keystore(System.nanoTime() - started)
+        }
+    }
 
     companion object {
         /** Stable Keystore alias for the local fingerprint-storage AEAD key. */

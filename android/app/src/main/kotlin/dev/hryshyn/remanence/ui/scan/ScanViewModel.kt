@@ -1408,6 +1408,7 @@ class ScanViewModel internal constructor(
         } catch (_: Exception) {
             return false
         } ?: return false
+        markTiming("ключи")
         val owner = runCatching { UserId.parseRest(identity.userId) }.getOrNull() ?: return false
         val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return false
         return presentationGrants.resolve(uuid, owner) != null

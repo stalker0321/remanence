@@ -9,7 +9,7 @@
     <string name="auth_invalid_response">щось пішло не так на нашому боці. спробуйте пізніше</string>
     <string name="auth_wrong_credentials">неправильна пошта або пароль</string>
     <string name="auth_sign_in_failed">не вдалося увійти. спробуйте ще раз</string>
-    <string name="auth_account_unavailable">ця пошта або ім’я недоступні</string>
+    <string name="auth_account_unavailable">ця пошта або нік недоступні</string>
     <string name="auth_identity_rejected">не вдалося завершити налаштування акаунта. спробуйте пізніше</string>
     <string name="auth_registration_failed">не вдалося створити акаунт. спробуйте ще раз</string>
     <string name="auth_recovery_required">ви увійшли, але на цьому телефоні листівки поки не відкриваються. підтвердьте ключем доступу, щоб повернути доступ</string>

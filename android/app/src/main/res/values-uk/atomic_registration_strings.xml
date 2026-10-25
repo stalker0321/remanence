@@ -4,7 +4,7 @@
     <string name="atomic_registration_unknown">акаунт міг уже зберегтися. перевірте, повторіть цей самий крок або увійдіть знову</string>
     <string name="atomic_registration_reauthenticate">підтвердьте акаунт Google ще раз, щоб продовжити</string>
     <string name="atomic_registration_terminal">ця реєстрація завершилася. можна почати нову</string>
-    <string name="atomic_registration_handle_error">оберіть вільне ім’я: 3–30 латинських літер, цифр, крапок або підкреслень</string>
+    <string name="atomic_registration_handle_error">оберіть вільний нік: 3–30 латинських літер, цифр, крапок або підкреслень</string>
     <string name="atomic_registration_upgrade">оновіть застосунок, щоб завершити реєстрацію</string>
     <string name="atomic_registration_closed">нові акаунти зараз не створюються. до наявного увійти можна</string>
     <string name="atomic_registration_restart">почати знову</string>

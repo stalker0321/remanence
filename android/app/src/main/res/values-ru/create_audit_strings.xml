@@ -34,5 +34,5 @@
     <string name="create_audit_capture_timeout">камера долго не отвечала. снимите ещё раз</string>
     <string name="create_audit_crop_grid">сетка кадра</string>
     <string name="create_audit_handle_rule">3–30 символов: a–z, 0–9, _ или .</string>
-    <string name="create_audit_recent_identity">не получилось подтвердить этого человека. проверьте имя и найдите заново</string>
+    <string name="create_audit_recent_identity">не получилось подтвердить этого человека. проверьте ник и найдите заново</string>
 </resources>

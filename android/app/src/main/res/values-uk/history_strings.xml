@@ -25,7 +25,7 @@
     <string name="history_cancel_unavailable">цю не можна скасувати</string>
     <string name="history_cancel_unknown">не вдалося підтвердити скасування. перегляньте статус, перш ніж пробувати знову</string>
     <string name="history_recent">нещодавні</string>
-    <string name="history_recent_empty">тут з’являться ті, кому ви надсилаєте листівки</string>
+    <string name="history_recent_empty">тут будуть люди, яким ви вже надсилали</string>
     <string name="history_self">собі</string>
     <string name="history_recipient">одержувач</string>
     <string name="history_status_draft">чернетка, не надіслано</string>

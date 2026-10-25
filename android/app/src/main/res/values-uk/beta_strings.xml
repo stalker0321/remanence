@@ -8,7 +8,7 @@
     <string name="beta_terms_agree">я приймаю правила користування</string>
     <string name="beta_network_failed">не вийшло. перевірте інтернет і спробуйте знову</string>
     <string name="beta_safety_title">блокування й скарги</string>
-    <string name="beta_safety_detail">введіть ім’я відправника, щоб заблокувати його або поскаржитися. блокування не видаляє вже отримане чи збережене</string>
+    <string name="beta_safety_detail">введіть нік відправника, щоб заблокувати його або поскаржитися. блокування не видаляє вже отримане чи збережене</string>
     <string name="beta_block">заблокувати відправника</string>
     <string name="beta_blocked">відправника заблоковано</string>
     <string name="beta_unblock">розблокувати @%1$s</string>

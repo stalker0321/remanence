@@ -1,17 +1,17 @@
 <resources>
     <string name="mvp_other_sign_in">другие способы входа</string>
     <string name="mvp_settings">настройки</string>
-    <string name="mvp_handle_permanent">имя нельзя поменять</string>
+    <string name="mvp_handle_permanent">ник нельзя поменять</string>
     <string name="mvp_recovery_ready">доступ сохранён и проверен</string>
     <string name="mvp_recovery_not_ready">доступ ещё не проверен</string>
     <string name="mvp_privacy_summary">фото и слова шифруются на телефоне, прежде чем его покинуть</string>
     <string name="mvp_google_continue">продолжить через Google</string>
-    <string name="mvp_handle_title">выберите имя</string>
-    <string name="mvp_handle_label">имя</string>
+    <string name="mvp_handle_title">выберите ник</string>
+    <string name="mvp_handle_label">ник</string>
     <string name="mvp_continue">продолжить</string>
     <string name="mvp_google_retry">не получилось войти. попробуйте ещё раз</string>
-    <string name="mvp_google_conflict">это имя может быть занято, или на эту почту уже есть аккаунт</string>
-    <string name="mvp_setup_saved">аккаунт и имя сохранены. остался один шаг</string>
+    <string name="mvp_google_conflict">этот ник может быть занят, или на эту почту уже есть аккаунт</string>
+    <string name="mvp_setup_saved">аккаунт и ник сохранены. остался один шаг</string>
     <string name="mvp_working">секунду…</string>
     <string name="mvp_retry_connection">попробовать снова</string>
 </resources>

@@ -25,7 +25,7 @@
     <string name="history_cancel_unavailable">this one can’t be cancelled</string>
     <string name="history_cancel_unknown">couldn’t confirm the cancellation. check the status before trying again</string>
     <string name="history_recent">recent</string>
-    <string name="history_recent_empty">people you send to will show up here</string>
+    <string name="history_recent_empty">people you’ve sent to will show up here</string>
     <string name="history_self">to yourself</string>
     <string name="history_recipient">recipient</string>
     <string name="history_status_draft">draft, not sent</string>

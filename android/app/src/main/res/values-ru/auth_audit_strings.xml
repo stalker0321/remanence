@@ -9,7 +9,7 @@
     <string name="auth_invalid_response">что-то пошло не так на нашей стороне. попробуйте позже</string>
     <string name="auth_wrong_credentials">неверная почта или пароль</string>
     <string name="auth_sign_in_failed">не получилось войти. попробуйте ещё раз</string>
-    <string name="auth_account_unavailable">эта почта или имя недоступны</string>
+    <string name="auth_account_unavailable">эта почта или ник недоступны</string>
     <string name="auth_identity_rejected">не получилось закончить настройку аккаунта. попробуйте позже</string>
     <string name="auth_registration_failed">не получилось создать аккаунт. попробуйте ещё раз</string>
     <string name="auth_recovery_required">вы вошли, но на этом телефоне открытки пока не открываются. подтвердите ключом доступа, чтобы вернуть доступ</string>

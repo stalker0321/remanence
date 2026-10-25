@@ -12,12 +12,23 @@ import dev.hryshyn.remanence.BuildConfig
 object ScanTiming {
     private var startedNanos = 0L
     private val marks = ArrayList<String>()
+    private val keystoreOps = java.util.concurrent.atomic.AtomicInteger()
+    private val keystoreNanos = java.util.concurrent.atomic.AtomicLong()
+
+    /** Debug: one fingerprint seal/unseal through the Android Keystore took [nanos]. */
+    fun keystore(nanos: Long) {
+        if (!BuildConfig.DEBUG) return
+        keystoreOps.incrementAndGet()
+        keystoreNanos.addAndGet(nanos)
+    }
 
     @Synchronized
     fun start() {
         if (!BuildConfig.DEBUG) return
         startedNanos = System.nanoTime()
         marks.clear()
+        keystoreOps.set(0)
+        keystoreNanos.set(0)
     }
 
     /** @return all marks so far, or null when no scan is being timed. */
@@ -25,7 +36,7 @@ object ScanTiming {
     fun mark(label: String): String? {
         if (!BuildConfig.DEBUG || startedNanos == 0L) return null
         marks += "$label ${(System.nanoTime() - startedNanos) / 1_000_000}"
-        val line = marks.joinToString(" · ") + " ms"
+        val line = marks.joinToString(" · ") + " ms · keystore ${keystoreOps.get()}× ${keystoreNanos.get() / 1_000_000} ms"
         runCatching { android.util.Log.i("RemanenceTiming", line) }
         return line
     }

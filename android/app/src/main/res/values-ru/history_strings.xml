@@ -25,7 +25,7 @@
     <string name="history_cancel_unavailable">эту нельзя отменить</string>
     <string name="history_cancel_unknown">не получилось подтвердить отмену. посмотрите статус, прежде чем пробовать снова</string>
     <string name="history_recent">недавние</string>
-    <string name="history_recent_empty">здесь появятся те, кому вы отправляете открытки</string>
+    <string name="history_recent_empty">здесь будут люди, которым вы уже отправляли</string>
     <string name="history_self">себе</string>
     <string name="history_recipient">получатель</string>
     <string name="history_status_draft">черновик, не отправлена</string>

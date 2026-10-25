@@ -611,7 +611,7 @@ class CreateContentPublishRecoveryTest {
         promoteToPublished(vm)
 
         composeRule.setContent { MaterialTheme { CreateScreen(viewModel = vm) } }
-        composeRule.onNodeWithTag("create_revoke_disclaimer").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_published_home").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("create_revoke_button").assertIsDisplayed().assertIsEnabled().performClick()
         composeRule.onNodeWithTag("create_revoke_confirm").assertIsDisplayed().performClick()
         composeRule.waitForIdle()

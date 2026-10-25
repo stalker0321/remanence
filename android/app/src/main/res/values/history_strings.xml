@@ -38,4 +38,5 @@
     <string name="history_status_cancelled">cancelled</string>
     <string name="history_status_expired">expired</string>
     <string name="history_status_unknown">no details</string>
+    <string name="history_code_label">postcard code</string>
 </resources>

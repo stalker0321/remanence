@@ -19,4 +19,7 @@
     <string name="create_attach_capsule">attach</string>
     <string name="create_back_to_expression">back to the layout</string>
     <string name="create_note_too_long">that’s a bit long, try shortening it</string>
+    <string name="create_published_title">all set</string>
+    <string name="create_published_body">now post the paper postcard. when it arrives, they’ll take a photo of the front and see what you put inside</string>
+    <string name="create_published_cancel">cancel sending</string>
 </resources>

@@ -38,4 +38,5 @@
     <string name="history_status_cancelled">отменена</string>
     <string name="history_status_expired">срок истёк</string>
     <string name="history_status_unknown">нет сведений</string>
+    <string name="history_code_label">код открытки</string>
 </resources>

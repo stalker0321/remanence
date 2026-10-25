@@ -19,4 +19,7 @@
     <string name="create_attach_capsule">прикріпити</string>
     <string name="create_back_to_expression">назад до варіанта</string>
     <string name="create_note_too_long">текст задовгий, спробуйте скоротити</string>
+    <string name="create_published_title">готово</string>
+    <string name="create_published_body">залишилося надіслати паперову листівку. коли вона дійде, одержувач сфотографує лицьовий бік і побачить те, що ви зібрали</string>
+    <string name="create_published_cancel">скасувати надсилання</string>
 </resources>

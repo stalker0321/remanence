@@ -131,7 +131,8 @@ class HistoryScreenTest {
         rule.onNodeWithTag("history_cancel_outcome").performScrollTo().assertIsDisplayed()
         rule.onNodeWithTag("history_copy").assertDoesNotExist()
         rule.onNodeWithTag("history_cancel").assertDoesNotExist()
-        rule.onNodeWithTag("history_no_cancel").performScrollTo().assertIsDisplayed()
+        // A cancelled postcard needs no "can't be cancelled" line.
+        rule.onNodeWithTag("history_no_cancel").assertDoesNotExist()
     }
 
     @Test fun accountBoundaryRemovesOpenDetailAndConfirmationImmediately() {

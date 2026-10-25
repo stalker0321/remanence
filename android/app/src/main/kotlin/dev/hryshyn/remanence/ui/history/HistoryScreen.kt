@@ -157,38 +157,54 @@ private fun HistoryDetail(item: OutgoingItem, cancellable: Boolean,
                           onCancel: (String) -> Unit, codeForCopy: (String) -> String?) {
     val context = LocalContext.current
     var copied by remember(item.key, item.code) { mutableStateOf<Boolean?>(null) }
-    Column(Modifier.fillMaxWidth().testTag("history_detail"), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text(recipientLabel(item), style = MaterialTheme.typography.titleLarge)
-        Text(stringResource(statusCopy(item.status)), Modifier.testTag("history_status"))
-        DetailDate(R.string.history_created, item.createdAt)
-        item.publishedAt?.let { DetailDate(R.string.history_published, it) }
-        item.expiresAt?.let { DetailDate(R.string.history_expires, it) }
-        item.firstOpenedAt?.let { DetailDate(R.string.history_opened, it) }
-        item.revokedAt?.let { DetailDate(R.string.history_revoked, it) }
+    Column(Modifier.fillMaxWidth().testTag("history_detail"), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(recipientLabel(item), style = MaterialTheme.typography.headlineSmall, color = HoldColors.Ink)
+            Text(stringResource(statusCopy(item.status)), style = MaterialTheme.typography.labelLarge, color = HoldColors.Ink,
+                modifier = Modifier.testTag("history_status")
+                    .background(HoldColors.Lilac.copy(alpha = .65f), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                    .padding(horizontal = 11.dp, vertical = 6.dp))
+        }
+        // When it happened, as one quiet card; "created" only matters for drafts.
+        Column(Modifier.fillMaxWidth()
+            .background(HoldColors.Field, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (item.publishedAt == null) DetailDate(R.string.history_created, item.createdAt)
+            item.publishedAt?.let { DetailDate(R.string.history_published, it) }
+            item.firstOpenedAt?.let { DetailDate(R.string.history_opened, it) }
+            item.revokedAt?.let { DetailDate(R.string.history_revoked, it) }
+            item.expiresAt?.let { DetailDate(R.string.history_expires, it) }
+        }
         val displayedCode = item.code
         if (displayedCode != null) {
-            Text(displayedCode, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.testTag("history_code"))
-            HoldButton(onClick = {
-                copied = runCatching {
-                    val code = codeForCopy(item.key) ?: error("code is no longer available")
-                    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: error("clipboard unavailable")
-                    clipboard.setPrimaryClip(ClipData.newPlainText("Remanence", code))
-                }.isSuccess
-            }, modifier = Modifier.testTag("history_copy")) { Text(stringResource(R.string.history_copy)) }
-            copied?.let {
-                Text(stringResource(if (it) R.string.history_copied else R.string.history_copy_failed),
-                    Modifier.testTag("history_copy_result"))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.history_code_label), style = MaterialTheme.typography.labelLarge, color = HoldColors.Muted)
+                Text(displayedCode, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.testTag("history_code"))
+                HoldButton(onClick = {
+                    copied = runCatching {
+                        val code = codeForCopy(item.key) ?: error("code is no longer available")
+                        val clipboard = context.getSystemService(ClipboardManager::class.java) ?: error("clipboard unavailable")
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Remanence", code))
+                    }.isSuccess
+                }, modifier = Modifier.testTag("history_copy")) { Text(stringResource(R.string.history_copy)) }
+                copied?.let {
+                    Text(stringResource(if (it) R.string.history_copied else R.string.history_copy_failed),
+                        Modifier.testTag("history_copy_result"))
+                }
             }
-        } else {
-            Text(stringResource(if (item.locatorStatus == LocatorStatus.RETIRED_OPEN ||
-                item.locatorStatus == LocatorStatus.RETIRED_TERMINAL) R.string.history_code_retired else R.string.history_code_unavailable),
-                Modifier.testTag("history_code_unavailable"), color = HoldColors.Muted)
+        } else if (item.locatorStatus == LocatorStatus.RETIRED_OPEN) {
+            Text(stringResource(R.string.history_code_retired), Modifier.testTag("history_code_unavailable"),
+                style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
         }
-        item.cancelDeadline?.let { DetailDate(R.string.history_cancel_deadline, it) }
-        if (cancellable) HoldTextButton(onClick = { onCancel(item.key) },
-            modifier = Modifier.testTag("history_cancel")) {
-            Text(stringResource(R.string.create_audit_revoke_confirm), color = HoldColors.Destructive)
-        } else Text(stringResource(R.string.history_cancel_unavailable), Modifier.testTag("history_no_cancel"), color = HoldColors.Muted)
+        if (cancellable) Column {
+            HoldTextButton(onClick = { onCancel(item.key) }, modifier = Modifier.testTag("history_cancel")) {
+                Text(stringResource(R.string.create_published_cancel), color = HoldColors.Muted)
+            }
+            item.cancelDeadline?.let { DetailDate(R.string.history_cancel_deadline, it) }
+        } else if (item.status == OutgoingStatus.READY || item.status == OutgoingStatus.PENDING) {
+            Text(stringResource(R.string.history_cancel_unavailable), Modifier.testTag("history_no_cancel"),
+                style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
+        }
     }
 }
 
@@ -223,7 +239,7 @@ fun RecentRecipients(state: RecentUiState, enabled: Boolean, onRetry: () -> Unit
     else -> stringResource(R.string.history_recipient)
 }
 @Composable private fun DetailDate(label: Int, date: String) {
-    Text(stringResource(label, historyDate(date)), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
+    Text(stringResource(label, historyDate(date)), style = MaterialTheme.typography.bodyMedium, color = HoldColors.Ink)
 }
 @Composable private fun historyDate(raw: String): String {
     val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales[0] ?: Locale.getDefault()

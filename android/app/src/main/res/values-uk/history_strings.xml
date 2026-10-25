@@ -38,4 +38,5 @@
     <string name="history_status_cancelled">скасовано</string>
     <string name="history_status_expired">термін минув</string>
     <string name="history_status_unknown">немає відомостей</string>
+    <string name="history_code_label">код листівки</string>
 </resources>

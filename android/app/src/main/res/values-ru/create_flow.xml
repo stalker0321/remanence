@@ -19,4 +19,7 @@
     <string name="create_attach_capsule">прикрепить</string>
     <string name="create_back_to_expression">назад к варианту</string>
     <string name="create_note_too_long">текст длинноват, попробуйте сократить</string>
+    <string name="create_published_title">готово</string>
+    <string name="create_published_body">осталось отправить бумажную открытку. когда она дойдёт, получатель сфотографирует лицевую сторону и увидит то, что вы собрали</string>
+    <string name="create_published_cancel">отменить отправку</string>
 </resources>

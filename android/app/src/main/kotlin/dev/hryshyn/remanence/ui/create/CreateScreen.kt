@@ -286,8 +286,16 @@ fun CreateScreen(
                     }
                     CreateViewModel.Step.PUBLISHED -> Column {
                         Text(
-                            stringResource(R.string.create_audit_published),
+                            stringResource(R.string.create_published_title),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = HoldColors.Ink,
                             modifier = Modifier.testTag("create_published"),
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            stringResource(R.string.create_published_body),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = HoldColors.Muted,
                         )
                         // T186 M12e-boundary: a completed pending v2
                         // publication displays its handwritten code here
@@ -315,11 +323,8 @@ fun CreateScreen(
                                 color = HoldColors.Muted,
                             )
                         }
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.create_audit_revoke_disclaimer),
-                            modifier = Modifier.testTag("create_revoke_disclaimer"),
-                        )
+                        Spacer(Modifier.height(28.dp))
+                        ForwardAction(stringResource(R.string.create_audit_return_home), "create_published_home", onExit)
                         Spacer(Modifier.height(8.dp))
                         when (val status = revokeStatus) {
                             CreateViewModel.CapsuleRevokeStatus.Idle -> Unit
@@ -337,15 +342,16 @@ fun CreateScreen(
                                 modifier = Modifier.testTag("create_revoke_error"),
                             )
                         }
-                        Spacer(Modifier.height(8.dp))
-                        HoldDestructiveButton(
+                        // Cancelling stays reachable but quiet; its consequences are
+                        // spelled out in the confirmation dialog.
+                        TextButton(
                             // T186 M12e-boundary: v1 revoke has no pending
                             // gift to act on (no outbox row staged).
                             onClick = { showRevokeConfirmation = true },
                             enabled = revokeActionEnabled(revokeStatus) && pendingCode == null,
                             modifier = Modifier.testTag("create_revoke_button"),
                         ) {
-                            Text(stringResource(R.string.create_audit_revoke_confirm))
+                            Text(stringResource(R.string.create_published_cancel), color = HoldColors.Muted)
                         }
                     }
                 }

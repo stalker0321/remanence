@@ -54,6 +54,7 @@ fun HistoryScreen(
     BackHandler(onBack = if (state.confirmKey != null) onDismissCancel else back)
     Column(Modifier.fillMaxSize().background(HoldColors.Paper).testTag("history_screen")) {
         if (showHeader || state.selectedKey != null) HoldFlowHeader(onBack = back, onClose = onBack, testKey = "history")
+        val debugTiming = dev.hryshyn.remanence.ui.scan.ScanTiming.last(LocalContext.current)
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().testTag("history_scroll"),
             state = if (state.selectedKey != null) detailScroll else listScroll,
@@ -120,6 +121,15 @@ fun HistoryScreen(
                         state.error != null -> R.string.mvp_retry_connection
                         else -> R.string.history_refresh
                     }))
+                }
+            }
+            // Debug builds: the last scan-to-open timing, selectable for copying.
+            debugTiming?.let { timing ->
+                item {
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        Text(timing, style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted,
+                            modifier = Modifier.fillMaxWidth().padding(top = 16.dp).testTag("debug_scan_timing"))
+                    }
                 }
             }
         }

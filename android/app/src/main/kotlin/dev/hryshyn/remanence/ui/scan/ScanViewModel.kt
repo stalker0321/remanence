@@ -1401,12 +1401,15 @@ class ScanViewModel internal constructor(
     }
 
     private suspend fun grantStillLive(grantId: String): Boolean {
+        ScanTiming.watch("ключи")
         val identity = try {
             identityProvider()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return false
+        } finally {
+            ScanTiming.unwatch()
         } ?: return false
         markTiming("ключи")
         val owner = runCatching { UserId.parseRest(identity.userId) }.getOrNull() ?: return false

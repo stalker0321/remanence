@@ -29,6 +29,7 @@ object ScanTiming {
         marks.clear()
         keystoreOps.set(0)
         keystoreNanos.set(0)
+        stalls = ""
     }
 
     /** @return all marks so far, or null when no scan is being timed. */
@@ -41,10 +42,55 @@ object ScanTiming {
         return line
     }
 
-    /** Ends the run with [label] and shows the whole line over whatever screen is up. */
+    @Volatile private var stalls: String = ""
+    @Volatile private var watched: Thread? = null
+
+    /**
+     * Debug: if [label] has not finished within [afterMs], records what every
+     * app thread is doing, so a stall can be traced to whoever holds it up.
+     */
+    fun watch(label: String, afterMs: Long = 3_000) {
+        if (!BuildConfig.DEBUG) return
+        val waiting = Thread.currentThread()
+        watched = Thread {
+            try {
+                Thread.sleep(afterMs)
+            } catch (_: InterruptedException) {
+                return@Thread
+            }
+            stalls += "\n[$label stalled > $afterMs ms]\n" + Thread.getAllStackTraces().entries
+                .filter { (thread, stack) -> thread === waiting || stack.any { it.className.startsWith("dev.hryshyn") } }
+                .joinToString("\n") { (thread, stack) ->
+                    val frames = stack.filter {
+                        it.className.startsWith("dev.hryshyn") || it.className.startsWith("android.security") ||
+                            it.className.startsWith("com.google.crypto") || it.methodName == "wait" || it.methodName == "park"
+                    }.take(8)
+                    "${thread.name} ${thread.state}${if (thread === waiting) " (waiting)" else ""}:\n" +
+                        frames.joinToString("\n") { "  ${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
+                }
+        }.apply { isDaemon = true; start() }
+    }
+
+    fun unwatch() {
+        watched?.interrupt()
+        watched = null
+    }
+
+    /** Ends the run with [label], shows it, and keeps it for the history screen. */
     fun finish(context: Context, label: String) {
         val line = mark(label) ?: return
         synchronized(this) { startedNanos = 0L }
         Toast.makeText(context.applicationContext, line, Toast.LENGTH_LONG).show()
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(LAST, line + stalls).apply()
+        stalls = ""
     }
+
+    /** The last finished run, for copying from the history screen in debug builds. */
+    fun last(context: Context): String? =
+        if (!BuildConfig.DEBUG) null
+        else context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(LAST, null)
+
+    private const val PREFS = "remanence.debug"
+    private const val LAST = "last_scan_timing"
 }

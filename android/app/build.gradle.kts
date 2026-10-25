@@ -140,7 +140,9 @@ android {
             initWith(getByName("release"))
             matchingFallbacks += "release"
             isDebuggable = false
-            buildConfigField("boolean", "REMANENCE_ATOMIC_REGISTRATION", "false")
+            // The server in prod mode requires atomic registration; the older
+            // onboarding paths are closed there.
+            buildConfigField("boolean", "REMANENCE_ATOMIC_REGISTRATION", "true")
             buildConfigField("boolean", "REMANENCE_PLAY_BETA", "true")
             buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", "true")
             buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", "true")

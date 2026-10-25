@@ -22,7 +22,7 @@
     <string name="rework_creation_unknown_detail">your passkey may have been saved, but we didn’t get confirmation. check before continuing, and don’t create another one</string>
     <string name="rework_finishing_title">finishing your account</string>
     <string name="rework_nav_home">home</string>
-    <string name="rework_nav_sent">sent</string>
+    <string name="rework_nav_sent">history</string>
     <string name="rework_history_empty_title">your first postcard starts here</string>
     <string name="rework_history_empty_detail">once you send a postcard, you’ll see here when it arrives and gets opened</string>
     <string name="rework_history_make">make a postcard</string>

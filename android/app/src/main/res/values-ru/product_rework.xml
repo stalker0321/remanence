@@ -22,7 +22,7 @@
     <string name="rework_creation_unknown_detail">ключ мог сохраниться, но подтверждение не пришло. проверьте, прежде чем продолжать, и не создавайте ещё один</string>
     <string name="rework_finishing_title">заканчиваем настройку</string>
     <string name="rework_nav_home">главная</string>
-    <string name="rework_nav_sent">отправленные</string>
+    <string name="rework_nav_sent">история</string>
     <string name="rework_history_empty_title">здесь начнётся ваша первая открытка</string>
     <string name="rework_history_empty_detail">после отправки здесь будет видно, когда открытку получили и открыли</string>
     <string name="rework_history_make">собрать открытку</string>

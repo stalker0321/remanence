@@ -22,7 +22,7 @@
     <string name="rework_creation_unknown_detail">ключ міг зберегтися, але підтвердження не прийшло. перевірте, перш ніж продовжувати, і не створюйте ще один</string>
     <string name="rework_finishing_title">завершуємо налаштування</string>
     <string name="rework_nav_home">головна</string>
-    <string name="rework_nav_sent">надіслані</string>
+    <string name="rework_nav_sent">історія</string>
     <string name="rework_history_empty_title">тут почнеться ваша перша листівка</string>
     <string name="rework_history_empty_detail">після надсилання тут буде видно, коли листівку отримали й відкрили</string>
     <string name="rework_history_make">зібрати листівку</string>

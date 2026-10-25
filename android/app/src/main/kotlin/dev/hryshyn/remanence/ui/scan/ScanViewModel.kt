@@ -247,13 +247,8 @@ class ScanViewModel internal constructor(
     /** Debug builds: where the time of the last scan went, shown under the status. */
     private val _scanTimings = MutableStateFlow<String?>(null)
     val scanTimings: StateFlow<String?> = _scanTimings.asStateFlow()
-    private var scanStartedNanos = 0L
-    private val timingMarks = ArrayList<String>()
-
     private fun markTiming(label: String) {
-        if (!dev.hryshyn.remanence.BuildConfig.DEBUG || scanStartedNanos == 0L) return
-        timingMarks += "$label ${(System.nanoTime() - scanStartedNanos) / 1_000_000} ms"
-        _scanTimings.value = timingMarks.joinToString(" · ")
+        ScanTiming.mark(label)?.let { _scanTimings.value = it }
     }
 
     private val _openingPostcard = MutableStateFlow<dev.hryshyn.remanence.capture.CapturedPostcard?>(null)
@@ -406,8 +401,7 @@ class ScanViewModel internal constructor(
         val shadowInput = matcherShadow?.snapshot(jpegBytes)
         val generation = deliveryGeneration
         viewModelScope.launch {
-            scanStartedNanos = System.nanoTime()
-            timingMarks.clear()
+            ScanTiming.start()
             val accepted = acceptProcessed(jpegBytes, frontProcessor, generation)
             markTiming("снимок")
             if (accepted && captureSession.readyForMatching) {
@@ -1233,6 +1227,7 @@ class ScanViewModel internal constructor(
                 revokeIssuedGrant(result.grantId)
                 return
             }
+            markTiming("грант")
             try {
                 persistVerifiedRecipientBaseline(result.capsuleId.toString())
             } catch (cancelled: CancellationException) {
@@ -1245,6 +1240,7 @@ class ScanViewModel internal constructor(
                 revokeIssuedGrant(result.grantId)
                 throw failure
             }
+            markTiming("сохранено")
             if (generation != matchGeneration || !grantStillLive(result.grantId)) {
                 revokeIssuedGrant(result.grantId)
                 return

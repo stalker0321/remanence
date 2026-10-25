@@ -177,12 +177,14 @@ internal fun CapsuleRoute(
         }
     }
 
+    val timingContext = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(grantId, loadEpoch) {
         if (revoked.value) {
             state = CapsuleRouteState.Failed(CapsuleRouteFailure.CLOSED)
             return@LaunchedEffect
         }
         state = CapsuleRouteState.Loading
+        dev.hryshyn.remanence.ui.scan.ScanTiming.mark("экран")
         try {
             val binding = contentFactory()
             if (binding.capsuleId.isEmpty()) throw IllegalStateException("no capsule binding")
@@ -262,6 +264,7 @@ internal fun CapsuleRoute(
             }
             state = loaded
             readyCapsuleId = if (loaded is CapsuleRouteState.Ready) binding.capsuleId else null
+            dev.hryshyn.remanence.ui.scan.ScanTiming.finish(timingContext, "показ")
         } catch (cancelled: CancellationException) {
             // Canceled/aborted load AFTER content acquisition (route or
             // grant removed while still Loading): the Ready-guarded

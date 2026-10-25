@@ -349,7 +349,6 @@ object FrozenMatcherS3 {
     /** Decisive winner: may pass the strict gate with a lower inlier ratio. */
     const val DECISIVE_MIN_SCORE = 40.0
     const val DECISIVE_MIN_SEPARATION = 20.0
-    const val DECISIVE_MIN_INLIER_RATIO = 0.6
 
     /**
      * Several references may describe one card (sender and recipient
@@ -386,7 +385,7 @@ object FrozenMatcherS3 {
             strictGate.reason == StrictCombinedRejectReason.INLIER_RATIO_BELOW_FLOOR &&
             best.finalScore >= DECISIVE_MIN_SCORE && separation >= DECISIVE_MIN_SEPARATION
         ) {
-            StrictCombinedGate.decide(baseline, evidence, minInlierRatio = DECISIVE_MIN_INLIER_RATIO)
+            StrictCombinedGate.decideDecisive(baseline, evidence)
         } else {
             strictGate
         }

@@ -100,7 +100,24 @@ object StrictCombinedGate {
     fun decide(
         baselineAccepted: Boolean,
         evidence: StrictCombinedEvidence?,
-        minInlierRatio: Double = MIN_INLIER_RATIO,
+    ): StrictCombinedDecision = decideWith(baselineAccepted, evidence, MIN_INLIER_RATIO)
+
+    /**
+     * The same gate with [DECISIVE_MIN_INLIER_RATIO] as the inlier-ratio
+     * floor, for a decisive winner (the caller checks score and separation).
+     */
+    fun decideDecisive(
+        baselineAccepted: Boolean,
+        evidence: StrictCombinedEvidence?,
+    ): StrictCombinedDecision = decideWith(baselineAccepted, evidence, DECISIVE_MIN_INLIER_RATIO)
+
+    /** Inlier-ratio floor for a decisive winner; see [decideDecisive]. */
+    const val DECISIVE_MIN_INLIER_RATIO: Double = 0.6
+
+    private fun decideWith(
+        baselineAccepted: Boolean,
+        evidence: StrictCombinedEvidence?,
+        minInlierRatio: Double,
     ): StrictCombinedDecision {
         if (!baselineAccepted) {
             return StrictCombinedDecision.Reject(

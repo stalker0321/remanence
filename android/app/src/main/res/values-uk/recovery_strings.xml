@@ -1,6 +1,6 @@
 <resources>
     <string name="recovery_title">збережіть доступ до листівок</string>
-    <string name="recovery_prf_missing">ключ доступу збережено, але він не може захистити ваші листівки, тож налаштування не завершено. повтор, найімовірніше, не допоможе</string>
+    <string name="recovery_prf_missing">цей ключ доступу не може захистити ваші листівки, тож доступ поки не збережено. деякі менеджери паролів, наприклад Bitwarden, поки так не вміють. використайте менеджер паролів Google</string>
     <string name="recovery_failed">не вдалося відновити доступ. перевірте інтернет і спробуйте знову</string>
     <string name="recovery_old_android">для ключів доступу потрібен Android 9 або новіший</string>
     <string name="recovery_verified">доступ збережено й перевірено. код відновлення можна не зберігати</string>

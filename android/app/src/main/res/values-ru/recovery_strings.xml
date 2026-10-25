@@ -1,6 +1,6 @@
 <resources>
     <string name="recovery_title">сохраните доступ к открыткам</string>
-    <string name="recovery_prf_missing">ключ доступа сохранился, но не может защитить ваши открытки, поэтому настройка не закончена. повтор, скорее всего, не поможет</string>
+    <string name="recovery_prf_missing">этот ключ доступа не может защитить ваши открытки, поэтому доступ пока не сохранён. некоторые менеджеры паролей, например Bitwarden, пока так не умеют. используйте менеджер паролей Google</string>
     <string name="recovery_failed">не получилось восстановить доступ. проверьте интернет и попробуйте снова</string>
     <string name="recovery_old_android">для ключей доступа нужен Android 9 или новее</string>
     <string name="recovery_verified">доступ сохранён и проверен. код восстановления можно не сохранять</string>

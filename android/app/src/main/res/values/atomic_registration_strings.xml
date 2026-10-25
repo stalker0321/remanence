@@ -1,5 +1,5 @@
 <resources>
-    <string name="atomic_registration_prf_unavailable">the passkey was saved, but it can’t protect your postcards, so setup isn’t finished. checking again may fail too</string>
+    <string name="atomic_registration_prf_unavailable">the passkey was saved, but it can’t protect your postcards. some password managers, Bitwarden for example, can’t do this yet. use Google Password Manager instead</string>
     <string name="atomic_registration_failed">couldn’t finish this step. check your connection and try later</string>
     <string name="atomic_registration_unknown">your account may already be saved. check, retry the same step, or sign in again</string>
     <string name="atomic_registration_reauthenticate">confirm your Google account again to continue</string>

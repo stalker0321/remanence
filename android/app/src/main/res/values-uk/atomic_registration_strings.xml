@@ -1,5 +1,5 @@
 <resources>
-    <string name="atomic_registration_prf_unavailable">ключ збережено, але він не може захистити ваші листівки, тож налаштування не завершено. повторна перевірка теж може не пройти</string>
+    <string name="atomic_registration_prf_unavailable">ключ збережено, але він не може захистити ваші листівки. деякі менеджери паролів, наприклад Bitwarden, поки так не вміють. використайте менеджер паролів Google</string>
     <string name="atomic_registration_failed">не вдалося завершити цей крок. перевірте інтернет і спробуйте пізніше</string>
     <string name="atomic_registration_unknown">акаунт міг уже зберегтися. перевірте, повторіть цей самий крок або увійдіть знову</string>
     <string name="atomic_registration_reauthenticate">підтвердьте акаунт Google ще раз, щоб продовжити</string>

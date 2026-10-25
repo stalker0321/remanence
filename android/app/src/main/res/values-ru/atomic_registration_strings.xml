@@ -1,5 +1,5 @@
 <resources>
-    <string name="atomic_registration_prf_unavailable">ключ сохранился, но не может защитить ваши открытки, поэтому настройка не закончена. повторная проверка тоже может не пройти</string>
+    <string name="atomic_registration_prf_unavailable">ключ сохранился, но не может защитить ваши открытки. некоторые менеджеры паролей, например Bitwarden, пока так не умеют. используйте менеджер паролей Google</string>
     <string name="atomic_registration_failed">не получилось закончить этот шаг. проверьте интернет и попробуйте позже</string>
     <string name="atomic_registration_unknown">аккаунт мог уже сохраниться. проверьте, повторите этот же шаг или войдите снова</string>
     <string name="atomic_registration_reauthenticate">подтвердите аккаунт Google ещё раз, чтобы продолжить</string>

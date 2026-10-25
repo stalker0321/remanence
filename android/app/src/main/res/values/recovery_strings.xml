@@ -1,6 +1,6 @@
 <resources>
     <string name="recovery_title">keep access to your postcards</string>
-    <string name="recovery_prf_missing">the passkey was saved, but it can’t protect your postcards, so setup isn’t finished. trying again probably won’t help</string>
+    <string name="recovery_prf_missing">this passkey can’t protect your postcards, so access isn’t saved yet. some password managers, Bitwarden for example, can’t do this yet. use Google Password Manager instead</string>
     <string name="recovery_failed">couldn’t restore access. check your connection and try again</string>
     <string name="recovery_old_android">passkeys need Android 9 or newer</string>
     <string name="recovery_verified">access is saved and checked. you don’t have to keep a recovery code</string>

@@ -157,6 +157,16 @@ class IncomingCapsuleSyncWorker(
                     TimeUnit.MILLISECONDS,
                 )
                 .also { builder -> identity.tags.forEach(builder::addTag) }
+                .also { builder ->
+                    // A scan waits on this sync while the person looks at the
+                    // screen; ordinary jobs can sit in the system batch for
+                    // ~30 s. Android 12+ runs expedited jobs at once. Older
+                    // versions would need a foreground notification, so they
+                    // keep the ordinary request.
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                        builder.setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                    }
+                }
                 .build()
         }
 

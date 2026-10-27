@@ -76,7 +76,7 @@ class BetaUiDeviceTest {
     @Test fun raisedSelfActionUsesCurrentTranslationAndPressCallback() {
         var calls = 0
         rule.setContent { HoldTheme { Surface(Modifier.fillMaxSize()) {
-            HoldActionObject(stringResource(R.string.recipient_design_self_title), "@qa_fixture",
+            HoldActionObject("for myself", "@qa_fixture",
                 stringResource(R.string.recipient_design_self_action), { calls++ },
                 Modifier.testTag("self_fixture"), compact = true)
         } } }

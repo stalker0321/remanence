@@ -170,11 +170,18 @@ class IncomingCapsuleSyncWorker(
                 .build()
         }
 
-        /** Enqueues exactly one account-scoped KEEP chain. */
-        fun enqueue(workManager: WorkManager, owner: UserId): Operation =
+        /**
+         * Enqueues exactly one account-scoped chain. KEEP by default; REPLACE
+         * only for work that has not started, when someone waits on the result.
+         */
+        fun enqueue(
+            workManager: WorkManager,
+            owner: UserId,
+            policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP,
+        ): Operation =
             workManager.enqueueUniqueWork(
                 AccountWorkIdentity.incomingSync(owner).uniqueName,
-                ExistingWorkPolicy.KEEP,
+                policy,
                 request(owner),
             )
 

@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.work.WorkManager
 import androidx.work.await
+import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
 import java.io.File
 import dev.hryshyn.remanence.core.crypto.AndroidKeystoreKekBoundary
@@ -1769,11 +1770,14 @@ class AppContainer private constructor(
         )
     }
 
-    /** A10b owner-scoped incoming scheduling boundary with safe typed outcomes. */
-    suspend fun scheduleIncomingSync(owner: UserId): IncomingSyncSchedulingOutcome =
-        scheduleIncomingSyncWithOwnerRead(owner) {
-            currentAccountStore.load()?.userId
-        }
+    /**
+     * A10b owner-scoped incoming scheduling boundary with safe typed outcomes.
+     * [promptly] is for a person waiting on the screen (a scan): work that
+     * only waits for its retry delay is replaced so it runs now, instead of
+     * KEEP leaving the scan behind a 30 s+ backoff.
+     */
+    suspend fun scheduleIncomingSync(owner: UserId, promptly: Boolean = false): IncomingSyncSchedulingOutcome =
+        scheduleIncomingSyncWithOwnerRead(owner, accountRead = { currentAccountStore.load()?.userId }, promptly = promptly)
 
     /**
      * The owner-read seam keeps the lease invariant testable without changing
@@ -1783,6 +1787,7 @@ class AppContainer private constructor(
     internal suspend fun scheduleIncomingSyncWithOwnerRead(
         owner: UserId,
         accountRead: suspend () -> String?,
+        promptly: Boolean = false,
     ): IncomingSyncSchedulingOutcome {
         // Capture the lease before the first account/token read. It must never
         // be refreshed after a suspension: an old A attempt must remain stale
@@ -1810,6 +1815,7 @@ class AppContainer private constructor(
             // into Root/Scan or turn it into an unconditional "enqueued".
             val workManager = WorkManager.getInstance(appContext)
             lateinit var enqueueOperation: androidx.work.Operation
+            var replacedWaiting = false
             val keepSchedule = IncomingKeepScheduleOperation(
                 observe = {
                     val existing = withContext(Dispatchers.IO) {
@@ -1835,11 +1841,18 @@ class AppContainer private constructor(
                         }
                     }
                 },
-                enqueue = {
-                    // KEEP is mandatory even after an active snapshot. The
-                    // snapshot is observability only. The second owner read
-                    // is cancellation-transparent: lifecycle cancellation
-                    // must not become a false owner rejection.
+                enqueue = { observed ->
+                    // KEEP is mandatory after a running or blocked snapshot.
+                    // Only a prompt caller replaces work that has not started:
+                    // it is waiting for its retry delay, not doing anything.
+                    // The second owner read is cancellation-transparent:
+                    // lifecycle cancellation must not become a false owner
+                    // rejection.
+                    val policy = if (promptly && observed == ExistingIncomingWorkState.ENQUEUED) {
+                        ExistingWorkPolicy.REPLACE
+                    } else {
+                        ExistingWorkPolicy.KEEP
+                    }
                     val currentOwner = try {
                         accountRead()?.let { raw -> UserId.parseRest(raw) }
                     } catch (cancelled: CancellationException) {
@@ -1857,8 +1870,10 @@ class AppContainer private constructor(
                         dev.hryshyn.remanence.sync.IncomingCapsuleSyncWorker.enqueue(
                             workManager,
                             owner,
+                            policy,
                         )
                     } ?: throw IncomingScheduleLeaseRejected()
+                    replacedWaiting = policy == ExistingWorkPolicy.REPLACE
                 },
                 awaitEnqueue = { enqueueOperation.await() },
             )
@@ -1869,7 +1884,14 @@ class AppContainer private constructor(
             val prepared = incomingScheduleLocks.withOwner(owner) {
                 keepSchedule.prepare()
             }
-            keepSchedule.complete(prepared)
+            keepSchedule.complete(prepared).let { outcome ->
+                // A replaced chain is a fresh one, not the waiting work.
+                if (replacedWaiting && outcome is IncomingSyncSchedulingOutcome.AlreadyWaiting) {
+                    IncomingSyncSchedulingOutcome.Queued
+                } else {
+                    outcome
+                }
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -2208,6 +2230,8 @@ class AppContainer private constructor(
             },
             liveAccessToken = { ordinaryAccessToken() },
             finalAdmission = { owner, lease -> apiStack.admitOwnerLease(owner, lease) },
+            // Debug: a scan stuck behind a sync retry shows why in its timing.
+            onRetryable = { reason -> dev.hryshyn.remanence.ui.scan.ScanTiming.mark("сессия: $reason") },
         )
     }
 

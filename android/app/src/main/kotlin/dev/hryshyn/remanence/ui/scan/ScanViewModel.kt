@@ -1665,6 +1665,11 @@ class ScanViewModel internal constructor(
                 val outcome = scheduleIncomingSync(owner)
                 if (!scheduleCompletionIsCurrent(owner, generation, boundary, attempt)) return@launch
                 reporter.report(outcome)
+                markTiming(when (outcome) {
+                    IncomingSyncSchedulingOutcome.Queued -> "синхр запущена"
+                    is IncomingSyncSchedulingOutcome.AlreadyWaiting -> "синхр уже ${outcome.state.safeName}"
+                    else -> "синхр ${outcome.safeStatus}"
+                })
                 if (outcome is IncomingSyncSchedulingOutcome.Queued ||
                     outcome is IncomingSyncSchedulingOutcome.AlreadyWaiting
                 ) {
@@ -1743,8 +1748,10 @@ class ScanViewModel internal constructor(
                 if (becameReady == null &&
                     indexRematchIsCurrent(owner, generation, boundary, attempt)
                 ) {
+                    markTiming("индекс таймаут")
                     progressReporter.report("sync readiness timeout")
                 }
+                if (becameReady != null) markTiming("индекс готов")
                 if (becameReady != null &&
                     indexRematchIsCurrent(owner, generation, boundary, attempt)
                 ) {

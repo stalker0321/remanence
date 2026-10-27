@@ -40,6 +40,8 @@ internal class SessionOwnerCoordinator(
     private val currentOwner: suspend () -> UserId?,
     private val liveAccessToken: () -> String?,
     private val finalAdmission: ((UserId, SessionRequestLease?) -> Boolean)? = null,
+    /** Why a worker will retry: a debug seam, no secrets, never affects the result. */
+    private val onRetryable: (reason: String) -> Unit = {},
 ) {
 
     /** Test-only barrier immediately before the final atomic admission. */
@@ -47,7 +49,7 @@ internal class SessionOwnerCoordinator(
 
     suspend fun ensure(expectedOwner: UserId): SessionOwnerResolution {
         when (val before = readOwner()) {
-            OwnerRead.Unavailable -> return SessionOwnerResolution.Retryable
+            OwnerRead.Unavailable -> return retryable("owner unreadable")
             OwnerRead.Missing -> return SessionOwnerResolution.NoOwner
             is OwnerRead.Present -> if (before.owner != expectedOwner) {
                 return SessionOwnerResolution.AccountChanged
@@ -58,12 +60,12 @@ internal class SessionOwnerCoordinator(
             sessionResolver.bootstrap()
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
-            return SessionOwnerResolution.Retryable
+        } catch (failure: Exception) {
+            return retryable("bootstrap ${failure::class.java.simpleName}")
         }
 
         when (val after = readOwner()) {
-            OwnerRead.Unavailable -> return SessionOwnerResolution.Retryable
+            OwnerRead.Unavailable -> return retryable("owner unreadable")
             OwnerRead.Missing -> return SessionOwnerResolution.NoOwner
             is OwnerRead.Present -> if (after.owner != expectedOwner) {
                 return SessionOwnerResolution.AccountChanged
@@ -83,18 +85,22 @@ internal class SessionOwnerCoordinator(
                 return if (admitted) {
                     SessionOwnerResolution.Ready
                 } else {
-                    SessionOwnerResolution.Retryable
+                    retryable("not admitted")
                 }
             }
 
-            is SessionState.OfflineActive,
-            SessionState.RequiresConnectivity,
-            -> return SessionOwnerResolution.Retryable
+            is SessionState.OfflineActive -> return retryable("offline")
+            SessionState.RequiresConnectivity -> return retryable("needs connectivity")
 
             SessionState.SignedOut -> return SessionOwnerResolution.Rejected
             SessionState.RecoveryRequired -> return SessionOwnerResolution.RecoveryRequired
             is SessionState.RecoverySetupRequired -> return SessionOwnerResolution.RecoveryRequired
         }
+    }
+
+    private fun retryable(reason: String): SessionOwnerResolution {
+        runCatching { onRetryable(reason) }
+        return SessionOwnerResolution.Retryable
     }
 
     private suspend fun readOwner(): OwnerRead = try {

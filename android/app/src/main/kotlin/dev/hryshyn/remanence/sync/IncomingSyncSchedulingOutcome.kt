@@ -80,13 +80,14 @@ internal class OwnerScopedIncomingScheduleLocks {
 }
 
 /**
- * Snapshot is observability only. KEEP enqueue is always attempted after it,
- * including when the observed work was active, so a finish between query and
- * enqueue cannot discard the caller's retry request.
+ * Enqueue is always attempted after the snapshot, including when the observed
+ * work was active, so a finish between query and enqueue cannot discard the
+ * caller's retry request. The snapshot is handed to [enqueue] so a caller
+ * someone is waiting on can replace work that only waits for its retry delay.
  */
 internal class IncomingKeepScheduleOperation(
     private val observe: suspend () -> ExistingIncomingWorkState?,
-    private val enqueue: suspend () -> Unit,
+    private val enqueue: suspend (observed: ExistingIncomingWorkState?) -> Unit,
     private val awaitEnqueue: suspend () -> Unit = {},
 ) {
     internal sealed interface Preparation {
@@ -108,7 +109,7 @@ internal class IncomingKeepScheduleOperation(
             null
         }
         return try {
-            enqueue()
+            enqueue(observed)
             Preparation.Accepted(observed)
         } catch (cancelled: CancellationException) {
             throw cancelled

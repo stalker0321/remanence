@@ -157,6 +157,31 @@ class SessionOwnerCoordinatorTest {
     }
 
     @Test
+    fun retryableNamesItsReason() = runBlocking {
+        val reasons = mutableListOf<String>()
+        fun coordinator(state: SessionState, token: String?) = SessionOwnerCoordinator(
+            sessionResolver = object : SessionStateResolver {
+                override suspend fun bootstrap(): SessionState = state
+
+                override suspend fun logout(): SessionState = SessionState.SignedOut
+            },
+            currentOwner = { OWNER },
+            liveAccessToken = { token },
+            onRetryable = { reasons += it },
+        )
+
+        coordinator(SessionState.OfflineActive(OWNER_TEXT, "mykola", true, true, BUNDLE), null).ensure(OWNER)
+        coordinator(SessionState.RequiresConnectivity, null).ensure(OWNER)
+        coordinator(SessionState.Active(OWNER_TEXT, "mykola", true, true, BUNDLE), null).ensure(OWNER)
+        assertEquals(
+            SessionOwnerResolution.Ready,
+            coordinator(SessionState.Active(OWNER_TEXT, "mykola", true, true, BUNDLE), "access").ensure(OWNER),
+        )
+
+        assertEquals(listOf("offline", "needs connectivity", "not admitted"), reasons)
+    }
+
+    @Test
     fun activeWithoutRestoredBearerRemainsRetryable() = runBlocking {
         assertEquals(
             SessionOwnerResolution.Retryable,

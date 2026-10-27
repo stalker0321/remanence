@@ -324,8 +324,9 @@ class RemanenceViewModelFactory(
                 container.database.incomingCapsuleDao()
                     .observeSenderIndexCandidateCountForOwner(owner.toRestString())
             },
+            // The person is looking at the scan: don't leave it behind a retry delay.
             scheduleIncomingSync = { owner ->
-                container.scheduleIncomingSync(owner)
+                container.scheduleIncomingSync(owner, promptly = true)
             },
             networkConnected = {
                 val manager = container.appContext.getSystemService(

@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.Configuration
 import androidx.work.ListenableWorker
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerFactory
 import androidx.work.testing.WorkManagerTestInitHelper
@@ -1101,6 +1102,64 @@ class RemanenceApplicationContainerTest {
             )
             // The stale attempt cannot recreate a second KEEP chain.
             assertEquals(1, workManager.getWorkInfosForUniqueWork(ownerWorkName).get().size)
+        } finally {
+            container.database.close()
+            WorkManagerTestInitHelper.closeWorkDatabase()
+        }
+    }
+
+    @Test
+    fun promptScheduleReplacesWorkWaitingForItsRetryButOrdinaryKeepsIt() = runBlocking {
+        WorkManagerTestInitHelper.initializeTestWorkManager(
+            context,
+            Configuration.Builder()
+                .setMinimumLoggingLevel(android.util.Log.ERROR)
+                .setWorkerFactory(object : WorkerFactory() {
+                    override fun createWorker(
+                        appContext: Context,
+                        workerClassName: String,
+                        workerParameters: androidx.work.WorkerParameters,
+                    ): ListenableWorker? = if (workerClassName == IncomingCapsuleSyncWorker::class.java.name) {
+                        NoOpWorker(appContext, workerParameters)
+                    } else {
+                        null
+                    }
+                })
+                .build(),
+        )
+        val container = AppContainer(context, kekBoundaryOverride = SoftwareKekBoundary())
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c613")
+        val workManager = WorkManager.getInstance(context)
+        val ownerWorkName = dev.hryshyn.remanence.sync.AccountWorkIdentity
+            .incomingSync(owner)
+            .uniqueName
+        val accountRead: suspend () -> String? = { owner.toRestString() }
+
+        try {
+            // The test driver never meets the network constraint, so the
+            // first chain stays ENQUEUED, like one waiting for its retry delay.
+            assertEquals(
+                dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome.Queued,
+                container.scheduleIncomingSyncWithOwnerRead(owner, accountRead),
+            )
+            val waitingId = workManager.getWorkInfosForUniqueWork(ownerWorkName).get().single().id
+
+            assertEquals(
+                dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome.AlreadyWaiting(
+                    dev.hryshyn.remanence.sync.ExistingIncomingWorkState.ENQUEUED,
+                ),
+                container.scheduleIncomingSyncWithOwnerRead(owner, accountRead),
+            )
+            assertEquals(waitingId, workManager.getWorkInfosForUniqueWork(ownerWorkName).get().single().id)
+
+            assertEquals(
+                dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome.Queued,
+                container.scheduleIncomingSyncWithOwnerRead(owner, accountRead, promptly = true),
+            )
+            val live = workManager.getWorkInfosForUniqueWork(ownerWorkName).get()
+                .filter { it.state == WorkInfo.State.ENQUEUED }
+            assertEquals(1, live.size)
+            assertTrue(live.single().id != waitingId)
         } finally {
             container.database.close()
             WorkManagerTestInitHelper.closeWorkDatabase()

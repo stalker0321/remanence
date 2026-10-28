@@ -1,6 +1,7 @@
 [Unit]
 Description=Remanence backend
 After=network.target docker.service
+Wants=docker.service
 StartLimitIntervalSec=600
 StartLimitBurst=3
 
@@ -22,7 +23,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/vodkolyan/.local/share/remanence-t425-test/blobs
+ReadWritePaths=/var/lib/remanence/blobs
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

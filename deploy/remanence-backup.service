@@ -1,0 +1,11 @@
+[Unit]
+Description=Remanence production backup (database dump and blobs)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=vodkolyan
+Group=vodkolyan
+SupplementaryGroups=docker
+ExecStart=/home/vodkolyan/projects/Remanence-release/deploy/backup-prod.sh

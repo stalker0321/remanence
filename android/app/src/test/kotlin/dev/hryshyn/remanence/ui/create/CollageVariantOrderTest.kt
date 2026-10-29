@@ -100,4 +100,46 @@ class CollageVariantOrderTest {
         session.showNotice("no fit")
         assertEquals(first, session.arrangePreparedCandidates(input))
     }
+
+    @Test
+    fun everyLayoutAppearsOnceBeforeAnyPaletteRepeats() {
+        val input = listOf(candidate("g5", "a"), candidate("g5", "b"), candidate("g5", "c"),
+            candidate("g17", "a"), candidate("g17", "b"), candidate("g26", "a"), candidate("g26", "b"),
+            candidate("g11", "a"))
+        val result = CollageVariantOrder("4f0d8f3a-palettes").arrangePrepared(input)
+
+        assertEquals(input.size, result.size)
+        val grammars = result.map { it.variantKey().grammarId }
+        assertEquals(listOf("g5", "g17", "g26", "g11").sorted(), grammars.take(4).sorted())
+        // Second styles follow in the same grammar order as the first pass, then the third.
+        val firstPass = grammars.take(4)
+        assertEquals(firstPass.filter { it != "g11" }, grammars.subList(4, 7))
+        assertEquals(listOf("g5"), grammars.drop(7))
+    }
+
+    @Test
+    fun coreAndContentFitGrammarsLeadTheChooser() {
+        val input = listOf("g11", "g17", "g22", "g24", "g12", "g20", "g18").map { candidate(it, "a") }
+        repeat(20) { seed ->
+            val result = CollageVariantOrder("seed-$seed").arrangePrepared(input).map { it.variantKey().grammarId }
+            assertEquals(setOf("g12", "g20", "g18"), result.take(3).toSet())
+        }
+    }
+
+    @Test
+    fun theFirstStyleShownIsSeededNotAlphabetical() {
+        val input = listOf(candidate("g5", "a"), candidate("g5", "b"), candidate("g5", "c"))
+        val firstStyles = (0 until 30).map { CollageVariantOrder("draft-$it").arrangePrepared(input).first().variantKey().styleId }.toSet()
+        assertEquals(setOf("a", "b", "c"), firstStyles)
+    }
+
+    @Test
+    fun grammarOrderSurvivesLosingAStyle() {
+        val order = CollageVariantOrder("0b5f9d36-edits")
+        val input = listOf(candidate("g5", "a"), candidate("g5", "b"), candidate("g23", "a"),
+            candidate("g23", "b"), candidate("g27", "a"), candidate("g17", "a"))
+        val before = order.arrangePrepared(input).map { it.variantKey().grammarId }.distinct()
+        val lost = order.arrangePrepared(input.drop(1)).map { it.variantKey().grammarId }.distinct()
+        assertEquals(before, lost)
+    }
 }

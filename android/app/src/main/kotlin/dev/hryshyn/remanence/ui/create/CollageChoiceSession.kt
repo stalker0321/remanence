@@ -179,15 +179,55 @@ class CollageChoiceSession {
         return true
     }
 
-    /** Browsing moves the display cursor and invalidates any explicit selection. */
+    /**
+     * Grammars in chooser order. [CollageVariantOrder] opens the list with one
+     * card per grammar, so a grammar's first index is its browse card; its
+     * other styles are offered after selection, see [styleSiblings].
+     */
+    private val grammarOrder: List<String>
+        get() = candidates.map { it.variantKey().grammarId }.distinct()
+
+    val browseCount: Int
+        get() = grammarOrder.size
+
+    /** Browse position of the displayed grammar, whichever of its styles is shown. */
+    val browsePosition: Int
+        get() = displayed?.let { grammarOrder.indexOf(it.variantKey().grammarId) }?.coerceAtLeast(0) ?: 0
+
+    val hasPrevious: Boolean
+        get() = browsePosition > 0
+
+    val hasNext: Boolean
+        get() = browsePosition < browseCount - 1
+
+    /** Browsing moves between grammars and invalidates any explicit selection. */
     fun previous() {
-        if (displayIndex > 0) displayIndex -= 1
+        if (hasPrevious) showGrammar(browsePosition - 1)
         selectedIndex = null
     }
 
     fun next() {
-        if (displayIndex < candidates.lastIndex) displayIndex += 1
+        if (hasNext) showGrammar(browsePosition + 1)
         selectedIndex = null
+    }
+
+    private fun showGrammar(position: Int) {
+        val grammar = grammarOrder[position]
+        displayIndex = candidates.indexOfFirst { it.variantKey().grammarId == grammar }
+    }
+
+    /** Indices of every style of the displayed grammar, in chooser order. */
+    fun styleSiblings(): List<Int> {
+        val grammar = displayed?.variantKey()?.grammarId ?: return emptyList()
+        return candidates.indices.filter { candidates[it].variantKey().grammarId == grammar }
+    }
+
+    /** Shows and selects another style of the displayed grammar. */
+    fun selectStyle(index: Int): Boolean {
+        if (index !in styleSiblings()) return false
+        displayIndex = index
+        selectedIndex = index
+        return true
     }
 
     /** Source/note/music edit invalidation: drops candidates and selection. */

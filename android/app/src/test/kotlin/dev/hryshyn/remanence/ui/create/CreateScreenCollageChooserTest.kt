@@ -411,13 +411,15 @@ class CreateScreenCollageChooserTest {
         assertEquals(vm.collageChoices.selected?.candidateId, frozen!!.candidateId)
         composeRule.onNodeWithTag("collage_canvas").assertExists()
         composeRule.onNodeWithTag("collage_frozen").assertExists()
-        // Selected and browsing states share the frozen arrow/counter row.
-        composeRule.onNodeWithTag("collage_nav_counter")
-            .assertTextContains("✓ selected", substring = true)
+        // The selected screen offers styles, not browsing; Back returns to the arrows.
+        composeRule.onNodeWithTag("collage_next").assertDoesNotExist()
+        composeRule.runOnIdle { vm.clearFrozenCollageSelection() }
+        composeRule.waitForIdle()
+        val position = vm.collageChoices.browsePosition
         composeRule.onNodeWithTag("collage_next").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_next").performClick()
         composeRule.waitForIdle()
-        assertEquals(2, vm.collageChoices.displayIndex)
+        assertEquals(position + 1, vm.collageChoices.browsePosition)
         assertTrue(vm.collageChoices.selectedIndex == null)
         assertNull("navigation must invalidate the frozen selection", vm.frozenCollageSelection)
         vm.endSession()
@@ -691,12 +693,13 @@ class CreateScreenCollageChooserTest {
                 vm.clearFrozenCollageSelection()
                 while (vm.collageChoices.displayIndex > 0) vm.collageChoices.previous()
             }
-            repeat(vm.collageChoices.candidates.size) { index ->
+            repeat(vm.collageChoices.browseCount) { index ->
                 composeRule.onNodeWithTag("collage_canvas").assertIsDisplayed()
                 composeRule.onNodeWithTag("collage_notice").assertDoesNotExist()
                 composeRule.onNodeWithTag("collage_select").assertIsEnabled().performClick()
                 assertEquals(vm.collageChoices.displayed?.candidateId, vm.frozenCollageSelection?.candidateId)
-                if (index < vm.collageChoices.candidates.lastIndex) {
+                if (index < vm.collageChoices.browseCount - 1) {
+                    composeRule.runOnIdle { vm.clearFrozenCollageSelection() }
                     composeRule.onNodeWithTag("collage_next").performClick()
                 }
             }
@@ -785,8 +788,8 @@ class CreateScreenCollageChooserTest {
         composeRule.onNodeWithTag("collage_select").assertIsEnabled()
         composeRule.onNodeWithTag("create_content_scroll").assertDoesNotExist()
 
-        // Every browse page is real, drawable content with a usable action.
-        val count = vm.collageChoices.candidates.size
+        // Every browse page (one per grammar) is real, drawable content with a usable action.
+        val count = vm.collageChoices.browseCount
         assertTrue(count > 0)
         repeat(count) { index ->
             composeRule.onNodeWithTag("collage_canvas").assertIsDisplayed()
@@ -956,8 +959,64 @@ class CreateScreenCollageChooserTest {
         assertEquals(frozenId, vm.frozenCollageSelection?.candidateId)
         assertEquals(0, vm.collageChoices.selectedIndex)
         assertSame(listed, vm.collageChoices.candidates)
-        composeRule.onNodeWithTag("collage_selected_label", useUnmergedTree = true).assertExists()
+        // The selected screen refines the choice; browsing stays behind Back.
+        composeRule.onNodeWithTag("collage_previous").assertDoesNotExist()
         composeRule.onNodeWithTag("create_compose_continue").assertIsEnabled()
+        vm.endSession()
+    }
+
+    @Test
+    fun styleDotsRestyleTheChosenLayoutAndKeepItsCrop() {
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }
+        val vm = viewModel(originals, withFactory = true)
+        driveToContent(vm, ids)
+        composeRule.setContent {
+            CreateScreen(viewModel = vm, adapterFactory = null, requestPermissionOnAttach = false)
+        }
+        composeRule.onNodeWithTag("create_next").performClick()
+        composeRule.waitForIdle()
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.collageChoices.candidates.isNotEmpty() }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("collage_style_dots").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        val session = vm.collageChoices
+        val siblings = session.styleSiblings()
+        assertTrue("fixture must offer several styles: $siblings", siblings.size >= 2)
+        val chosen = requireNotNull(session.selected)
+        val grammar = chosen.expression.grammarId
+        composeRule.onNodeWithTag("collage_style_dots").assertExists()
+        composeRule.onNodeWithTag("collage_previous").assertDoesNotExist()
+
+        // Save a crop on the first photo, then pick another style.
+        val contentId = chosen.expression.placements[0].contentId
+        assertTrue(vm.openCrop(contentId))
+        vm.updateCrop(1.02f, 0.0f, 0.0f)
+        assertTrue(kotlinx.coroutines.runBlocking { vm.applyCropAndClose() })
+        composeRule.waitForIdle()
+        val target = session.candidates[siblings[1]]
+        val targetBase = target.expression.placements.first { it.contentId == contentId }.crop
+
+        composeRule.onNodeWithTag("collage_style_1").performClick()
+        composeRule.waitForIdle()
+
+        val restyled = requireNotNull(session.selected)
+        assertEquals(grammar, restyled.expression.grammarId)
+        assertEquals(target.variantKey(), restyled.variantKey())
+        assertEquals(restyled.candidateId, vm.frozenCollageSelection?.candidateId)
+        assertTrue("the saved crop must follow the style",
+            restyled.expression.placements.first { it.contentId == contentId }.crop != targetBase)
+        assertEquals(1.02f, requireNotNull(vm.cropCorrections.value[contentId]).zoom, 0.001f)
+        composeRule.onNodeWithTag("create_compose_continue").assertIsEnabled()
+
+        // Back to the first style: the crop is still there.
+        composeRule.onNodeWithTag("collage_style_0").performClick()
+        composeRule.waitForIdle()
+        assertEquals(chosen.variantKey(), session.selected?.variantKey())
+        assertEquals(1.02f, requireNotNull(vm.cropCorrections.value[contentId]).zoom, 0.001f)
         vm.endSession()
     }
 

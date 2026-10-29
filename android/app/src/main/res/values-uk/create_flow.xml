@@ -5,6 +5,7 @@
     <string name="create_use_postcard">обрати цю листівку</string>
     <string name="create_this_one">цей</string>
     <string name="create_continue">далі</string>
+    <string name="create_style_option">стиль %1$d з %2$d</string>
     <string name="create_preparing_expressions">збираємо варіанти…</string>
     <string name="create_no_fitting_expression">цим фото й словам бракує місця. спробуйте коротший текст або інші фото</string>
     <string name="create_previous_expression">попередній варіант</string>

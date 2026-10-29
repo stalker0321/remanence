@@ -25,7 +25,11 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.core.model.GeneratorExpression
+import dev.hryshyn.remanence.ui.collage.CollageCandidate
+import dev.hryshyn.remanence.ui.collage.CollageCandidateProvider
 import dev.hryshyn.remanence.ui.collage.CollageCropSource
+import dev.hryshyn.remanence.ui.collage.CollageProviderResult
+import dev.hryshyn.remanence.ui.collage.CollageTextMeasurer
 import dev.hryshyn.remanence.ui.collage.StyleRegistry
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertEquals
@@ -85,6 +89,15 @@ class CollageChoiceHostTest {
         }
     }
     private fun cropSource() = retainedCropSource
+
+    // The V3 provider builds one grammar in three styles, which the chooser shows as
+    // one card. Browsing tests relabel each style as its own grammar to get three cards.
+    private val threeGrammars: suspend (CollageTextMeasurer) -> List<CollageCandidate>? = { measurer ->
+        (CollageCandidateProvider(cropSource(), measurer).candidates(input(), null, null, null)
+            as? CollageProviderResult.Candidates)?.candidates?.map {
+            it.copy(expression = it.expression.copy(grammarId = "${it.expression.grammarId}-${it.styleId}"))
+        }
+    }
 
     private fun awaitCandidates(session: CollageChoiceSession) {
         composeRule.waitUntil(timeoutMillis = 10_000) {
@@ -177,7 +190,7 @@ class CollageChoiceHostTest {
         val session = CollageChoiceSession()
         composeRule.setContent {
             Column(Modifier.width(360.dp).verticalScroll(rememberScrollState())) {
-                CollageChoiceHost(session, input(), sources(), null, null, cropSource())
+                CollageChoiceHost(session, input(), sources(), null, null, cropSource(), candidateBuilder = threeGrammars)
             }
         }
         awaitCandidates(session)
@@ -208,7 +221,7 @@ class CollageChoiceHostTest {
         var panelWidth by mutableStateOf(360.dp)
         composeRule.setContent {
             Column(Modifier.width(panelWidth).verticalScroll(rememberScrollState())) {
-                CollageChoiceHost(session, input(), sources(), null, null, cropSource())
+                CollageChoiceHost(session, input(), sources(), null, null, cropSource(), candidateBuilder = threeGrammars)
             }
         }
         composeRule.waitUntil(timeoutMillis = 10_000) { session.candidates.isNotEmpty() }
@@ -386,6 +399,7 @@ class CollageChoiceHostTest {
                 session, input(), sources(), null, null, cropSource(),
                 onSelect = { selected += it },
                 onNavigate = { navigated += Unit },
+                candidateBuilder = threeGrammars,
             )
         }
         awaitCandidates(session)

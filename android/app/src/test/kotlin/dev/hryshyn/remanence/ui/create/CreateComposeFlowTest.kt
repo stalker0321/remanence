@@ -832,6 +832,14 @@ class CreateComposeFlowTest {
         val ids = previewContentIds(vm)
         CollageFreezeFixture.freezeFirstCandidateWithProductionSource(vm)
         assertTrue(vm.goToCompose())
+        // V3 builds one grammar, which browses as one card: give each candidate
+        // its own grammar so browsing has somewhere to go.
+        val relabelled = vm.collageChoices.candidates.mapIndexed { index, candidate ->
+            val expression = candidate.expression.copy(grammarId = "${candidate.expression.grammarId}-$index")
+            candidate.copy(candidateId = GeneratorBer1Provider.candidateIdFor(expression), expression = expression)
+        }
+        vm.collageChoices.replaceCandidates(relabelled)
+        relabelled.forEach { CollageFreezeFixture.reportDrawable(vm, it.candidateId) }
         // Explicitly return to browsing before opening the crop.
         vm.collageChoices.next()
         vm.collageChoices.previous()

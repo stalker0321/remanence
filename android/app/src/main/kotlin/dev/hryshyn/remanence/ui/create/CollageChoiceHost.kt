@@ -3,6 +3,12 @@ package dev.hryshyn.remanence.ui.create
 import android.graphics.BitmapFactory
 import android.util.Log
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.Role
+import dev.hryshyn.remanence.ui.hold.HoldColors
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -249,13 +255,13 @@ internal fun CollageBrowseNav(
     val previousLabel = stringResource(R.string.create_previous_expression)
     val nextLabel = stringResource(R.string.create_next_expression)
     val selected = !showSelect && session.selectedIndex != null
-    val counter = "${session.displayIndex + 1} / ${session.candidates.size}" +
+    val counter = "${session.browsePosition + 1} / ${session.browseCount}" +
         if (selected) " · ✓ ${stringResource(R.string.create_selected_expression)}" else ""
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically) {
         HoldTextButton(
             onClick = { session.previous(); onNavigate() },
-            enabled = session.displayIndex > 0,
+            enabled = session.hasPrevious,
             modifier = Modifier.testTag("collage_previous").semantics { contentDescription = previousLabel },
         ) { Text("←", style = MaterialTheme.typography.titleLarge) }
         Box(if (selected) Modifier.testTag("collage_selected_label") else Modifier) {
@@ -264,7 +270,7 @@ internal fun CollageBrowseNav(
         }
         HoldTextButton(
             onClick = { session.next(); onNavigate() },
-            enabled = session.displayIndex < session.candidates.lastIndex,
+            enabled = session.hasNext,
             modifier = Modifier.testTag("collage_next").semantics { contentDescription = nextLabel },
         ) { Text("→", style = MaterialTheme.typography.titleLarge) }
         if (showSelect) HoldButton(
@@ -274,6 +280,50 @@ internal fun CollageBrowseNav(
         ) { Text(stringResource(R.string.create_this_one)) }
     }
 }
+
+/**
+ * After selection: every style of the chosen grammar as a palette dot, paper
+ * on one half and the music or text colour on the other. Fonts and corners
+ * change too; the canvas above shows them as soon as a dot is tapped.
+ */
+@Composable
+internal fun CollageStyleDots(
+    session: CollageChoiceSession,
+    onStyle: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val siblings = session.styleSiblings()
+    if (siblings.size < 2) return
+    Row(modifier.fillMaxWidth().testTag("collage_style_dots"), horizontalArrangement = Arrangement.Center) {
+        siblings.forEachIndexed { position, index ->
+            val palette = StyleRegistry.style(session.candidates[index].variantKey().styleId)?.palette
+            val paper = palette?.paper?.let(::styleColor) ?: HoldColors.Field
+            val second = palette?.let { if (it.sound.equals(it.paper, ignoreCase = true)) it.ink else it.sound }
+                ?.let(::styleColor) ?: HoldColors.Ink
+            val chosen = index == session.displayIndex
+            val label = stringResource(R.string.create_style_option, position + 1, siblings.size)
+            Box(
+                Modifier.size(48.dp)
+                    .selectable(selected = chosen, enabled = enabled, role = Role.RadioButton) { onStyle(index) }
+                    .semantics { contentDescription = label }
+                    .testTag("collage_style_$position"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Canvas(Modifier.size(28.dp)) {
+                    drawArc(paper, 135f, 180f, useCenter = true)
+                    drawArc(second, -45f, 180f, useCenter = true)
+                    drawCircle(HoldColors.Ink.copy(alpha = 0.14f), style = Stroke(1.dp.toPx()))
+                    if (chosen) drawCircle(HoldColors.Accent, radius = size.minDimension / 2 + 4.dp.toPx(),
+                        style = Stroke(2.dp.toPx()))
+                }
+            }
+        }
+    }
+}
+
+private fun styleColor(hex: String): Color? =
+    runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrNull()
 
 private fun decodeSources(sources: List<GeneratorPreviewSource>): Map<String, ImageBitmap> =
     sources.mapNotNull { source ->

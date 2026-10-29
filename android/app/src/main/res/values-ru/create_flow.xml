@@ -5,6 +5,7 @@
     <string name="create_use_postcard">выбрать эту открытку</string>
     <string name="create_this_one">этот</string>
     <string name="create_continue">дальше</string>
+    <string name="create_style_option">стиль %1$d из %2$d</string>
     <string name="create_preparing_expressions">собираем варианты…</string>
     <string name="create_no_fitting_expression">этим фото и словам не хватает места. попробуйте текст короче или другие фото</string>
     <string name="create_previous_expression">предыдущий вариант</string>

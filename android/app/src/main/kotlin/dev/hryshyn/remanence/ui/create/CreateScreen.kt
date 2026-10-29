@@ -793,7 +793,11 @@ private fun ContentAndCompositionFlow(
                                     TextButton(onClick = { reviewing = false }, modifier = Modifier.fillMaxWidth()
                                         .testTag("create_review_back")) { Text(stringResource(R.string.create_back_to_expression)) }
                                 } else {
-                                    nav()
+                                    // A chosen layout is refined in place: its other styles
+                                    // replace the browse arrows until Back.
+                                    if (frozen != null) CollageStyleDots(session, { viewModel.switchCollageStyle(it) },
+                                        Modifier.padding(bottom = 4.dp))
+                                    else nav()
                                     Text(stringResource(R.string.hold_crop_hint), textAlign = TextAlign.Center,
                                         color = HoldColors.Muted, style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp).testTag("crop_hint"))

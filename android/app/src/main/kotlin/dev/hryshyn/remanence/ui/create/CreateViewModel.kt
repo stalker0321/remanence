@@ -996,6 +996,72 @@ class CreateViewModel(
         return true
     }
 
+    /**
+     * Swaps the frozen choice for another style of the same grammar. Styles never
+     * move frames, so every saved crop is re-applied to the new style's own
+     * solver window; a slot without a saved crop gets its solver window back.
+     */
+    fun switchCollageStyle(index: Int): Boolean {
+        if (frozenCollageSelection == null || _cropSlot.value != null) return false
+        val current = collageChoices.selected ?: return false
+        if (index !in collageChoices.styleSiblings()) return false
+        val target = collageChoices.candidates[index]
+        if (target.candidateId == current.candidateId) return true
+        val proof = drawableInputs[target.candidateId]
+        if (proof == null || proof != prepareInputs()) {
+            failGuard("candidate is not drawable")
+            return false
+        }
+        val bases = LinkedHashMap<Int, GeneratorExpression.CropWindow>()
+        val transforms = LinkedHashMap<Int, dev.hryshyn.remanence.ui.collage.CropTransform>()
+        val placements = target.expression.placements.mapIndexed { slot, placement ->
+            val targetKey = cropKeyFor(target, placement.contentId)
+            val base = targetKey?.let(cropBases::get) ?: placement.crop ?: return@mapIndexed placement
+            bases[slot] = base
+            val saved = cropKeyFor(current, placement.contentId)?.let(_cropTransforms.value::get)
+            val normalized = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.normalizedCrop(base)
+            val transform = saved?.let { normalized?.let { crop -> CropEditorGeometry.clamp(crop, it) } }
+            val window = transform?.let { normalized?.let { crop -> CropEditorGeometry.window(crop, it) } }
+            if (transform != null && window != null) {
+                transforms[slot] = transform
+                placement.copy(crop = window.toCropWindow())
+            } else {
+                placement.copy(crop = base)
+            }
+        }
+        val expression = target.expression.copy(placements = placements)
+        if (GeneratorExpression.validateResolved(expression) !is GeneratorExpression.InputValidation.Valid) {
+            failGuard("restyled collage is invalid")
+            return false
+        }
+        val restyledId = dev.hryshyn.remanence.core.model.GeneratorBer1Provider.candidateIdFor(expression)
+        val restyled = target.copy(candidateId = restyledId, expression = expression)
+        val frozen = buildFrozenSelection(restyled, collageChooserInput(), _capsuleId) ?: run {
+            failGuard("restyled collage cannot freeze")
+            return false
+        }
+        if (!collageChoices.replaceCandidate(index, restyled) || !collageChoices.selectStyle(index)) {
+            failGuard("restyled collage is unavailable")
+            return false
+        }
+        // Only crops changed, so the text layout proof carries over.
+        drawableInputs[restyledId] = proof
+        fun stale(key: dev.hryshyn.remanence.ui.collage.CorrectionKey) =
+            key.expressionIdentity == target.candidateId || key.expressionIdentity == restyledId
+        fun key(slot: Int) = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection
+            .correctionKey(restyledId, slot, placements[slot].contentId)
+        cropBases = cropBases.filterKeys { !stale(it) } +
+            bases.mapNotNull { (slot, base) -> key(slot)?.let { it to base } }
+        _cropTransforms.value = _cropTransforms.value.filterKeys { !stale(it) } +
+            transforms.mapNotNull { (slot, transform) -> key(slot)?.let { it to transform } }
+        frozenCollageSelection = frozen
+        frozenDrawableInputs = proof
+        _flowError.value = null
+        refreshCropDisplay()
+        runCatching { reportTelemetrySelection() }
+        return true
+    }
+
     private fun clearCropState() {
         _cropSlot.value = null
         cropSlotCandidateId = null

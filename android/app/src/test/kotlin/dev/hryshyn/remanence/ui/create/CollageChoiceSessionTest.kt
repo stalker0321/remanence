@@ -15,13 +15,13 @@ import org.junit.Test
  */
 class CollageChoiceSessionTest {
 
-    private fun candidate(id: String) = CollageCandidate(
+    private fun candidate(id: String, grammar: String = "g-$id") = CollageCandidate(
         candidateId = id,
         styleId = id,
         branchId = "editorial-1+2-equal",
         expression = GeneratorExpression.ResolvedExpression(
             canvasVersion = 1,
-            grammarId = "remanence-editorial-rows",
+            grammarId = grammar,
             grammarVersion = 1,
             branchId = "editorial-1+2-equal",
             input = GeneratorExpression.GeneratorInput(
@@ -84,6 +84,33 @@ class CollageChoiceSessionTest {
         session.next()
         assertEquals(2, session.displayIndex)
         assertEquals(list, session.candidates)
+    }
+
+    @Test
+    fun browsingVisitsOneCardPerGrammarAndOffersItsStylesAfterSelection() {
+        val session = CollageChoiceSession()
+        // Arranged order: first styles of g5 and g6, then their second styles.
+        session.replaceCandidates(listOf(candidate("press", "g5"), candidate("signal", "g6"),
+            candidate("poster", "g5"), candidate("night-air", "g6")))
+        assertEquals(2, session.browseCount)
+        assertEquals(listOf(0, 2), session.styleSiblings())
+
+        session.next()
+        assertEquals(1, session.displayIndex)
+        assertEquals(1, session.browsePosition)
+        assertFalse(session.hasNext)
+        session.next()
+        assertEquals(1, session.displayIndex)
+        assertEquals(listOf(1, 3), session.styleSiblings())
+
+        assertFalse(session.selectStyle(2))
+        assertTrue(session.selectStyle(3))
+        assertEquals("night-air", session.selected?.styleId)
+        assertEquals(1, session.browsePosition)
+        // Browsing from a refined style moves on to the neighbouring grammar's card.
+        session.previous()
+        assertEquals(0, session.displayIndex)
+        assertNull(session.selectedIndex)
     }
 
     @Test

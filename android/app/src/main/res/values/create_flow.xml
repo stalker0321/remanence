@@ -5,6 +5,7 @@
     <string name="create_use_postcard">use this postcard</string>
     <string name="create_this_one">this one</string>
     <string name="create_continue">continue</string>
+    <string name="create_style_option">style %1$d of %2$d</string>
     <string name="create_preparing_expressions">putting it together…</string>
     <string name="create_no_fitting_expression">these photos and words need a bit more room. try a shorter note or other photos</string>
     <string name="create_previous_expression">previous layout</string>

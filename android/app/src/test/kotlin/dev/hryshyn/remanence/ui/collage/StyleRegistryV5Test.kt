@@ -16,7 +16,10 @@ class StyleRegistryV5Test {
 
     @Test
     fun allFourteenGroupsBundled() {
-        assertEquals(33, StyleRegistry.ids.size)
+        val character = StyleRegistry.ids.count { style(it).version == StyleRegistry.CHARACTER_VERSION }
+        assertEquals(33, StyleRegistry.ids.size - character)
+        // Two per grammar, plus the blue-letter copy whose music band has its own colour.
+        assertEquals(29, character)
         val grammars = StyleRegistry.ids.map { style(it).grammar }.toSet()
         assertEquals(
             setOf(5, 6, 11, 12, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27),
@@ -58,7 +61,9 @@ class StyleRegistryV5Test {
                     FontRegistry.resourceFor(role.font, role.weight, role.italic),
                 )
             }
-            assertTrue("$id tracking sane", s.tracking in -0.1..0.1)
+            // Character styles letterspace their capitals up to .3 em.
+            val tracking = if (s.version == StyleRegistry.CHARACTER_VERSION) -0.1..0.35 else -0.1..0.1
+            assertTrue("$id tracking sane", s.tracking in tracking)
             assertTrue(
                 "$id surface mode",
                 s.surfaceMode in setOf("flat", "soft", "edge", "raised", "print"),

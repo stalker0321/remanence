@@ -41,7 +41,7 @@ class StyleRegistryTest {
                 "darkroom", "rose-stock", "registration",
                 "saffron", "blue-hour",
             ),
-            StyleRegistry.ids,
+            StyleRegistry.ids.filterTo(HashSet()) { style(it).version != StyleRegistry.CHARACTER_VERSION },
         )
         for (id in listOf("press", "blue-letter", "poster")) {
             assertEquals("style-study-1", style(id).version)

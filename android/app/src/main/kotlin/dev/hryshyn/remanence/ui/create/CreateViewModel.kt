@@ -833,10 +833,16 @@ class CreateViewModel(
         if (outcome !is dev.hryshyn.remanence.ui.collage.AllFamilyOutcome.Candidates) {
             return null
         }
+        // Marks take each style's type at the largest size the renderer will accept.
+        val markFits = textMeasurer?.let { measurer ->
+            AllFamilyV4Adapter.MarkFits { mark, shown, tracking ->
+                dev.hryshyn.remanence.ui.collage.CollageRenderer.markFits(measurer, mark, shown, tracking)
+            }
+        }
         val sealed = ArrayList<CollageCandidate>(outcome.candidates.size)
         for (candidate in outcome.candidates) {
           for (style in AllFamilyV4Adapter.stylesForGrammar(candidate.grammarId)) {
-            val sealedOutcome = AllFamilyV4Adapter.seal(candidate, input, senderHandle, style, artwork)
+            val sealedOutcome = AllFamilyV4Adapter.seal(candidate, input, senderHandle, style, artwork, markFits)
             if (sealedOutcome !is AllFamilyV4Adapter.Outcome.Sealed) continue
             sealed += CollageCandidate(
                 candidateId = GeneratorBer1Provider.candidateIdFor(sealedOutcome.expression),

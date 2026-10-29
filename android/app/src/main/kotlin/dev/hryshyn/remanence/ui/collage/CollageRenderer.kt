@@ -212,6 +212,8 @@ object CollageRenderer {
          * either fits the given box or reports visual overflow.
          */
         val softWrap: Boolean = true,
+        /** Letter spacing in em, as drawn. */
+        val tracking: Double = 0.0,
     )
 
     /** Measured layout metrics. Units are reference-canvas pixels. */
@@ -229,6 +231,44 @@ object CollageRenderer {
     fun interface TextMeasurer {
         fun measure(request: TextMeasureRequest): TextMeasurement
     }
+
+    /**
+     * Whether a provenance mark fits its sealed box as [shown] with [tracking].
+     * Prepare and the sender's seal-time type fitting share this one check.
+     */
+    fun markFits(
+        measurer: TextMeasurer,
+        mark: GeneratorExpression.ProvenanceMark,
+        shown: String,
+        tracking: Double,
+    ): Boolean {
+        val horizontal = mark.orientation == GeneratorExpression.MarkOrientation.HORIZONTAL
+        val maxWidth = if (horizontal) mark.width else mark.height
+        val maxHeight = if (horizontal) mark.height else mark.width
+        val measurement = measurer.measure(
+            TextMeasureRequest(
+                text = shown,
+                family = mark.family,
+                size = mark.size,
+                weight = mark.weight,
+                italic = mark.italic,
+                line = mark.line,
+                maxWidth = maxWidth,
+                maxHeight = maxHeight,
+                tracking = tracking,
+            ),
+        )
+        return !measurement.hasVisualOverflow &&
+            measurement.width >= 1 && measurement.height >= 1 &&
+            measurement.width <= maxWidth && measurement.height <= maxHeight
+    }
+
+    /**
+     * Brand tracking counts toward the fit only for character styles; older
+     * styles keep the measure their sent capsules were prepared with.
+     */
+    fun markFitTracking(style: StyleRegistry.Style, kind: GeneratorExpression.ProvenanceKind): Double =
+        if (kind == GeneratorExpression.ProvenanceKind.BRAND && style.wordmark != null) style.tracking else 0.0
 
     private fun fits(measurement: TextMeasurement, region: RectI): Boolean =
         !measurement.hasVisualOverflow &&
@@ -813,24 +853,8 @@ object CollageRenderer {
                     "font face ${mark.family}/${mark.weight}/${mark.italic} is not bundled",
                 )
             val regionRect = RectI(mark.x, mark.y, mark.width, mark.height)
-            val horizontal = mark.orientation == GeneratorExpression.MarkOrientation.HORIZONTAL
-            val measurement = measurer.measure(
-                TextMeasureRequest(
-                    text = mark.text,
-                    family = mark.family,
-                    size = mark.size,
-                    weight = mark.weight,
-                    italic = mark.italic,
-                    line = mark.line,
-                    maxWidth = if (horizontal) mark.width else mark.height,
-                    maxHeight = if (horizontal) mark.height else mark.width,
-                ),
-            )
-            if (measurement.hasVisualOverflow ||
-                measurement.width < 1 || measurement.height < 1 ||
-                measurement.width > (if (horizontal) mark.width else mark.height) ||
-                measurement.height > (if (horizontal) mark.height else mark.width)
-            ) {
+            val shown = if (mark.kind == GeneratorExpression.ProvenanceKind.BRAND) style.brandDisplay(mark.text) else mark.text
+            if (!markFits(measurer, mark, shown, markFitTracking(style, mark.kind))) {
                 return SceneResult.Rejected("provenance $index does not fit its sealed region")
             }
             // Frozen output carries no mark colour: marks resolve to the
@@ -840,7 +864,7 @@ object CollageRenderer {
                 (grammarNumber == "23" || grammarNumber == "24")
             provenanceScenes += SceneProvenance(
                 kind = mark.kind,
-                text = mark.text,
+                text = shown,
                 region = regionRect,
                 family = mark.family,
                 size = mark.size,
@@ -850,10 +874,11 @@ object CollageRenderer {
                 orientation = mark.orientation,
                 align = mark.align,
                 fontResourceId = face,
-                color = if (brandOnSoundBand) {
-                    parseColor(style.palette.soundInk)
-                } else {
-                    parseColor(style.palette.ink)
+                color = when {
+                    mark.kind == GeneratorExpression.ProvenanceKind.BRAND && style.wordmark?.ink != null ->
+                        parseColor(requireNotNull(style.wordmark.ink))
+                    brandOnSoundBand -> parseColor(style.palette.soundInk)
+                    else -> parseColor(style.palette.ink)
                 },
                 tracking = if (mark.kind == GeneratorExpression.ProvenanceKind.BRAND) {
                     style.tracking

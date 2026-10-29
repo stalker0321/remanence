@@ -73,6 +73,7 @@ class CollageTextMeasurer(
             fontWeight = weight,
             fontStyle = fontStyle,
             lineHeight = request.line.sp,
+            letterSpacing = (request.tracking * request.size).sp,
         )
         return measurer.measure(
             text = AnnotatedString(request.text),

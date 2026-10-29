@@ -150,8 +150,9 @@ class AllFamilyV4AdapterTest {
     @Test
     fun allAuthoredStylesAreEnumeratedOnceForTheirOwnGrammar() {
         val styles = FrozenGrammarPlans.ACTIVE_GRAMMAR_IDS.flatMap(AllFamilyV4Adapter::stylesForGrammar)
-        assertEquals(StyleRegistry.ids, styles.map { it.id }.toSet())
-        assertEquals(StyleRegistry.ids.size, styles.size)
+        val offered = StyleRegistry.ids.filterTo(HashSet()) { StyleRegistry.style(it)!!.offeredToSenders }
+        assertEquals(offered, styles.map { it.id }.toSet())
+        assertEquals(offered.size, styles.size)
         assertTrue(AllFamilyV4Adapter.stylesForGrammar(5).size > 1)
         assertTrue(AllFamilyV4Adapter.stylesForGrammar(23).size > 1)
         assertTrue(AllFamilyV4Adapter.stylesForGrammar(99).isEmpty())
@@ -166,5 +167,70 @@ class AllFamilyV4AdapterTest {
         assertEquals(expressions.size, expressions.map { it.style!!.styleId }.toSet().size)
         assertEquals(1, expressions.map { it.placements }.toSet().size)
         assertTrue(AllFamilyV4Adapter.seal(candidate(), input(), "Alice", style(5)) is AllFamilyV4Adapter.Outcome.Rejected)
+    }
+
+    /** A rough fit model: each letter is .55 em plus tracking wide, one line tall. */
+    private val roughFit = AllFamilyV4Adapter.MarkFits { mark, shown, tracking ->
+        val horizontal = mark.orientation == GeneratorExpression.MarkOrientation.HORIZONTAL
+        val long = if (horizontal) mark.width else mark.height
+        val short = if (horizontal) mark.height else mark.width
+        shown.length * mark.size * (0.55 + tracking) <= long && mark.line <= short
+    }
+
+    private fun sealed(style: String, grammarId: Int, fits: AllFamilyV4Adapter.MarkFits? = roughFit) =
+        (AllFamilyV4Adapter.seal(candidate(grammarId = grammarId), input(), "Alice",
+            requireNotNull(StyleRegistry.style(style)), markFits = fits) as AllFamilyV4Adapter.Outcome.Sealed).expression
+
+    private fun GeneratorExpression.ResolvedExpression.mark(kind: GeneratorExpression.ProvenanceKind) =
+        requireNotNull(provenance).single { it.kind == kind }
+
+    @Test
+    fun marksTakeTheStyleTypeAtTheLargestSizeThatFits() {
+        val brand = sealed("traffic", 23).mark(GeneratorExpression.ProvenanceKind.BRAND)
+        assertEquals("Narrow", brand.family)
+        assertEquals(700, brand.weight)
+        assertEquals(30, brand.size)
+        assertEquals(GeneratorExpression.markLine(30), brand.line)
+        assertEquals(GeneratorExpression.MarkAlign.CENTER, brand.align)
+        // The sealed text never changes; the style draws it in capitals.
+        assertEquals(GeneratorExpression.BRAND_TEXT, brand.text)
+        val sender = sealed("glacier", 23).mark(GeneratorExpression.ProvenanceKind.SENDER)
+        assertEquals(StyleRegistry.style("glacier")!!.sender.font, sender.family)
+        assertTrue(sender.size <= StyleRegistry.style("glacier")!!.sender.size)
+    }
+
+    @Test
+    fun aSwappingStyleMovesTheWordIntoTheSenderLine() {
+        val expression = sealed("seam", 26)
+        val brand = expression.mark(GeneratorExpression.ProvenanceKind.BRAND)
+        val sender = expression.mark(GeneratorExpression.ProvenanceKind.SENDER)
+        assertEquals(listOf(14, 616, 332, 20), listOf(brand.x, brand.y, brand.width, brand.height))
+        assertEquals(listOf(9, 221, 342, 33), listOf(sender.x, sender.y, sender.width, sender.height))
+        assertEquals(GeneratorExpression.MarkAlign.RIGHT, sender.align)
+        assertEquals(GeneratorExpression.MarkAlign.LEFT, brand.align)
+    }
+
+    @Test
+    fun aWordThatFitsNowhereRefusesOnlyACharacterStyle() {
+        val never = AllFamilyV4Adapter.MarkFits { _, _, _ -> false }
+        val outcome = AllFamilyV4Adapter.seal(candidate(), input(), "Alice", StyleRegistry.style("traffic")!!, markFits = never)
+        assertTrue(outcome is AllFamilyV4Adapter.Outcome.Rejected)
+        // An older style keeps the grammar's own mark, as before.
+        val brand = sealed("glacier", 23, never).mark(GeneratorExpression.ProvenanceKind.BRAND)
+        assertEquals(listOf("Gothic", "30"), listOf(brand.family, brand.size.toString()))
+    }
+
+    @Test
+    fun characterStylesWaitForSendersUntilEnabled() {
+        val character = StyleRegistry.ids.map { StyleRegistry.style(it)!! }
+            .filter { it.version == StyleRegistry.CHARACTER_VERSION }
+        assertTrue(character.all { it.offeredToSenders == StyleRegistry.CHARACTER_STYLES_OFFERED })
+        // The blue letter copy with a coloured music band replaces the original once offered.
+        assertEquals(!StyleRegistry.CHARACTER_STYLES_OFFERED, StyleRegistry.style("blue-letter")!!.offeredToSenders)
+        assertTrue(StyleRegistry.style("press")!!.offeredToSenders)
+        assertEquals("REMANENCE", StyleRegistry.style("kiosk")!!.brandDisplay(GeneratorExpression.BRAND_TEXT))
+        assertEquals("remanence", StyleRegistry.style("cobalt")!!.brandDisplay(GeneratorExpression.BRAND_TEXT))
+        assertEquals("Remanence", StyleRegistry.style("citrus")!!.brandDisplay(GeneratorExpression.BRAND_TEXT))
+        assertEquals("Remanence", StyleRegistry.style("press")!!.brandDisplay(GeneratorExpression.BRAND_TEXT))
     }
 }

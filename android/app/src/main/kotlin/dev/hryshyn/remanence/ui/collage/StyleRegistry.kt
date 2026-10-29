@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.collage
 
+import dev.hryshyn.remanence.BuildConfig
+import dev.hryshyn.remanence.core.model.GeneratorExpression
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -88,9 +90,53 @@ object StyleRegistry {
         val tracking: Double,
         /** Top-level surface enum string (`style.surface`), not the palette colour. */
         val surfaceMode: String,
+        /** Character styles only: how the word sits in the capsule; null keeps the sealed mark as is. */
+        val wordmark: Wordmark? = null,
     ) {
         val rolesInCanonicalOrder: List<TextStyle> get() = listOf(brand, sender, note, music)
+
+        /** Old receivers cannot open a style they lack, so new styles stay hidden from senders until enabled. */
+        val offeredToSenders: Boolean
+            get() = when {
+                version == CHARACTER_VERSION -> CHARACTER_STYLES_OFFERED
+                id in REPLACED_BY_CHARACTER -> !CHARACTER_STYLES_OFFERED
+                else -> true
+            }
+
+        /** The brand text as drawn: the sealed text stays [GeneratorExpression.BRAND_TEXT]. */
+        fun brandDisplay(sealed: String): String = when (wordmark?.case) {
+            BrandCase.LOWER -> sealed.lowercase()
+            BrandCase.UPPER -> sealed.uppercase()
+            BrandCase.TITLE, null -> sealed
+        }
     }
+
+    enum class BrandCase { LOWER, UPPER, TITLE }
+
+    /**
+     * The word "remanence" as part of a character style (`styles-character.js`):
+     * its case and colour at draw time, and at seal time its alignment, its
+     * orientation, or a swap with the sender line's box.
+     */
+    data class Wordmark(
+        val case: BrandCase,
+        val ink: String? = null,
+        val align: GeneratorExpression.MarkAlign? = null,
+        val orientation: GeneratorExpression.MarkOrientation? = null,
+        val swapWithSender: Boolean = false,
+    )
+
+    /** Version of the character styles; their records carry the [Wordmark] in canonical bytes. */
+    const val CHARACTER_VERSION = "character-1"
+
+    /**
+     * Step one ships the records so receivers can open these capsules; senders
+     * get them in step two. Debug builds offer them now for review.
+     */
+    val CHARACTER_STYLES_OFFERED: Boolean = BuildConfig.DEBUG
+
+    /** Old styles a character style replaces for senders once offered. */
+    private val REPLACED_BY_CHARACTER = setOf("blue-letter")
 
     private val stylesById: Map<String, Style> = listOf(
         Style(
@@ -720,9 +766,588 @@ object StyleRegistry {
             tracking = -0.02,
             surfaceMode = "flat",
         ),
+        Style(
+            id = "kiosk",
+            version = CHARACTER_VERSION,
+            grammar = 5,
+            palette = Palette(
+                paper = "#ece8dc",
+                ink = "#1c1c1c",
+                sound = "#e2502b",
+                soundInk = "#fff4e6",
+                surface = "#ece8dc",
+                edge = "#1c1c1c",
+            ),
+            brand = TextStyle("Narrow", 84, 700, false),
+            sender = TextStyle("StudyMono", 15, 400, false),
+            note = TextStyle("StudySans", 22, 400, false),
+            music = TextStyle("Narrow", 22, 700, false),
+            tracking = 0.03,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#e2502b"),
+        ),
+        Style(
+            id = "late-edition",
+            version = CHARACTER_VERSION,
+            grammar = 5,
+            palette = Palette(
+                paper = "#14171f",
+                ink = "#ebe5d6",
+                sound = "#c9b6ff",
+                soundInk = "#14171f",
+                surface = "#14171f",
+                edge = "#ebe5d6",
+            ),
+            brand = TextStyle("StudySerif", 70, 400, true),
+            sender = TextStyle("StudySerif", 19, 400, true),
+            note = TextStyle("StudySerif", 25, 400, false),
+            music = TextStyle("StudySerif", 21, 400, true),
+            tracking = -0.035,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.LOWER, ink = "#c9b6ff", align = GeneratorExpression.MarkAlign.RIGHT),
+        ),
+        Style(
+            id = "citrus",
+            version = CHARACTER_VERSION,
+            grammar = 17,
+            palette = Palette(
+                paper = "#f4e544",
+                ink = "#1d2b24",
+                sound = "#1d2b24",
+                soundInk = "#f4e544",
+                surface = "#f4e544",
+                edge = "#1d2b24",
+            ),
+            brand = TextStyle("Gothic", 70, 700, false),
+            sender = TextStyle("StudySans", 16, 700, false),
+            note = TextStyle("StudySans", 22, 400, false),
+            music = TextStyle("Gothic", 20, 700, false),
+            tracking = -0.05,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.TITLE),
+        ),
+        Style(
+            id = "cobalt",
+            version = CHARACTER_VERSION,
+            grammar = 17,
+            palette = Palette(
+                paper = "#eef0f4",
+                ink = "#1f3fbf",
+                sound = "#1f3fbf",
+                soundInk = "#eef0f4",
+                surface = "#eef0f4",
+                edge = "#1f3fbf",
+            ),
+            brand = TextStyle("StudySerif", 66, 400, true),
+            sender = TextStyle("StudySerif", 17, 400, true),
+            note = TextStyle("StudySerif", 24, 400, false),
+            music = TextStyle("StudySerif", 21, 400, true),
+            tracking = -0.03,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.LOWER, align = GeneratorExpression.MarkAlign.CENTER),
+        ),
+        Style(
+            id = "seam",
+            version = CHARACTER_VERSION,
+            grammar = 26,
+            palette = Palette(
+                paper = "#f1ede4",
+                ink = "#2a2622",
+                sound = "#2a2622",
+                soundInk = "#f1ede4",
+                surface = "#f1ede4",
+                edge = "#2a2622",
+            ),
+            brand = TextStyle("Narrow", 27, 700, false),
+            sender = TextStyle("StudySerif", 22, 400, true),
+            note = TextStyle("StudySans", 22, 400, false),
+            music = TextStyle("StudySans", 19, 700, false),
+            tracking = 0.14,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#c4452d", align = GeneratorExpression.MarkAlign.LEFT, swapWithSender = true),
+        ),
+        Style(
+            id = "dusk",
+            version = CHARACTER_VERSION,
+            grammar = 26,
+            palette = Palette(
+                paper = "#2c2440",
+                ink = "#f2dcc0",
+                sound = "#f29e6b",
+                soundInk = "#2c2440",
+                surface = "#2c2440",
+                edge = "#f2dcc0",
+            ),
+            brand = TextStyle("StudySerif", 30, 400, true),
+            sender = TextStyle("StudySerif", 20, 400, true),
+            note = TextStyle("StudySerif", 25, 400, false),
+            music = TextStyle("StudySerif", 21, 400, true),
+            tracking = -0.01,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.TITLE, ink = "#f29e6b", align = GeneratorExpression.MarkAlign.CENTER),
+        ),
+        Style(
+            id = "blue-letter-sound",
+            version = CHARACTER_VERSION,
+            grammar = 5,
+            palette = Palette(
+                paper = "#1525a0",
+                ink = "#f9edd8",
+                sound = "#ffc94a",
+                soundInk = "#1525a0",
+                surface = "#1525a0",
+                edge = "#f9edd8",
+            ),
+            brand = TextStyle("StudySerif", 67, 400, false),
+            sender = TextStyle("StudySerif", 20, 400, true),
+            note = TextStyle("StudySerif", 26, 400, false),
+            music = TextStyle("StudySerif", 22, 400, true),
+            tracking = -0.045,
+            surfaceMode = "flat",
+        ),
+        Style(
+            id = "tape",
+            version = CHARACTER_VERSION,
+            grammar = 6,
+            palette = Palette(
+                paper = "#eef1e6",
+                ink = "#1e1e1e",
+                sound = "#2f6bff",
+                soundInk = "#ffffff",
+                surface = "#eef1e6",
+                edge = "#1e1e1e",
+            ),
+            brand = TextStyle("StudyMono", 21, 400, false),
+            sender = TextStyle("StudyMono", 15, 400, false),
+            note = TextStyle("StudySans", 23, 400, false),
+            music = TextStyle("StudySans", 20, 700, false),
+            tracking = 0.3,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#2f6bff", orientation = GeneratorExpression.MarkOrientation.VERTICAL_DOWN),
+        ),
+        Style(
+            id = "cassis",
+            version = CHARACTER_VERSION,
+            grammar = 6,
+            palette = Palette(
+                paper = "#3a1631",
+                ink = "#ffd9e6",
+                sound = "#ffd9e6",
+                soundInk = "#3a1631",
+                surface = "#3a1631",
+                edge = "#ffd9e6",
+            ),
+            brand = TextStyle("StudySerif", 26, 400, true),
+            sender = TextStyle("StudySerif", 18, 400, true),
+            note = TextStyle("StudySerif", 24, 400, false),
+            music = TextStyle("StudySerif", 22, 400, true),
+            tracking = -0.02,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.TITLE, ink = "#ff8fb8"),
+        ),
+        Style(
+            id = "night-signal",
+            version = CHARACTER_VERSION,
+            grammar = 11,
+            palette = Palette(
+                paper = "#1b1b1d",
+                ink = "#f2f2ee",
+                sound = "#ffd400",
+                soundInk = "#1b1b1d",
+                surface = "#1b1b1d",
+                edge = "#f2f2ee",
+            ),
+            brand = TextStyle("Narrow", 54, 700, false),
+            sender = TextStyle("StudyMono", 15, 400, false),
+            note = TextStyle("StudySans", 23, 400, false),
+            music = TextStyle("Narrow", 22, 700, false),
+            tracking = 0.02,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#ffd400", align = GeneratorExpression.MarkAlign.RIGHT),
+        ),
+        Style(
+            id = "linen",
+            version = CHARACTER_VERSION,
+            grammar = 11,
+            palette = Palette(
+                paper = "#efe9df",
+                ink = "#3b3a36",
+                sound = "#7a8b6f",
+                soundInk = "#f7f3ea",
+                surface = "#efe9df",
+                edge = "#3b3a36",
+            ),
+            brand = TextStyle("StudySerif", 50, 400, true),
+            sender = TextStyle("StudySerif", 18, 400, true),
+            note = TextStyle("StudySerif", 23, 400, false),
+            music = TextStyle("StudySerif", 22, 400, true),
+            tracking = -0.03,
+            surfaceMode = "soft",
+            wordmark = Wordmark(BrandCase.LOWER, ink = "#7a8b6f", align = GeneratorExpression.MarkAlign.CENTER),
+        ),
+        Style(
+            id = "blueprint",
+            version = CHARACTER_VERSION,
+            grammar = 12,
+            palette = Palette(
+                paper = "#1d3fa8",
+                ink = "#e9eefc",
+                sound = "#e9eefc",
+                soundInk = "#1d3fa8",
+                surface = "#1d3fa8",
+                edge = "#e9eefc",
+            ),
+            brand = TextStyle("StudyMono", 20, 400, false),
+            sender = TextStyle("StudyMono", 15, 400, false),
+            note = TextStyle("StudySans", 19, 400, false),
+            music = TextStyle("StudyMono", 16, 400, false),
+            tracking = 0.25,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER),
+        ),
+        Style(
+            id = "rust-film",
+            version = CHARACTER_VERSION,
+            grammar = 12,
+            palette = Palette(
+                paper = "#2a1d17",
+                ink = "#f0dcc4",
+                sound = "#d9693b",
+                soundInk = "#2a1d17",
+                surface = "#2a1d17",
+                edge = "#f0dcc4",
+            ),
+            brand = TextStyle("StudySerif", 23, 400, true),
+            sender = TextStyle("StudySerif", 18, 400, true),
+            note = TextStyle("StudySans", 19, 400, false),
+            music = TextStyle("StudySerif", 19, 400, true),
+            tracking = -0.01,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.TITLE, ink = "#d9693b"),
+        ),
+        Style(
+            id = "gallery",
+            version = CHARACTER_VERSION,
+            grammar = 18,
+            palette = Palette(
+                paper = "#d9d6cf",
+                ink = "#222222",
+                sound = "#222222",
+                soundInk = "#f5f3ee",
+                surface = "#ffffff",
+                edge = "#bcb8af",
+            ),
+            brand = TextStyle("Gothic", 20, 700, false),
+            sender = TextStyle("Gothic", 16, 400, false),
+            note = TextStyle("StudySans", 22, 400, false),
+            music = TextStyle("Gothic", 19, 700, false),
+            tracking = 0.2,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#222222"),
+        ),
+        Style(
+            id = "mint-mount",
+            version = CHARACTER_VERSION,
+            grammar = 18,
+            palette = Palette(
+                paper = "#2f5d50",
+                ink = "#22322c",
+                sound = "#f2b8a0",
+                soundInk = "#22322c",
+                surface = "#eef3ea",
+                edge = "#c9d8cc",
+            ),
+            brand = TextStyle("Gothic", 20, 700, false),
+            sender = TextStyle("StudySerif", 19, 400, true),
+            note = TextStyle("StudySerif", 24, 400, false),
+            music = TextStyle("StudySerif", 21, 400, true),
+            tracking = 0.18,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#c4553c"),
+        ),
+        Style(
+            id = "record-shop",
+            version = CHARACTER_VERSION,
+            grammar = 20,
+            palette = Palette(
+                paper = "#f3efe4",
+                ink = "#1f1f1f",
+                sound = "#1f1f1f",
+                soundInk = "#f3efe4",
+                surface = "#f3efe4",
+                edge = "#1f1f1f",
+            ),
+            brand = TextStyle("Narrow", 27, 700, false),
+            sender = TextStyle("StudyMono", 15, 400, false),
+            note = TextStyle("StudySans", 22, 400, false),
+            music = TextStyle("Narrow", 23, 700, false),
+            tracking = 0.1,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#e8402f", align = GeneratorExpression.MarkAlign.LEFT, swapWithSender = true),
+        ),
+        Style(
+            id = "midnight-sleeve",
+            version = CHARACTER_VERSION,
+            grammar = 20,
+            palette = Palette(
+                paper = "#0f1b2e",
+                ink = "#e8e3d3",
+                sound = "#d9b25f",
+                soundInk = "#0f1b2e",
+                surface = "#0f1b2e",
+                edge = "#e8e3d3",
+            ),
+            brand = TextStyle("StudySerif", 20, 400, true),
+            sender = TextStyle("StudySerif", 19, 400, true),
+            note = TextStyle("StudySerif", 24, 400, false),
+            music = TextStyle("StudySerif", 23, 400, true),
+            tracking = -0.01,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.TITLE, ink = "#d9b25f", align = GeneratorExpression.MarkAlign.CENTER),
+        ),
+        Style(
+            id = "typewriter",
+            version = CHARACTER_VERSION,
+            grammar = 21,
+            palette = Palette(
+                paper = "#f4f1ea",
+                ink = "#2b2b2b",
+                sound = "#2b2b2b",
+                soundInk = "#f4f1ea",
+                surface = "#f4f1ea",
+                edge = "#2b2b2b",
+            ),
+            brand = TextStyle("StudyMono", 15, 400, false),
+            sender = TextStyle("StudyMono", 26, 400, false),
+            note = TextStyle("StudySans", 21, 400, false),
+            music = TextStyle("StudyMono", 17, 400, false),
+            tracking = 0.25,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#c23b22"),
+        ),
+        Style(
+            id = "sage-letter",
+            version = CHARACTER_VERSION,
+            grammar = 21,
+            palette = Palette(
+                paper = "#5f7563",
+                ink = "#f3efe2",
+                sound = "#f3efe2",
+                soundInk = "#3d4f40",
+                surface = "#5f7563",
+                edge = "#f3efe2",
+            ),
+            brand = TextStyle("StudySerif", 22, 400, true),
+            sender = TextStyle("StudySerif", 31, 400, true),
+            note = TextStyle("StudySerif", 26, 400, false),
+            music = TextStyle("StudySerif", 21, 400, true),
+            tracking = -0.01,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.TITLE, ink = "#f6d58e"),
+        ),
+        Style(
+            id = "marquee",
+            version = CHARACTER_VERSION,
+            grammar = 22,
+            palette = Palette(
+                paper = "#1c1a24",
+                ink = "#f3efe6",
+                sound = "#ffcf3f",
+                soundInk = "#1c1a24",
+                surface = "#1c1a24",
+                edge = "#f3efe6",
+            ),
+            brand = TextStyle("Narrow", 34, 700, false),
+            sender = TextStyle("StudySans", 17, 700, false),
+            note = TextStyle("StudySans", 23, 400, false),
+            music = TextStyle("Narrow", 23, 700, false),
+            tracking = 0.06,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#ffcf3f", align = GeneratorExpression.MarkAlign.LEFT, swapWithSender = true),
+        ),
+        Style(
+            id = "peony",
+            version = CHARACTER_VERSION,
+            grammar = 22,
+            palette = Palette(
+                paper = "#f6d9de",
+                ink = "#3c1f2b",
+                sound = "#3c1f2b",
+                soundInk = "#f6d9de",
+                surface = "#f6d9de",
+                edge = "#3c1f2b",
+            ),
+            brand = TextStyle("StudySerif", 21, 400, true),
+            sender = TextStyle("StudySerif", 34, 700, false),
+            note = TextStyle("StudySerif", 25, 400, false),
+            music = TextStyle("StudySerif", 22, 400, true),
+            tracking = -0.01,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.TITLE, ink = "#b5345a", align = GeneratorExpression.MarkAlign.CENTER),
+        ),
+        Style(
+            id = "traffic",
+            version = CHARACTER_VERSION,
+            grammar = 23,
+            palette = Palette(
+                paper = "#f2f0ea",
+                ink = "#1d1d1b",
+                sound = "#ff4d1f",
+                soundInk = "#1d1d1b",
+                surface = "#f2f0ea",
+                edge = "#1d1d1b",
+            ),
+            brand = TextStyle("Narrow", 30, 700, false),
+            sender = TextStyle("StudySans", 17, 700, false),
+            note = TextStyle("StudySans", 23, 400, false),
+            music = TextStyle("Narrow", 23, 700, false),
+            tracking = 0.12,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#1d1d1b", align = GeneratorExpression.MarkAlign.CENTER),
+        ),
+        Style(
+            id = "sea-glass",
+            version = CHARACTER_VERSION,
+            grammar = 23,
+            palette = Palette(
+                paper = "#1f3a3d",
+                ink = "#e6f2ee",
+                sound = "#9fd8c8",
+                soundInk = "#1f3a3d",
+                surface = "#1f3a3d",
+                edge = "#e6f2ee",
+            ),
+            brand = TextStyle("StudySerif", 30, 400, true),
+            sender = TextStyle("StudySerif", 18, 400, true),
+            note = TextStyle("StudySerif", 24, 400, false),
+            music = TextStyle("StudySerif", 21, 400, true),
+            tracking = -0.02,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.TITLE, ink = "#1f3a3d", align = GeneratorExpression.MarkAlign.RIGHT),
+        ),
+        Style(
+            id = "lime-pulse",
+            version = CHARACTER_VERSION,
+            grammar = 24,
+            palette = Palette(
+                paper = "#141414",
+                ink = "#f0f0ea",
+                sound = "#c8f03c",
+                soundInk = "#141414",
+                surface = "#141414",
+                edge = "#f0f0ea",
+            ),
+            brand = TextStyle("Gothic", 30, 700, false),
+            sender = TextStyle("StudyMono", 15, 400, false),
+            note = TextStyle("StudySans", 23, 400, false),
+            music = TextStyle("Gothic", 21, 700, false),
+            tracking = 0.04,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#141414", align = GeneratorExpression.MarkAlign.RIGHT),
+        ),
+        Style(
+            id = "coral-pulse",
+            version = CHARACTER_VERSION,
+            grammar = 24,
+            palette = Palette(
+                paper = "#f3ece2",
+                ink = "#2d2622",
+                sound = "#ff7a5c",
+                soundInk = "#2d2622",
+                surface = "#f3ece2",
+                edge = "#2d2622",
+            ),
+            brand = TextStyle("StudySerif", 32, 400, true),
+            sender = TextStyle("StudySerif", 18, 400, true),
+            note = TextStyle("StudySerif", 24, 400, false),
+            music = TextStyle("StudySerif", 22, 400, true),
+            tracking = -0.02,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.TITLE, ink = "#fff6ec", align = GeneratorExpression.MarkAlign.CENTER),
+        ),
+        Style(
+            id = "contact-sheet",
+            version = CHARACTER_VERSION,
+            grammar = 25,
+            palette = Palette(
+                paper = "#e7e5df",
+                ink = "#1e1e1e",
+                sound = "#1e1e1e",
+                soundInk = "#e7e5df",
+                surface = "#ffffff",
+                edge = "#1e1e1e",
+            ),
+            brand = TextStyle("StudyMono", 18, 400, false),
+            sender = TextStyle("StudyMono", 15, 400, false),
+            note = TextStyle("StudySans", 22, 400, false),
+            music = TextStyle("StudySans", 19, 400, false),
+            tracking = 0.3,
+            surfaceMode = "edge",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#d23c2a", align = GeneratorExpression.MarkAlign.LEFT, swapWithSender = true),
+        ),
+        Style(
+            id = "night-print",
+            version = CHARACTER_VERSION,
+            grammar = 25,
+            palette = Palette(
+                paper = "#16181d",
+                ink = "#e8e4da",
+                sound = "#e8e4da",
+                soundInk = "#16181d",
+                surface = "#f4f1ea",
+                edge = "#2c2f36",
+            ),
+            brand = TextStyle("StudySerif", 22, 400, true),
+            sender = TextStyle("StudySerif", 19, 400, true),
+            note = TextStyle("StudySerif", 24, 400, false),
+            music = TextStyle("StudySerif", 21, 400, true),
+            tracking = -0.01,
+            surfaceMode = "print",
+            wordmark = Wordmark(BrandCase.TITLE, ink = "#c9a7ff", align = GeneratorExpression.MarkAlign.CENTER),
+        ),
+        Style(
+            id = "museum",
+            version = CHARACTER_VERSION,
+            grammar = 27,
+            palette = Palette(
+                paper = "#f5f3ee",
+                ink = "#151515",
+                sound = "#151515",
+                soundInk = "#f5f3ee",
+                surface = "#f5f3ee",
+                edge = "#151515",
+            ),
+            brand = TextStyle("Gothic", 20, 700, false),
+            sender = TextStyle("Gothic", 17, 400, false),
+            note = TextStyle("StudySans", 22, 400, false),
+            music = TextStyle("Gothic", 20, 700, false),
+            tracking = 0.3,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.UPPER, ink = "#151515", align = GeneratorExpression.MarkAlign.LEFT),
+        ),
+        Style(
+            id = "ember-hero",
+            version = CHARACTER_VERSION,
+            grammar = 27,
+            palette = Palette(
+                paper = "#2a1410",
+                ink = "#f6e2c8",
+                sound = "#ff8a3d",
+                soundInk = "#2a1410",
+                surface = "#2a1410",
+                edge = "#f6e2c8",
+            ),
+            brand = TextStyle("StudySerif", 24, 400, true),
+            sender = TextStyle("StudySans", 16, 400, false),
+            note = TextStyle("StudySerif", 24, 400, false),
+            music = TextStyle("StudySerif", 22, 400, true),
+            tracking = -0.01,
+            surfaceMode = "flat",
+            wordmark = Wordmark(BrandCase.TITLE, ink = "#ff8a3d", align = GeneratorExpression.MarkAlign.LEFT, swapWithSender = true),
+        ),
     ).associateBy { it.id }
 
-    /** Bundled style ids: all 33 frozen treatments across the 14 active groups. */
+    /** Bundled style ids: the 33 frozen treatments and the character styles across the 14 active groups. */
     val ids: Set<String> get() = stylesById.keys
 
     /** Fail-closed lookup: `null` when [id] is not a bundled frozen style. */
@@ -755,6 +1380,14 @@ object StyleRegistry {
         }
         out.putInt(round(style.tracking * 1000.0).toInt())
         out.putString(style.surfaceMode)
+        // Older records end here, so their digests are unchanged.
+        style.wordmark?.let { mark ->
+            out.putString(mark.case.name)
+            out.putString(mark.ink.orEmpty())
+            out.putString(mark.align?.name.orEmpty())
+            out.putString(mark.orientation?.name.orEmpty())
+            out.putByte(if (mark.swapWithSender) 1 else 0)
+        }
         return out.toByteArray()
     }
 

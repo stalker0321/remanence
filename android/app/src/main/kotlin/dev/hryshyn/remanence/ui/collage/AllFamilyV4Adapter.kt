@@ -41,6 +41,8 @@ internal object AllFamilyV4Adapter {
         senderHandle: String,
         style: StyleRegistry.Style,
         artwork: GeneratorExpression.ArtworkRef? = null,
+        /** The renderer's own mark check; null keeps the grammar's mark type unstyled. */
+        markFits: MarkFits? = null,
     ): Outcome {
         if (style.grammar != candidate.grammarId) {
             return Outcome.Rejected(listOf("style belongs to another grammar"))
@@ -101,6 +103,9 @@ internal object AllFamilyV4Adapter {
             )
         }
 
+        val marks = if (markFits == null) provenance else styleMarks(provenance, style, markFits)
+            ?: return Outcome.Rejected(listOf("style ${style.id} marks do not fit"))
+
         val expression = GeneratorExpression.ResolvedExpression(
             canvasVersion = 1,
             grammarId = "g${candidate.grammarId}",
@@ -132,7 +137,7 @@ internal object AllFamilyV4Adapter {
                     artwork = if (music.mode in GeneratorExpression.MUSIC_COVER_MODES_V4) artwork else null,
                 )
             },
-            provenance = provenance.ifEmpty { null },
+            provenance = marks.ifEmpty { null },
             decor = candidate.plan.decor
                 .map {
                     GeneratorExpression.SceneDecor(
@@ -159,10 +164,10 @@ internal object AllFamilyV4Adapter {
     fun styleForGrammar(grammarId: Int): StyleRegistry.Style? =
         stylesForGrammar(grammarId).firstOrNull()
 
-    /** Every authored colour/type variant; all still pass seal and real prepare. */
+    /** Every colour/type variant offered to senders; all still pass seal and real prepare. */
     fun stylesForGrammar(grammarId: Int): List<StyleRegistry.Style> =
         StyleRegistry.ids.sorted().mapNotNull { id ->
-            StyleRegistry.style(id)?.takeIf { it.grammar == grammarId }
+            StyleRegistry.style(id)?.takeIf { it.grammar == grammarId && it.offeredToSenders }
         }
 
     private fun textType(text: StyleRegistry.TextStyle): GeneratorExpression.TextType =
@@ -184,6 +189,61 @@ internal object AllFamilyV4Adapter {
         "acid-ribbon" -> GeneratorExpression.DecorKind.ACID_RIBBON
         "print-plane" -> GeneratorExpression.DecorKind.PRINT_PLANE
         else -> GeneratorExpression.DecorKind.CARRIER
+    }
+
+    fun interface MarkFits {
+        fun fits(mark: GeneratorExpression.ProvenanceMark, shown: String, tracking: Double): Boolean
+    }
+
+    /**
+     * Gives the marks the style's own brand and sender type (`expression.js`):
+     * the largest size from the style's down to 16 (brand) or 14 (sender) that
+     * fits the box. A character style may first swap the brand into the sender
+     * line's box and set the brand's alignment and orientation. An older style
+     * whose type fits nowhere keeps the grammar's mark; a character style is
+     * refused instead, since its word is the point of the style.
+     */
+    private fun styleMarks(
+        marks: List<GeneratorExpression.ProvenanceMark>,
+        style: StyleRegistry.Style,
+        fits: MarkFits,
+    ): List<GeneratorExpression.ProvenanceMark>? {
+        val wordmark = style.wordmark
+        var placed = marks
+        val brandIndex = marks.indexOfFirst { it.kind == GeneratorExpression.ProvenanceKind.BRAND }
+        val senderIndex = marks.indexOfFirst { it.kind == GeneratorExpression.ProvenanceKind.SENDER }
+        if (wordmark?.swapWithSender == true && brandIndex >= 0 && senderIndex >= 0) {
+            val brand = marks[brandIndex]
+            val sender = marks[senderIndex]
+            placed = marks.toMutableList().also {
+                it[brandIndex] = brand.copy(x = sender.x, y = sender.y, width = sender.width, height = sender.height,
+                    orientation = sender.orientation)
+                it[senderIndex] = sender.copy(x = brand.x, y = brand.y, width = brand.width, height = brand.height,
+                    orientation = brand.orientation,
+                    align = if (brand.orientation == GeneratorExpression.MarkOrientation.HORIZONTAL) {
+                        GeneratorExpression.MarkAlign.RIGHT
+                    } else {
+                        GeneratorExpression.MarkAlign.LEFT
+                    })
+            }
+        }
+        return placed.map { mark ->
+            val brand = mark.kind == GeneratorExpression.ProvenanceKind.BRAND
+            val type = if (brand) style.brand else style.sender
+            val oriented = if (brand && wordmark != null) {
+                mark.copy(align = wordmark.align ?: mark.align, orientation = wordmark.orientation ?: mark.orientation)
+            } else {
+                mark
+            }
+            val shown = if (brand) style.brandDisplay(mark.text) else mark.text
+            val tracking = CollageRenderer.markFitTracking(style, mark.kind)
+            val smallest = minOf(type.size, if (brand) 16 else 14)
+            (type.size downTo smallest).firstNotNullOfOrNull { size ->
+                oriented.copy(family = type.font, size = size, weight = type.weight, italic = type.italic,
+                    line = GeneratorExpression.markLine(size))
+                    .takeIf { fits.fits(it, shown, tracking) }
+            } ?: if (wordmark == null) mark else return null
+        }
     }
 
     private fun orientation(value: String): GeneratorExpression.MarkOrientation = when (value) {

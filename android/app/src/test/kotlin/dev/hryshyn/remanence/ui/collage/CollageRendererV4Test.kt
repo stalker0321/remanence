@@ -333,4 +333,14 @@ class CollageRendererV4Test {
         assertEquals("24", scene.grammarId)
         assertEquals("pulse", scene.music!!.mode)
     }
+
+    @Test
+    fun characterStylesDrawTheWordInTheirCaseAndColour() {
+        val tape = ready(expressionV4(styleId = "tape", grammarId = "6")).provenance
+            .single { it.kind == GeneratorExpression.ProvenanceKind.BRAND }
+        assertEquals("REMANENCE", tape.text)
+        assertEquals(0xFF2F6BFF.toInt(), tape.color)
+        val signal = ready(expressionV4()).provenance.single { it.kind == GeneratorExpression.ProvenanceKind.BRAND }
+        assertEquals(GeneratorExpression.BRAND_TEXT, signal.text)
+    }
 }

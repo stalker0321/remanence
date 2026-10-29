@@ -35,6 +35,7 @@ def privacy():
 def terms():
     return page("Remanence terms of use", """
 <p>Version 2026-10-11 · Closed beta. Remanence lets you attach encrypted memories to postcards and share them with chosen recipients.</p>
+<p>You must be at least 18 years old to use Remanence.</p>
 <p>Only upload or send material you have the right to share. Do not use Remanence for illegal content, child exploitation, threats, harassment, spam, fraud, or non-consensual intimate material. Respect other people’s privacy and intellectual property.</p>
 <p>Recipients can block senders and report them in Settings → contact safety. Reports are reviewed by the operator, who may contact the parties and restrict or suspend an abusive account. Encrypted media are not automatically decrypted or uploaded with a report; any additional evidence you choose to provide is voluntary.</p>
 <p>Beta software may have defects. Keep your original photographs and use a supported recovery method. We cannot restore encrypted content after all usable recovery credentials are lost. Do not rely on this beta as your only archive.</p>

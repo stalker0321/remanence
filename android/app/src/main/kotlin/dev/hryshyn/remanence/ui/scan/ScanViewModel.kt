@@ -789,6 +789,7 @@ class ScanViewModel internal constructor(
             // Rows for proof candidates are retained for the self proof.
             val outboxSources = LinkedHashMap<UUID, CapsulePresentationSource>()
             val outboxRows = LinkedHashMap<UUID, OutboxCapsuleEntity>()
+            val addressedOutbox = HashSet<UUID>()
             val incomingMembership = HashSet<UUID>()
             for (page in indexedIds.chunked(MAX_SELF_PROOF_DUAL_IDS)) {
                 // Admission asks whether a durable row exists, not whether it
@@ -812,6 +813,16 @@ class ScanViewModel internal constructor(
                         continue
                     }
                     outboxSources[candidateId] = CapsulePresentationSource.OUTBOX
+                    // A scan opens what is addressed to this account. A capsule
+                    // sent to someone else is theirs to open: its membership
+                    // still counts for dual-plane rejection, but it never
+                    // becomes a candidate competing with the owner's postcards.
+                    val routing = dev.hryshyn.remanence.identity.CapsuleRoutingPolicy.resolve(row)
+                    if (routing !is dev.hryshyn.remanence.identity.CapsuleRoutingResolution.Resolved ||
+                        routing.recipientUserId == owner
+                    ) {
+                        addressedOutbox += candidateId
+                    }
                     if (candidateId in proofIds) outboxRows[candidateId] = row
                 }
             }
@@ -821,11 +832,11 @@ class ScanViewModel internal constructor(
             // Incoming membership includes unreadable bundles and pending
             // entries. Ambiguous duals remain candidates and fail closed later.
             val incomingIds = incomingMembership + loadedIncoming.presentationSources.keys + loadedIncoming.candidates.map { it.capsuleId }
-            val admittedRoom = loadedRoom.candidates.filter { it.capsuleId in outboxSources || it.capsuleId in incomingIds }
+            val admittedRoom = loadedRoom.candidates.filter { it.capsuleId in addressedOutbox || it.capsuleId in incomingIds }
             // Transfer ownership before wiping excluded decoded values: a later
             // load failure must not wipe an excluded model a second time.
             room = loadedRoom.copy(candidates = admittedRoom)
-            loadedRoom.candidates.filterNot { it.capsuleId in outboxSources || it.capsuleId in incomingIds }
+            loadedRoom.candidates.filterNot { it.capsuleId in addressedOutbox || it.capsuleId in incomingIds }
                 .forEach { it.front.wipe() }
             loadedIncoming.candidates.forEach(::retain)
             admittedRoom.forEach(::retain)
@@ -856,10 +867,10 @@ class ScanViewModel internal constructor(
                 return discard()
             }
             if (finalOwner != owner) return discard()
-            val hints = loadedIncoming.chooserHints.filterKeys { id ->
-                val candidateId = runCatching { UUID.fromString(id) }.getOrNull()
-                merged.none { it.capsuleId == candidateId && it.recipientPreferred }
-            }
+            // The accepted sender index carries the verified sender handle,
+            // whichever FRONT (sender's or the recipient's own baseline) wins
+            // recognition.
+            val hints = loadedIncoming.chooserHints
             // Source is a storage-plane fact, not recognition provenance.
             // A self-send legitimately lives in both planes after sync, so
             // self-routed dual identities resolve to INCOMING - but only on

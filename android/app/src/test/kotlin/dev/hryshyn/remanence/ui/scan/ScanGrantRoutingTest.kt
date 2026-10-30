@@ -761,6 +761,76 @@ class ScanGrantRoutingTest {
     }
 
     @Test
+    fun capsuleSentToSomeoneElseIsNotAScanCandidate() = runBlocking {
+        val grantsManager = ScanGrantManager({ now })
+        val presentationGrants = PresentationGrantAuthority(grantsManager)
+        val scanVm = scanViewModel(grantsManager, presentationGrants = presentationGrants)
+
+        try {
+            stagePublishedCapsule()
+            retargetOutboxRecipientToForeign()
+
+            val merged = scanVm.buildCandidateIndexForTests()
+            assertTrue("the recipient opens it, not the sender", merged.candidates.none { it.capsuleId == capsuleUuid })
+
+            captureMatchingPair(scanVm)
+            val settled = withTimeout(10_000) { scanVm.matchState.first { it !is ScanMatchUiState.Matching } }
+            assertTrue(settled !is ScanMatchUiState.Chooser)
+            assertNull(presentationGrants.activeForTests())
+            assertEquals(ScanTerminalState.Idle, scanVm.terminal.value)
+        } finally {
+            val job = scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]
+            job?.cancel()
+            job?.join()
+        }
+    }
+
+    @Test
+    fun verifiedSenderHintSurvivesTheRecipientsOwnBaseline() = runBlocking {
+        val scanVm = scanViewModel(
+            ScanGrantManager({ now }),
+            candidateIndexProvider = {
+                ScanCandidateIndex(
+                    candidates = listOf(
+                        dev.hryshyn.remanence.core.recognition.IndexedCandidate(
+                            capsuleId = capsuleUuid,
+                            front = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.parse(
+                                syntheticFingerprint(11),
+                            ),
+                            recipientPreferred = false,
+                        ),
+                    ),
+                    chooserHints = mapOf(
+                        capsuleUuid.toString() to ScanChooserHint(
+                            candidateId = capsuleUuid.toString(),
+                            senderHandleSnapshot = "mykola",
+                            createdAtEpochSeconds = 1_700_000_000L,
+                            placeLabel = null,
+                            trustedSenderHandle = "mykola",
+                        ),
+                    ),
+                    presentationSources = mapOf(
+                        capsuleUuid to dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.INCOMING,
+                    ),
+                )
+            },
+        )
+
+        try {
+            // A first open stores the recipient's own FRONT, which then wins
+            // recognition; the chooser still shows who verifiably sent it.
+            seedRecipientBaseline(capsuleUuid)
+            val merged = scanVm.buildCandidateIndexForTests()
+            assertTrue(merged.candidates.any { it.capsuleId == capsuleUuid && it.recipientPreferred })
+            assertEquals("mykola", merged.chooserHints[capsuleUuid.toString()]?.trustedSenderHandle)
+        } finally {
+            val job = scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]
+            job?.cancel()
+            job?.join()
+        }
+    }
+
+    @Test
     fun resetDuringIncomingCandidateProviderCannotPublishStaleChooserHints() = runBlocking {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

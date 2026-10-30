@@ -99,3 +99,15 @@ def test_recovery_and_google_onboarding_are_production_features():
     cfg = Settings(mode="beta", database_url="postgresql+psycopg://local@localhost/local", blob_root="/tmp/local", recovery_enabled=True,
         google_sign_in_enabled=True, google_client_ids=["web.apps.googleusercontent.com"], google_presenter_ids=["android.apps.googleusercontent.com"])
     assert cfg.mode is AppMode.BETA
+
+
+def test_review_page_shows_postcards_without_credentials(me_env):
+    client, _ = me_env
+    response = client.get("/review")
+    assert response.status_code == 200 and "noindex" == response.headers["x-robots-tag"]
+    assert "img-src 'self'" in response.headers["content-security-policy"] and "<script" not in response.text
+    assert 'href="/legal/privacy"' in response.text and "hryshyn.dev" in response.text
+    for name in ("postcard-a", "postcard-b"):
+        image = client.get(f"/review/{name}.jpg")
+        assert image.status_code == 200 and image.headers["content-type"] == "image/jpeg" and image.content[:2] == b"\xff\xd8"
+    assert client.get("/review/legal.jpg").status_code == 404

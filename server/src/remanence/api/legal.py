@@ -1,6 +1,8 @@
 """Public beta policies and out-of-app deletion request, no account enumeration."""
-from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse, Response
 
 router = APIRouter()
 SUPPORT = "hryshyn.dev@gmail.com"
@@ -8,12 +10,12 @@ HEADERS = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inl
            "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}
 
 
-def page(title, body):
+def page(title, body, nav="", headers=HEADERS):
     return HTMLResponse(f"""<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} — Remanence</title>
 <style>body{{max-width:680px;margin:48px auto;padding:0 24px;background:#f8f5ee;color:#202824;font:18px/1.6 system-ui}}a{{color:#355b4b}}h1{{line-height:1.2}}nav{{margin-top:40px}}</style>
 <main><h1>{title}</h1>{body}<p>Contact: <a href="mailto:{SUPPORT}">{SUPPORT}</a></p>
-<nav><a href="privacy">Privacy</a> · <a href="terms">Terms</a> · <a href="delete-account">Delete account</a></nav></main></html>""", headers=HEADERS)
+<nav><a href="{nav}privacy">Privacy</a> · <a href="{nav}terms">Terms</a> · <a href="{nav}delete-account">Delete account</a></nav></main></html>""", headers=headers)
 
 
 @router.get("/legal/privacy", response_class=HTMLResponse)
@@ -49,3 +51,35 @@ def delete_account():
 <p><a href="mailto:{SUPPORT}?subject=Remanence%20account%20deletion">Email an account-deletion request</a> to <strong>{SUPPORT}</strong>. Include your Remanence handle and send it from the email associated with your account if possible. If you no longer have access to that email, explain that so we can discuss ownership verification.</p>
 <p>Never send a password, passkey, recovery code or encryption key. We will verify that you own the account and confirm the processing and retention details before deletion.</p>
 <p>The request covers your Remanence profile, login/session records, recovery records, public key records and associated data held by our service. We cannot remotely erase copies already received or exported by others, or passkeys stored in your independent password manager. Any necessary backup/security retention will be explained in our response.</p>""")
+
+
+# Google Play review: the postcards to scan and the steps. Credentials stay in Play Console.
+REVIEW = Path(__file__).parent / "review"
+REVIEW_HEADERS = HEADERS | {"Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+                            "X-Robots-Tag": "noindex"}
+
+
+@router.get("/review", response_class=HTMLResponse)
+def review():
+    card = lambda name, caption: f"""<figure style="margin:16px 0 28px"><a href="/review/{name}.jpg"><img src="/review/{name}.jpg" alt="{caption}"
+style="width:100%;height:auto;display:block;box-shadow:0 2px 12px rgba(0,0,0,.18)"></a><figcaption style="font-size:15px">{caption} · <a href="/review/{name}.jpg" download>download</a></figcaption></figure>"""
+    return page("Remanence review instructions", f"""
+<p>Steps for reviewing the Remanence Android app. The test account email, password and recovery code are in the App access instructions in Play Console, not on this page.</p>
+<p>You need Android 9 or newer with a screen lock. Remanence opens a postcard from a photo of its front, so show the postcards below on another screen (a laptop or monitor) or print them. Keep the whole picture in the camera frame and avoid glare.</p>
+<h2>1. Sign in</h2>
+<p>Tap <b>continue with Google</b> and sign in with the test account. When the app asks to confirm with your passkey, choose the Remanence passkey saved in Google Password Manager. If Google asks to unlock Password Manager on this device, enter the PIN from the Play Console instructions. If the passkey is not available, tap <b>use a recovery code instead</b> and enter the recovery code from Play Console.</p>
+<h2>2. Open the postcard waiting for you</h2>
+<p>A capsule has already been sent to the test account and attached to postcard A. Tap <b>open a postcard</b> and point the camera at postcard A. The capsule opens.</p>
+{card("postcard-a", "Postcard A: open the capsule sent to the test account")}
+<h2>3. Send a postcard</h2>
+<p>Tap <b>make a postcard</b>, choose 3 to 5 photos, then pick a layout. Under <b>who’s it for?</b>, choose <b>send to my own account</b> or enter the handle <b>hryshyn.dev</b> (the developer). Tap <b>attach</b> and photograph postcard B as the paper postcard. If you sent it to your own account, tap <b>open a postcard</b> and scan postcard B to see it as the recipient.</p>
+{card("postcard-b", "Postcard B: attach a new capsule to it")}
+<h2>Safety</h2>
+<p>Blocking and reporting a sender are in Settings → blocking and reports. A recipient only sees a capsule after photographing the matching postcard.</p>""", nav="/legal/", headers=REVIEW_HEADERS)
+
+
+@router.get("/review/{name}.jpg")
+def review_postcard(name: str):
+    if name not in {"postcard-a", "postcard-b"}: raise HTTPException(404)
+    return Response((REVIEW / f"{name}.jpg").read_bytes(), media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex"})

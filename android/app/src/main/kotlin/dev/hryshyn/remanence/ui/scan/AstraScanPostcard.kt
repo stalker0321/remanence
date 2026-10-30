@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.boundsInRoot
@@ -28,6 +29,8 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.hryshyn.remanence.capture.CapturedPostcard
+import dev.hryshyn.remanence.core.recognition.PointD
 import dev.hryshyn.remanence.ui.motion.LocalAstraCarryFront
 import dev.hryshyn.remanence.ui.motion.toOpeningRect
 
@@ -157,3 +160,49 @@ fun AstraPostcard(modifier: Modifier = Modifier) {
         )
     }
 }
+
+/**
+ * The same drawn card as a card photo, for a scan that found no card outline:
+ * it settles and turns over exactly like the recipient's own card. The
+ * artwork mirrors [AstraPostcard] at portrait 3:4.
+ */
+internal fun drawnPostcard(): CapturedPostcard {
+    val width = DRAWN_WIDTH_PX.toFloat()
+    val height = DRAWN_HEIGHT_PX.toFloat()
+    val bitmap = android.graphics.Bitmap.createBitmap(DRAWN_WIDTH_PX, DRAWN_HEIGHT_PX, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    paint.color = PostcardPaper.toArgb()
+    canvas.drawRect(0f, 0f, width, height, paint)
+    val diameter = width * 0.45f
+    paint.color = PostcardVermilion.toArgb()
+    canvas.drawCircle(width * 0.14f + diameter / 2f, height * 0.11f + diameter / 2f, diameter / 2f, paint)
+    canvas.save()
+    canvas.rotate(-13f, width / 2f, height * 0.73f)
+    val bandTop = height * 0.58f
+    val bandHeight = height * 0.30f
+    paint.color = PostcardNavy.toArgb()
+    canvas.drawRect(-width * 0.10f, bandTop, width * 1.10f, bandTop + bandHeight, paint)
+    paint.color = PostcardPaper.toArgb()
+    canvas.drawRect(-width * 0.10f, bandTop + bandHeight, width * 1.10f, bandTop + bandHeight + height * 0.03f, paint)
+    paint.color = PostcardNavy.toArgb()
+    canvas.drawRect(-width * 0.10f, bandTop + bandHeight + height * 0.03f, width * 1.10f, bandTop + bandHeight + height * 0.05f, paint)
+    canvas.restore()
+    // Vertical mark near the top-right corner, reading top to bottom.
+    paint.textSize = height * 0.034f
+    paint.letterSpacing = 0.09f
+    paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+    val x = width - height * 0.036f - paint.textSize * 0.74f
+    val y = height * 0.03f
+    canvas.save()
+    canvas.rotate(90f, x, y)
+    canvas.drawText("ICI / HERE", x, y, paint)
+    canvas.restore()
+    return CapturedPostcard(
+        bitmap,
+        listOf(PointD(0.0, 0.0), PointD(width.toDouble(), 0.0), PointD(width.toDouble(), height.toDouble()), PointD(0.0, height.toDouble())),
+    )
+}
+
+private const val DRAWN_WIDTH_PX = 720
+private const val DRAWN_HEIGHT_PX = 960

@@ -49,12 +49,14 @@ fun CapturedPostcardStage(
     postcard: CapturedPostcard,
     motion: AstraMotionSpec.Resolved,
     modifier: Modifier = Modifier,
+    settled: Boolean = false,
 ) {
     val carryFront = LocalAstraCarryFront.current
-    val lift = remember(postcard) { Animatable(if (motion == AstraMotionSpec.Resolved.FULL) 0f else 1f) }
+    // A settled card (the drawn stand-in) has no photo to lift out of.
+    val lift = remember(postcard) { Animatable(if (motion == AstraMotionSpec.Resolved.FULL && !settled) 0f else 1f) }
     val haptics = dev.hryshyn.remanence.ui.motion.rememberOpeningHaptics()
     LaunchedEffect(postcard, motion) {
-        if (motion == AstraMotionSpec.Resolved.FULL) {
+        if (motion == AstraMotionSpec.Resolved.FULL && !settled) {
             delay(LIFT_HOLD_MS)
             haptics.lift()
             lift.animateTo(1f, astraTween(LIFT_MS, FastOutSlowInEasing))
@@ -87,7 +89,7 @@ fun CapturedPostcardStage(
                 }
             }
             .semantics {
-                contentDescription = "your postcard"
+                contentDescription = if (settled) "graphic postcard front" else "your postcard"
                 role = Role.Image
             }
             .testTag("scan_captured_postcard"),

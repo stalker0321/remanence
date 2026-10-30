@@ -9,7 +9,6 @@ import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -25,7 +24,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
-import kotlin.math.abs
 
 /**
  * State-to-visual contract for the post-scan waiting group:
@@ -47,6 +45,7 @@ class AstraScanWaitingTest {
     val composeRule = createComposeRule()
 
     @Test
+    @Config(qualifiers = "w390dp-h844dp-xhdpi")
     fun matchingRendersPostcardAndTwoLineCopy() {
         composeRule.setContent {
             HoldTheme {
@@ -59,14 +58,11 @@ class AstraScanWaitingTest {
         }
         composeRule.mainClock.advanceTimeBy(1_000L)
 
-        composeRule.onNodeWithTag("astra_postcard")
+        composeRule.onNodeWithTag("scan_captured_postcard")
             .assertIsDisplayed()
             .assertContentDescriptionEquals("graphic postcard front")
-        // The artwork node is merged into the parent's single graphic
-        // semantics, so it is queried from the unmerged tree.
-        composeRule.onNodeWithTag("astra_postcard_art", useUnmergedTree = true).assertIsDisplayed()
         // Exactly one postcard node: no clones, no remnants.
-        composeRule.onAllNodesWithTag("astra_postcard").assertCountEquals(1)
+        composeRule.onAllNodesWithTag("scan_captured_postcard").assertCountEquals(1)
         composeRule.onNodeWithTag("scan_matching").assertIsDisplayed()
         composeRule.onNodeWithTag("scan_matching_body").assertIsDisplayed()
         composeRule.onNodeWithTag("scan_wait_progress").assertIsDisplayed()
@@ -88,7 +84,7 @@ class AstraScanWaitingTest {
         }
         composeRule.mainClock.advanceTimeBy(1_500L)
 
-        composeRule.onNodeWithTag("astra_postcard").assertIsDisplayed()
+        composeRule.onNodeWithTag("scan_captured_postcard").assertIsDisplayed()
         composeRule.onNodeWithTag("scan_verified").assertIsDisplayed()
         composeRule.onNodeWithTag("scan_verified_body").assertIsDisplayed()
     }
@@ -106,7 +102,7 @@ class AstraScanWaitingTest {
         }
         composeRule.mainClock.advanceTimeBy(1_000L)
 
-        composeRule.onNodeWithTag("astra_postcard").assertIsDisplayed()
+        composeRule.onNodeWithTag("scan_captured_postcard").assertIsDisplayed()
         composeRule.onNodeWithTag("scan_material_pending_offline").assertIsDisplayed()
         // The offline line 1 is already a complete two-sentence
         // instruction; no duplicating body is added.
@@ -158,7 +154,7 @@ class AstraScanWaitingTest {
         composeRule.onNodeWithTag("scan_verified_body").assertIsDisplayed()
 
         // One postcard instance throughout every transition.
-        composeRule.onAllNodesWithTag("astra_postcard").assertCountEquals(1)
+        composeRule.onAllNodesWithTag("scan_captured_postcard").assertCountEquals(1)
     }
 
     @Test
@@ -184,7 +180,7 @@ class AstraScanWaitingTest {
         // The spinner is truly gone after the swap, not just hidden.
         composeRule.onAllNodesWithTag("scan_wait_progress").assertCountEquals(0)
         // Content survives the regime change.
-        composeRule.onNodeWithTag("astra_postcard").assertIsDisplayed()
+        composeRule.onNodeWithTag("scan_captured_postcard").assertIsDisplayed()
         composeRule.onNodeWithTag("scan_matching").assertIsDisplayed()
     }
 
@@ -203,7 +199,7 @@ class AstraScanWaitingTest {
 
         // The drawn postcard and copy are still present; the infinite
         // progress is replaced by a static track.
-        composeRule.onNodeWithTag("astra_postcard").assertIsDisplayed()
+        composeRule.onNodeWithTag("scan_captured_postcard").assertIsDisplayed()
         composeRule.onNodeWithTag("scan_matching").assertIsDisplayed()
         composeRule.onNodeWithTag("scan_wait_static").assertIsDisplayed()
         composeRule.onAllNodesWithTag("scan_wait_progress").assertCountEquals(0)
@@ -268,6 +264,7 @@ class AstraScanWaitingTest {
     }
 
     @Test
+    @Config(qualifiers = "w390dp-h844dp-xhdpi")
     fun stopActionFiresRealRecovery() {
         var stops = 0
         composeRule.setContent {
@@ -298,7 +295,7 @@ class AstraScanWaitingTest {
         }
         composeRule.waitForIdle()
 
-        composeRule.onAllNodesWithTag("astra_postcard").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("scan_captured_postcard").assertCountEquals(0)
         composeRule.onAllNodesWithTag("scan_matching").assertCountEquals(0)
         composeRule.onAllNodesWithTag("scan_stop_scanning").assertCountEquals(0)
     }
@@ -344,77 +341,13 @@ class AstraScanWaitingTest {
     }
 
     @Test
-    @Config(qualifiers = "w390dp-h844dp-xhdpi")
-    fun postcardIsPortraitHeightLedCentered() {
-        composeRule.setContent {
-            HoldTheme {
-                ScanWaitingGroup(
-                    state = ScanMatchUiState.Matching,
-                    motion = AstraMotionSpec.Resolved.FULL,
-                    onStopScanning = {},
-                    modifier = Modifier.fillMaxSize().testTag("waiting_group"),
-                )
-            }
-        }
-        composeRule.mainClock.advanceTimeBy(1_000L)
-
-        val parent = composeRule.onNodeWithTag("waiting_group").getUnclippedBoundsInRoot()
-        val card = composeRule.onNodeWithTag("astra_postcard").getUnclippedBoundsInRoot()
-        val parentWidth = (parent.right - parent.left).value
-        val cardWidth = (card.right - card.left).value
-        val cardHeight = (card.bottom - card.top).value
-        val aspect = cardWidth / cardHeight
-        // Final portrait reference (`validation.css:.postcard-portrait
-        // {aspect-ratio:3/4}`, waiting `{height:83%;max-height:275px}`,
-        // upright): w/h must read ~0.75, never landscape.
-        assertTrue("postcard must be 3:4 portrait: aspect=$aspect", aspect in 0.70f..0.80f)
-        assertTrue("postcard must be taller than wide: ${cardWidth}x$cardHeight", cardHeight > cardWidth)
-        // Height-led: under the 275dp cap the width shrinks to preserve
-        // 3:4, so the card is strictly narrower than the waiting group.
-        assertTrue("portrait card must be narrower than group: $cardWidth vs $parentWidth", cardWidth < parentWidth)
-        // Centered: card center matches parent center.
-        val parentCx = ((parent.left + parent.right) / 2f).value
-        val cardCx = ((card.left + card.right) / 2f).value
-        assertTrue("postcard must be centered: parentCx=$parentCx cardCx=$cardCx", abs(cardCx - parentCx) < 8f)
-        // Safe bounds: upright card + shadow stay inside the group,
-        // with a small measuring slack.
-        assertTrue(
-            "card left inside group: ${card.left.value} vs ${parent.left.value}",
-            card.left.value >= parent.left.value - 16f,
-        )
-        assertTrue(
-            "card right inside group: ${card.right.value} vs ${parent.right.value}",
-            card.right.value <= parent.right.value + 16f,
-        )
-        assertTrue("card top inside group: ${card.top.value}", card.top.value >= parent.top.value - 16f)
-    }
-
-    @Test
-    @Config(qualifiers = "w390dp-h844dp-xhdpi")
-    fun uprightPostcardIsNotClippedByAnyParent() {
-        composeRule.setContent {
-            HoldTheme {
-                ScanWaitingGroup(
-                    state = ScanMatchUiState.Matching,
-                    motion = AstraMotionSpec.Resolved.FULL,
-                    onStopScanning = {},
-                    modifier = Modifier.fillMaxSize().testTag("waiting_group"),
-                )
-            }
-        }
-        composeRule.mainClock.advanceTimeBy(1_000L)
-
-        // getBoundsInRoot applies ancestor clipping, getUnclippedBoundsInRoot
-        // does not: equality proves no parent clips the upright card. The
-        // internal band clip lives inside the artwork Canvas and is unaffected.
-        val clipped = composeRule.onNodeWithTag("astra_postcard").getBoundsInRoot()
-        val unclipped = composeRule.onNodeWithTag("astra_postcard").getUnclippedBoundsInRoot()
-        assertTrue(
-            "upright postcard must not be clipped: clipped=$clipped unclipped=$unclipped",
-            abs((clipped.left - unclipped.left).value) < 1f &&
-                abs((clipped.right - unclipped.right).value) < 1f &&
-                abs((clipped.top - unclipped.top).value) < 1f &&
-                abs((clipped.bottom - unclipped.bottom).value) < 1f,
-        )
+    fun drawnCardSettlesPortraitCenteredInsideTheStage() {
+        val drawn = drawnPostcard()
+        val stage = androidx.compose.ui.geometry.Size(1080f, 900f)
+        val card = settledCardRect(stage, drawn)
+        assertEquals(0.75f, card.width / card.height, 0.01f)
+        assertEquals(stage.width / 2f, card.center.x, 1f)
+        assertEquals(stage.height / 2f, card.center.y, 1f)
+        assertTrue("card inside stage: $card", card.left >= 0f && card.top >= 0f && card.right <= stage.width && card.bottom <= stage.height)
     }
 }

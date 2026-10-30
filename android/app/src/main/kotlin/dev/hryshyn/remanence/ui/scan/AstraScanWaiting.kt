@@ -113,32 +113,31 @@ fun ScanWaitingGroup(
 
             val fullMotion = motion == AstraMotionSpec.Resolved.FULL
             // The recipient's own card when the scan found its outline;
-            // otherwise the drawn stand-in carries the wait.
+            // otherwise the drawn card, which arrives settled in the same
+            // stage and turns over the same way.
             if (openingPostcard != null) {
                 CapturedPostcardStage(openingPostcard, motion, Modifier.fillMaxWidth())
-            } else AstraPostcard(
-                Modifier
-                    // Final portrait waiting
-                    // (`validation.css:.wait-presentation .postcard-portrait
-                    // {width:auto;height:83%;max-height:275px}`, upright):
-                    // the card is height-led (180..275dp slot), portrait
-                    // 3:4, and centered. The Canvas shrinks its width to
-                    // preserve 3:4 under the height cap instead of
-                    // stretching, so no width fraction is hardcoded here.
-                    .align(Alignment.CenterHorizontally)
-                    .heightIn(min = 180.dp, max = 275.dp)
-                    .graphicsLayer {
-                        alpha = if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else presence.value
-                        val entryScale = if (fullMotion) {
-                            AstraMotionSpec.FOCUS_SELECT_SCALE_FROM +
-                                (1f - AstraMotionSpec.FOCUS_SELECT_SCALE_FROM) * presence.value
-                        } else {
-                            1f
-                        }
-                        scaleX = entryScale
-                        scaleY = entryScale
-                    },
-            )
+            } else {
+                val drawn = remember { drawnPostcard() }
+                CapturedPostcardStage(
+                    drawn,
+                    motion,
+                    Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            alpha = if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else presence.value
+                            val entryScale = if (fullMotion) {
+                                AstraMotionSpec.FOCUS_SELECT_SCALE_FROM +
+                                    (1f - AstraMotionSpec.FOCUS_SELECT_SCALE_FROM) * presence.value
+                            } else {
+                                1f
+                            }
+                            scaleX = entryScale
+                            scaleY = entryScale
+                        },
+                    settled = true,
+                )
+            }
             Spacer(Modifier.height(16.dp))
             // Design motion shell `.status-copy{min-height:105px}`: the copy
             // block reserves its full two-line height even when a state

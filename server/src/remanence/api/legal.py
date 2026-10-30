@@ -61,11 +61,12 @@ REVIEW_HEADERS = HEADERS | {"Content-Security-Policy": "default-src 'none'; img-
 
 @router.get("/review", response_class=HTMLResponse)
 def review():
-    card = lambda name, caption: f"""<figure style="margin:16px 0 28px"><a href="/review/{name}.jpg"><img src="/review/{name}.jpg" alt="{caption}"
-style="width:100%;height:auto;display:block;box-shadow:0 2px 12px rgba(0,0,0,.18)"></a><figcaption style="font-size:15px">{caption} · <a href="/review/{name}.jpg" download>download</a></figcaption></figure>"""
+    # A dark mat gives the card's white edge contrast on every side, so the app finds its outline.
+    card = lambda name, caption: f"""<figure style="margin:16px 0 28px"><a href="/review/{name}.jpg" style="display:block;background:#1d1f22;padding:9%"><img src="/review/{name}.jpg" alt="{caption}"
+style="width:100%;height:auto;display:block"></a><figcaption style="font-size:15px;margin-top:8px">{caption} · <a href="/review/{name}.jpg" download>download</a></figcaption></figure>"""
     return page("Remanence review instructions", f"""
 <p>Steps for reviewing the Remanence Android app. The test account email, password and recovery code are in the App access instructions in Play Console, not on this page.</p>
-<p>You need Android 9 or newer with a screen lock. Remanence opens a postcard from a photo of its front, so show the postcards below on another screen (a laptop or monitor) or print them. Keep the whole picture in the camera frame and avoid glare.</p>
+<p>You need Android 9 or newer with a screen lock. Remanence opens a postcard from a photo of its front, so show the postcards below on another screen (a laptop or monitor, full size) or print them. Keep the whole card with its white edge in the camera frame and avoid glare.</p>
 <h2>1. Sign in</h2>
 <p>Tap <b>continue with Google</b> and sign in with the test account. When the app asks to confirm with your passkey, choose the Remanence passkey saved in Google Password Manager. If Google asks to unlock Password Manager on this device, enter the PIN from the Play Console instructions. If the passkey is not available, tap <b>use a recovery code instead</b> and enter the recovery code from Play Console.</p>
 <h2>2. Open the postcard waiting for you</h2>

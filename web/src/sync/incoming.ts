@@ -25,6 +25,14 @@ export interface IncomingCapsule {
   envelopeCiphertext: Uint8Array
   statementSha256: Uint8Array
   blobs: IncomingBlob[]
+  /** ADR-020: a claimed first gift. Absent for an ordinary postcard. */
+  pending?: {
+    deliveryId: string
+    deliveryTargetId: string
+    keyCommitment: Uint8Array
+    addressCommitment: Uint8Array
+    bindingSha256: Uint8Array
+  }
 }
 
 export interface IncomingCatalog {
@@ -131,7 +139,9 @@ export async function downloadCiphertext(
     throw error
   }
   const response = await transport.requestBytes({
-    path: `/v1/capsules/${item.capsuleId}/blobs/${blob.blobId}`,
+    path: item.pending
+      ? `/v2/pending-deliveries/${item.pending.deliveryId}/blobs/${blob.blobId}`
+      : `/v1/capsules/${item.capsuleId}/blobs/${blob.blobId}`,
     token: accessToken,
     signal,
     maxBytes: blob.ciphertextSize,

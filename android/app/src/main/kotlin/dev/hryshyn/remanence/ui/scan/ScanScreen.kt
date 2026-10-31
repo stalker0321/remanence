@@ -167,25 +167,15 @@ fun ScanScreen(
                 // flag is ON. Sheet returns to this same capture surface.
                 // A stored same-owner intent offers resume (rotation /
                 // process-death survival); PRF readiness stays gated.
-                val resume = resumeIntent
-                if (resume != null) {
-                    dev.hryshyn.remanence.pending.PendingGiftResumeButton(
-                        onResume = { showPendingCode = true },
-                    )
-                }
-                dev.hryshyn.remanence.pending.PendingCodeEntryButton(
-                    onOpenCodeEntry = { showPendingCode = true },
-                )
-                if (showPendingCode) {
-                    dev.hryshyn.remanence.pending.PendingCodeEntrySheet(
-                        onClose = { showPendingCode = false },
-                        lookup = pendingLookup,
-                        newProofVm = newProofVm,
-                        ownerUserId = resumeOwnerId,
-                        giftIntentStore = resumeStore,
-                        resumeIntent = resume,
-                        currentOwnerProvider = resumeOwnerProvider,
-                    )
+                val cardProofVm = newProofVm
+                if (cardProofVm != null) {
+                    dev.hryshyn.remanence.pending.PendingCardEntryButton(onOpen = { showPendingCode = true })
+                    if (showPendingCode) {
+                        dev.hryshyn.remanence.pending.PendingCardEntrySheet(
+                            newProofVm = cardProofVm,
+                            onClose = { showPendingCode = false },
+                        )
+                    }
                 }
                 }
             }

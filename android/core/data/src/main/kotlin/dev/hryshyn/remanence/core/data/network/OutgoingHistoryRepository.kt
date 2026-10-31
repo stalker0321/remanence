@@ -37,6 +37,8 @@ data class OutgoingItem(
     val cancelAction: HistoryCancelAction?,
     val cancelDeadline: String?,
     val detailsAvailable: Boolean = true,
+    /** ADR-020: the card code, sealed to this account's own key. */
+    val cardCodeSealedB64: String? = null,
 ) {
     val key: String get() = "$protocolVersion:$capsuleId"
 }
@@ -213,7 +215,8 @@ class OutgoingHistoryRepository internal constructor(
             dto.expires_at, dto.first_opened_at, dto.revoked_at, dto.recipient.handle, dto.recipient.hint,
             dto.recipient.is_self,
             if (!available || (locator == LocatorStatus.ACTIVE && !codeAllowed)) LocatorStatus.UNAVAILABLE else locator!!,
-            dto.locator.code.takeIf { codeAllowed }, safeAction, dto.cancel_deadline, available)
+            dto.locator.code.takeIf { codeAllowed }, safeAction, dto.cancel_deadline, available,
+            dto.card_code_sealed_b64)
     }
 
     private fun validId(value: String) = value.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
@@ -242,6 +245,7 @@ private fun ResponseBody.readHistoryBody(): String? {
     val created_at: String, val published_at: String?, val expires_at: String?, val first_opened_at: String?,
     val revoked_at: String?, val recipient: RecipientDto, val locator: LocatorDto,
     val cancel_action: String?, val cancel_deadline: String?,
+    val card_code_sealed_b64: String? = null,
 )
 @Serializable private data class RecipientDto(val user_id: String?, val handle: String?, val hint: String?, val is_self: Boolean?)
 @Serializable private data class LocatorDto(val status: String, val code: String?)

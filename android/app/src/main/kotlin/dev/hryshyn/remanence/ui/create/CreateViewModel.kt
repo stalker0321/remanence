@@ -2982,6 +2982,7 @@ class CreateViewModel(
                 ),
                 identity = dev.hryshyn.remanence.pending.PendingSenderIdentity(
                     sender.userId, sender.activeKeyBundleId, sender.signingPrivateHandle,
+                    sender.encryptionPrivateHandle.publicKeysetHandle,
                 ),
                 pin = pin,
                 sessionGate = ports.gate,

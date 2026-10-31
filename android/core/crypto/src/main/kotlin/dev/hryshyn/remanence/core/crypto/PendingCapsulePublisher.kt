@@ -3,12 +3,14 @@ package dev.hryshyn.remanence.core.crypto
 import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.TinkProtoKeysetFormat
+import com.google.protobuf.ByteString
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.CapsulePhotoIdentity
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.core.model.GeneratorExpressionProjection
+import dev.hryshyn.remanence.protocol.delivery_v2.CardSealAadV1
 import java.security.MessageDigest
 
 /**
@@ -72,7 +74,16 @@ object PendingCapsulePublisher {
         val artifacts: List<SealedArtifact>,
         val statement: ByteArray,
         val signature: ByteArray,
+        /** Empty for a card gift, which leaves no key with the service. */
         val escrow: ByteArray,
+        val card: CardMaterial? = null,
+    )
+
+    /** ADR-020. [code] stays on this device and on the card; never sent in clear. */
+    data class CardMaterial(
+        val code: String,
+        val seal: ByteArray,
+        val senderCodeSealed: ByteArray,
     )
 
     @Suppress("LongParameterList")
@@ -90,6 +101,7 @@ object PendingCapsulePublisher {
         signingHandle: KeysetHandle,
         capsuleKeyset: KeysetHandle,
         photos: List<ByteArray>,
+        cardSenderPublic: KeysetHandle? = null,
     ): Publication {
         require(photos.size in MIN_PHOTOS..MAX_PHOTOS) {
             "pending publication requires 1..5 photos"
@@ -128,6 +140,8 @@ object PendingCapsulePublisher {
             opening = opening,
             salt32 = salt32,
             sealed = sealed,
+            normalizedDestination = normalizedDestination,
+            cardSenderPublic = cardSenderPublic,
         )
     }
 
@@ -159,6 +173,7 @@ object PendingCapsulePublisher {
         photos: List<PhotoInput>,
         noteUtf8: String?,
         expression: ExpressionInput? = null,
+        cardSenderPublic: KeysetHandle? = null,
     ): Publication {
         require(photos.size in MIN_PHOTOS..MAX_PHOTOS) {
             "pending publication requires 1..5 photos"
@@ -259,6 +274,8 @@ object PendingCapsulePublisher {
             opening = opening,
             salt32 = salt32,
             sealed = sealed,
+            normalizedDestination = normalizedDestination,
+            cardSenderPublic = cardSenderPublic,
         )
     }
 
@@ -305,6 +322,8 @@ object PendingCapsulePublisher {
         opening: ByteArray,
         salt32: ByteArray,
         sealed: List<SealedArtifact>,
+        normalizedDestination: String,
+        cardSenderPublic: KeysetHandle?,
     ): Publication {
         val statement = PendingPublishCrypto.buildStatement(
             capsuleId = capsuleId,
@@ -325,6 +344,32 @@ object PendingCapsulePublisher {
         )
         val signature = PendingPublishCrypto.signStatement(signingHandle, statement)
         val statementSha = PendingPublishCrypto.statementSha256(statement)
+        if (cardSenderPublic != null) {
+            val secret = PendingCardSeal.generateSecret()
+            val code = PendingCardSeal.formatCode(secret, normalizedDestination)
+            val seal = PendingCardSeal.build(
+                secret = secret,
+                capsuleAeadKeyset = keyBytes,
+                openingCanonical = opening,
+                binding = CardSealAadV1.newBuilder()
+                    .setVersion(1)
+                    .setCapsuleId(ByteString.copyFrom(PendingUuid16.of(capsuleId, "capsule")))
+                    .setDeliveryTargetId(ByteString.copyFrom(PendingUuid16.of(deliveryTargetId, "target")))
+                    .setSenderUserId(ByteString.copyFrom(PendingUuid16.of(senderUserId, "sender")))
+                    .setPublishStatementSha256(ByteString.copyFrom(statementSha))
+                    .setAddressCommitment(ByteString.copyFrom(commitment))
+                    .setKeyCommitment(ByteString.copyFrom(keyCommitment))
+                    .setClaimExpiresAtEpochSeconds(claimExpiresAt)
+                    .build(),
+            )
+            return Publication(
+                salt32.copyOf(), claimExpiresAt, sealed, statement, signature, ByteArray(0),
+                CardMaterial(
+                    code, seal.toByteArray(),
+                    PendingCardSeal.sealCodeToSelf(code, capsuleId, cardSenderPublic),
+                ),
+            )
+        }
         val escrow = PendingPublishCrypto.buildEscrow(
             capsuleId = capsuleId,
             deliveryTargetId = deliveryTargetId,

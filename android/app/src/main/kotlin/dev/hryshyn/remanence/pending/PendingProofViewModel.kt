@@ -16,10 +16,12 @@ import java.security.GeneralSecurityException
 import java.util.Base64
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Narrow seams with real callers (container adapters wrap the frozen clients). */
 fun interface ProofContinuePort {
@@ -51,7 +53,15 @@ fun interface ProofClaimPort {
         intentSignature69B64: String,
         idempotencyKey: String,
         token: String,
+        envelopeB64: String?,
+        cardProofB64: String?,
     ): dev.hryshyn.remanence.core.data.network.ClaimSubmitResult
+}
+
+/** ADR-020: find first gifts by a proven phone number. */
+interface PhoneProofPort {
+    suspend fun start(phoneE164: String, token: String): dev.hryshyn.remanence.core.data.network.PhoneProofStart
+    suspend fun check(proofId: String, code: String, token: String): dev.hryshyn.remanence.core.data.network.PhoneProofCheck
 }
 
 /** Authenticated account material for the proof/claim flow. */
@@ -132,12 +142,19 @@ class PendingProofViewModel(
     private val recognitionBlobPort: PendingRecognitionStage.BlobFetchPort? = null,
     private val clockSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
     scope: CoroutineScope? = null,
+    private val phoneProofPort: PhoneProofPort? = null,
 ) : ViewModel() {
 
     sealed interface ProofState {
         data object Idle : ProofState
         data object Continuing : ProofState
         data class SyncReady(val capsuleId: String) : ProofState
+
+        /** ADR-020: the code from the card is in; next the full phone number. */
+        data class PhoneRequired(val hintDigits: String) : ProofState
+
+        /** ADR-020: SMS passed but the code from the card does not fit. Retyping needs no SMS. */
+        data object WrongCardCode : ProofState
         data class ProofRequired(
             val deliveryId: String,
             val channel: String,
@@ -274,6 +291,12 @@ class PendingProofViewModel(
      */
     fun retry() {
         if (_state.value !is ProofState.Failed) return
+        if (cardSecret != null && proof == null) {
+            // A wrong SMS code keeps the same proof; anything else asks again.
+            _state.value = attempt?.let { ProofState.CodeRequired("", it, null) }
+                ?: ProofState.PhoneRequired("")
+            return
+        }
         val currentProof = proof ?: return
         val currentAttempt = attempt
         _state.value = if (currentAttempt != null) {
@@ -302,6 +325,134 @@ class PendingProofViewModel(
     fun onCodeChange(value: String) {
         _code.value = value
     }
+
+    // ADR-020 card flow. The secret and the opened key live only in this memory.
+    private var cardSecret: String? = null
+    private var cardGifts: List<dev.hryshyn.remanence.core.data.network.CardGift> = emptyList()
+    private var cardOpened: dev.hryshyn.remanence.core.crypto.PendingCardSeal.Opened? = null
+    private var cardBindingB64: String? = null
+
+    /** Code from the card, already parsed. Nothing leaves the device here. */
+    fun startCard(parsed: dev.hryshyn.remanence.core.crypto.PendingCardSeal.ParsedCode) {
+        val state = _state.value
+        cardSecret = parsed.secret
+        if (state is ProofState.WrongCardCode) {
+            launchScope.launch { _state.value = guarded { openCardGifts() } }
+        } else if (state is ProofState.Idle || state is ProofState.PhoneRequired) {
+            _state.value = ProofState.PhoneRequired(parsed.hintDigits)
+        }
+    }
+
+    fun requestPhoneCode(phoneE164: String) {
+        val port = phoneProofPort ?: return
+        if (_state.value !is ProofState.PhoneRequired || phoneE164.isBlank()) return
+        _state.value = ProofState.RequestingAttempt
+        launchScope.launch {
+            _state.value = guarded {
+                val creds = creds() ?: return@guarded failedSessionChanged()
+                val started = port.start(phoneE164, creds.token)
+                if (!credsLive(creds)) return@guarded failedSessionChanged()
+                when (started) {
+                    is dev.hryshyn.remanence.core.data.network.PhoneProofStart.Started -> {
+                        attempt = started.proofId
+                        _code.value = ""
+                        ProofState.CodeRequired("", started.proofId, null)
+                    }
+                    is dev.hryshyn.remanence.core.data.network.PhoneProofStart.Failed ->
+                        ProofState.Failed(mapPhoneFailure(started.reason))
+                }
+            }
+        }
+    }
+
+    private fun checkPhoneCode() {
+        val port = phoneProofPort ?: return
+        val proofId = attempt ?: return
+        val typed = _code.value.trim()
+        if (typed.isBlank()) return
+        _state.value = ProofState.CheckingCode
+        launchScope.launch {
+            _state.value = guarded {
+                val creds = creds() ?: return@guarded failedSessionChanged()
+                val checked = port.check(proofId, typed, creds.token)
+                if (!credsLive(creds)) return@guarded failedSessionChanged()
+                when (checked) {
+                    is dev.hryshyn.remanence.core.data.network.PhoneProofCheck.Gifts -> {
+                        cardGifts = checked.gifts
+                        openCardGifts()
+                    }
+                    is dev.hryshyn.remanence.core.data.network.PhoneProofCheck.Failed ->
+                        ProofState.Failed(mapPhoneFailure(checked.reason))
+                }
+            }
+        }
+    }
+
+    /**
+     * Tries the code on every gift of the proven number. Runs Argon2 per gift,
+     * so it stays off the main thread. The server never learns which card this was.
+     */
+    private suspend fun openCardGifts(): ProofState {
+        val secret = cardSecret ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+        if (cardGifts.isEmpty()) return ProofState.Failed(PendingProofMessage.NOT_FOUND)
+        _state.value = ProofState.CheckingCode
+        for (gift in cardGifts) {
+            val seal = dev.hryshyn.remanence.protocol.delivery_v2.PendingCardSealV1.parseFrom(
+                Base64.getDecoder().decode(gift.cardSealB64),
+            )
+            val opened = withContext(Dispatchers.Default) {
+                dev.hryshyn.remanence.core.crypto.PendingCardSeal.open(secret, seal)
+            } ?: continue
+            val sBytes = Base64.getDecoder().decode(gift.publishStatementB64)
+            val senderSig = Base64.getDecoder().decode(gift.publishSignature69B64)
+            val statement = PendingPublishVerifier.verifyStructure(sBytes)
+            val senderKeyBytes = senderKeyProvider(
+                uuidRest(statement.senderUserId), uuidRest(statement.senderKeyBundleId),
+            ) ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            PendingPublishVerifier.verifyPublish(senderKeyBytes, sBytes, senderSig)
+            // What the sender signed must commit to exactly what the code opened.
+            val keyCommitment = dev.hryshyn.remanence.core.crypto.PendingPublishCrypto.keyCommitment(
+                gift.capsuleId, gift.deliveryTargetId, opened.capsuleAeadKeyset,
+            )
+            if (!keyCommitment.contentEquals(statement.keyCommitment.toByteArray())) {
+                return ProofState.Failed(PendingProofMessage.GENERIC)
+            }
+            proof = ContinueResult.Proof(
+                "", gift.deliveryId, gift.capsuleId, gift.deliveryTargetId, "sms",
+                gift.claimExpiresAt, gift.publishStatementB64, gift.publishSignature69B64,
+            )
+            statementBytes = sBytes
+            senderKeyBytesStored = senderKeyBytes
+            senderSigStored = senderSig
+            cardOpened = opened
+            val ready = verifiedState(gift.deliveryId, gift.proofId)
+            if (ready !is ProofState.IntentReady) return ready
+            val intent = builtIntent ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            val intentSig = builtIntentSig ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            val opId = builtOpId ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            _state.value = ProofState.Claiming
+            return submitClaimFlow(proof!!, intent, intentSig, opId)
+        }
+        return ProofState.WrongCardCode
+    }
+
+    private inline fun guarded(block: () -> ProofState): ProofState = try {
+        block()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        ProofState.Failed(PendingProofMessage.GENERIC)
+    }
+
+    private fun mapPhoneFailure(reason: dev.hryshyn.remanence.core.data.network.PhoneProofFailure): PendingProofMessage =
+        when (reason) {
+            dev.hryshyn.remanence.core.data.network.PhoneProofFailure.NETWORK,
+            dev.hryshyn.remanence.core.data.network.PhoneProofFailure.RATE_LIMITED,
+            -> PendingProofMessage.NETWORK
+            dev.hryshyn.remanence.core.data.network.PhoneProofFailure.WRONG_CODE -> PendingProofMessage.EXPIRED
+            dev.hryshyn.remanence.core.data.network.PhoneProofFailure.SIGN_IN -> PendingProofMessage.SESSION_CHANGED
+            else -> PendingProofMessage.GENERIC
+        }
 
     private var proof: ContinueResult.Proof? = null
     private var attempt: String? = null
@@ -520,6 +671,10 @@ class PendingProofViewModel(
     }
 
     fun checkCode() {
+        if (cardSecret != null) {
+            checkPhoneCode()
+            return
+        }
         val current = proof ?: return
         val attemptId = attempt ?: return
         if (_code.value.isBlank()) return
@@ -611,12 +766,26 @@ class PendingProofViewModel(
             // Owner fence at entry: the account must be the lease owner.
             return failedSessionChanged()
         }
+        var envelopeForClaim: String? = null
+        var proofForClaim: String? = null
+        cardOpened?.let { opened ->
+            val binding = cardBindingB64 ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            val sBytes = statementBytes ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            val own = hpkeKeyProvider() ?: return failedSessionChanged()
+            envelopeForClaim = Base64.getEncoder().encodeToString(
+                dev.hryshyn.remanence.core.crypto.PendingCardSeal.sealEnvelopeToSelf(
+                    opened, sBytes, Base64.getDecoder().decode(binding), own.publicKeysetHandle,
+                ),
+            )
+            proofForClaim = Base64.getEncoder().encodeToString(opened.proof)
+        }
         val submitted = try {
             port.submit(
                 current.deliveryId,
                 Base64.getEncoder().encodeToString(intent),
                 Base64.getEncoder().encodeToString(intentSig),
                 opId, creds.token,
+                envelopeForClaim, proofForClaim,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -755,6 +924,7 @@ class PendingProofViewModel(
                         if (!credsLive(creds)) {
                             return failedSessionChanged()
                         }
+                        wipeCard()
                         ProofState.Claimed(current.deliveryId, serviceVerified = true)
                     }
                     is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.PartiallyAccepted ->
@@ -922,6 +1092,14 @@ class PendingProofViewModel(
         }
     }
 
+    private fun wipeCard() {
+        cardOpened?.capsuleAeadKeyset?.fill(0)
+        cardOpened?.proof?.fill(0)
+        cardOpened = null
+        cardSecret = null
+        cardGifts = emptyList()
+    }
+
     private fun unhexStrict(hex: String): ByteArray {
         require(hex.length == 64 && hex.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
             "digest must be 64 hex"
@@ -965,6 +1143,7 @@ class PendingProofViewModel(
         } catch (_: IllegalArgumentException) {
             null
         } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+        cardBindingB64 = options.claimBindingB64
         val sealed = try {
             Base64.getDecoder().decode(options.hpkeChallengeB64)
         } catch (_: IllegalArgumentException) {
@@ -1041,7 +1220,9 @@ class PendingProofViewModel(
                     nonce = nonce,
                     // Frozen bit from the validated grant — presence
                     // means affirmed-true at tap under this context.
-                    bindAlias = grant != null,
+                    // ADR-020: proving the number links it, so later cards to it
+                    // skip all of this and arrive end to end encrypted.
+                    bindAlias = grant != null || cardSecret != null,
                 ),
             )
             val intentSig = PendingClaimIntent.signIntent(signing, intent)
@@ -1083,6 +1264,7 @@ class PendingProofViewModel(
             dev.hryshyn.remanence.core.data.network.ClaimFailure.CLAIM_CONFLICT,
             dev.hryshyn.remanence.core.data.network.ClaimFailure.IDEMPOTENCY_CONFLICT,
             -> PendingProofMessage.CONFLICT
+            dev.hryshyn.remanence.core.data.network.ClaimFailure.CARD_PROOF_REQUIRED -> PendingProofMessage.GENERIC
             else -> PendingProofMessage.GENERIC
         }
 }

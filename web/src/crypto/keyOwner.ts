@@ -6,6 +6,7 @@ import type { ArtifactKind } from '../protocol/context'
 import { ProtocolError } from '../protocol/errors'
 import { nameUuidFromBytes } from '../protocol/uuid'
 import { signWithKey } from './publish'
+import { arrayBuffer, concat, utf8, writeUint32 } from '../protocol/bytes'
 
 export interface RecoveryReply {
   record: {
@@ -34,6 +35,8 @@ export interface KeyCapabilities {
   openEnvelope(info: Uint8Array, ciphertext: Uint8Array): Promise<Uint8Array>
   decryptArtifact(keyset: Uint8Array, aad: Uint8Array, ciphertext: Uint8Array, kind: ArtifactKind): Promise<Uint8Array>
   sign(statement: Uint8Array): Promise<Uint8Array>
+  /** ADR-020: only ever signs under the claim-intent domain. */
+  signClaimIntent?(intent: Uint8Array): Promise<Uint8Array>
   lock(): void
 }
 
@@ -88,6 +91,12 @@ export async function unlockAccount(
     async sign(statement) {
       if (!alive) throw new ProtocolError('LOCKED')
       return finish(await signWithKey(signing, signingKeyId, statement))
+    },
+    async signClaimIntent(intent) {
+      if (!alive) throw new ProtocolError('LOCKED')
+      const input = new Uint8Array(await crypto.subtle.sign('Ed25519', signing, arrayBuffer(concat([utf8('postmark/claim-intent/v2'), Uint8Array.of(0), intent]))))
+      if (input.length !== 64) throw new ProtocolError('BAD_SIGNATURE')
+      return finish(concat([new Uint8Array([1]), writeUint32(signingKeyId), input]))
     },
     lock() {
       alive = false

@@ -1,12 +1,10 @@
 package dev.hryshyn.remanence.pending
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -58,7 +56,17 @@ fun PendingSenderSheet(
     if (!enabled) return
     val state by viewModel.state.collectAsStateWithLifecycle()
     val destination by viewModel.destination.collectAsStateWithLifecycle()
-    val kind by viewModel.kind.collectAsStateWithLifecycle()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // The system contact picker hands back one number and needs no permission.
+    val pickContact = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val uri = result.data?.data ?: return@rememberLauncherForActivityResult
+        val column = android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
+        context.contentResolver.query(uri, arrayOf(column), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) viewModel.onDestinationChange(cursor.getString(0).orEmpty())
+        }
+    }
 
     AstraEnterTransition(motion = rememberAstraMotion()) {
         Column(
@@ -94,35 +102,35 @@ fun PendingSenderSheet(
                         current.message in setOf(PendingSenderViewModel.Message.SEND_LIMIT_REACHED,
                             PendingSenderViewModel.Message.SEND_ACCESS_UNAVAILABLE, PendingSenderViewModel.Message.FINALIZE_UNKNOWN)
                     if (finalizationStopped) Text(stringResource(R.string.send_publication_pending_recovery))
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(
-                            onClick = { viewModel.onKindChange("email") },
-                            modifier = Modifier.weight(1f).testTag("pending_sender_kind_email"),
-                        ) { Text(stringResource(R.string.pending_sender_email)) }
-                        Spacer(Modifier.width(8.dp))
-                        OutlinedButton(
-                            onClick = { viewModel.onKindChange("phone") },
-                            modifier = Modifier.weight(1f).testTag("pending_sender_kind_phone"),
-                        ) { Text(stringResource(R.string.pending_sender_phone)) }
-                    }
-                    Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = destination,
                         onValueChange = viewModel::onDestinationChange,
-                        label = {
-                            Text(
-                                stringResource(
-                                    if (kind == "phone") R.string.pending_sender_phone_hint
-                                    else R.string.pending_sender_email_hint,
+                        label = { Text(stringResource(R.string.pending_sender_phone_hint)) },
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Phone,
+                        ),
+                        modifier = Modifier.fillMaxWidth().testTag("pending_sender_field"),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            pickContact.launch(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_PICK,
+                                    android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
                                 ),
                             )
                         },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("pending_sender_field"),
-                    )
+                        modifier = Modifier.testTag("pending_sender_contacts"),
+                    ) { Text(stringResource(R.string.pending_sender_contacts)) }
                     Spacer(Modifier.height(12.dp))
                     Button(
-                        onClick = viewModel::send,
+                        onClick = {
+                            val number = PendingPhoneInput.toE164(destination, PendingPhoneInput.region(context))
+                            if (number != null) viewModel.onDestinationChange(number)
+                            viewModel.send()
+                        },
                         enabled = !finalizationStopped,
                         modifier = Modifier.testTag("pending_sender_send"),
                     ) { Text(stringResource(R.string.pending_sender_send)) }

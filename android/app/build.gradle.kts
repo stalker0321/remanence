@@ -34,19 +34,15 @@ val atomicRegistrationEnabled = providers.gradleProperty("remanence.atomicRegist
         "Atomic registration requires Google and recovery; no unprotected fallback"
     }
 }
-// T186: experimental pending-recipient journey. Default OFF everywhere;
-// only the debug variant consumes this opt-in property. Release and beta
-// are hard-disabled so an experimental build can never ride the live/beta
-// pipeline. Debug enables the isolated .pendingtest package/label.
+// ADR-020: first gifts by card. Default OFF everywhere; one property turns the
+// journey on in any variant, together with the service pin below.
 val pendingEnabled = (findProperty("remanence.pending.enabled") as? String ?: "false").lowercase().also {
     require(it == "true" || it == "false") { "remanence.pending.enabled must be true or false" }
 }
 // T186 M12b: root-selected out-of-band service pin (per-epoch PUBLIC
 // deployment UUID + Ed25519 public keyset, standard base64). Supplied via
 // `-Premanence.pending.serviceKeyId=<uuid> -Premanence.pending.serviceKeysetB64=<b64>`
-// for pending debug builds only; empty (fail closed) unless root provides
-// the generated epoch pair. Release/beta below hard-wire empty. Never an
-// R-carried key, never the discarded-fixture pair at runtime.
+// Empty fails closed. Never an R-carried key, never the discarded-fixture pair.
 val pendingServiceKeyId = (findProperty("remanence.pending.serviceKeyId") as? String ?: "").trim()
 val pendingServiceKeysetB64 = (findProperty("remanence.pending.serviceKeysetB64") as? String ?: "").trim()
 val remanenceAndroidVersionCode =
@@ -79,22 +75,9 @@ android {
                 versionNameSuffix = "-recovery-test"
             }
             if (pendingEnabled == "true") {
-                // T186 isolated experimental install: never overwrites beta.
-                // Distinct identity does NOT mean disabled recovery: the
-                // pending journey preserves mandatory PRF/Google readiness,
-                // so recovery (and the normal Google config) stays ON.
-                // No bypass: the standard recoveryEnabled/google checks above
-                // still apply.
                 check(recoveryEnabled == "true") {
                     "remanence.pending.enabled requires remanence.recovery.enabled=true (PRF/Google readiness preserved)"
                 }
-                applicationIdSuffix = ".pendingtest"
-                versionNameSuffix = "-pending-test"
-                // Distinct launcher label via a separate generated resource
-                // (never a second app_name value): the main manifest reads
-                // ${pendingAppLabel}, defaulting to @string/app_name.
-                resValue("string", "pending_app_name", "Remanence Pending Test")
-                manifestPlaceholders["pendingAppLabel"] = "@string/pending_app_name"
             }
             if (atomicRegistrationEnabled == "true") {
                 applicationIdSuffix = ".atomicregistrationtest"
@@ -128,11 +111,9 @@ android {
             buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", "false")
             buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", "false")
             buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", "false")
-            // T186: pending journey is debug-only; release can never enable it.
-            buildConfigField("boolean", "REMANENCE_PENDING_ENABLED", "false")
-            // T186 M12b: no service pin outside pending debug (fail closed).
-            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEY_ID", quoteBuildConfigString(""))
-            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEYSET_B64", quoteBuildConfigString(""))
+            buildConfigField("boolean", "REMANENCE_PENDING_ENABLED", pendingEnabled)
+            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEY_ID", quoteBuildConfigString(pendingServiceKeyId))
+            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEYSET_B64", quoteBuildConfigString(pendingServiceKeysetB64))
         }
         // Closed Play beta is explicit, non-debuggable and separate from the
         // legacy release defaults. Never publish the recoverytest debug APK.
@@ -147,11 +128,9 @@ android {
             buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", "true")
             buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", "true")
             buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", "false")
-            // T186: pending journey is debug-only; beta can never enable it.
-            buildConfigField("boolean", "REMANENCE_PENDING_ENABLED", "false")
-            // T186 M12b: no service pin outside pending debug (fail closed).
-            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEY_ID", quoteBuildConfigString(""))
-            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEYSET_B64", quoteBuildConfigString(""))
+            buildConfigField("boolean", "REMANENCE_PENDING_ENABLED", pendingEnabled)
+            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEY_ID", quoteBuildConfigString(pendingServiceKeyId))
+            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEYSET_B64", quoteBuildConfigString(pendingServiceKeysetB64))
             buildConfigField("String", "API_BASE_URL",
                 quoteBuildConfigString(remanenceApiBaseUrl("https://invalid.invalid/")))
             versionNameSuffix = "-beta"

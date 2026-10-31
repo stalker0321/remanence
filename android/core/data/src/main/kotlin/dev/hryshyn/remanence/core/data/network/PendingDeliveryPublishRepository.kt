@@ -144,7 +144,9 @@ private data class PendingBlobResponseDto(
 private data class PendingFinalizeRequestDto(
     @SerialName("publish_statement_b64") val publishStatementB64: String,
     @SerialName("publish_signature_69_b64") val publishSignature69B64: String,
-    @SerialName("escrow_payload_b64") val escrowPayloadB64: String,
+    @SerialName("escrow_payload_b64") val escrowPayloadB64: String?,
+    @SerialName("card_seal_b64") val cardSealB64: String?,
+    @SerialName("sender_code_sealed_b64") val senderCodeSealedB64: String?,
     @SerialName("idempotency_key") val idempotencyKey: String,
 )
 
@@ -333,9 +335,12 @@ class PendingDeliveryPublishRepository internal constructor(
         escrowPayloadB64: String,
         idempotencyKey: String,
         accessToken: String,
+        cardSealB64: String? = null,
+        senderCodeSealedB64: String? = null,
     ): PendingFinalizeResult {
         if (accessToken.isBlank() || deliveryId.isBlank() || publishStatementB64.isBlank() ||
-            publishSignature69B64.isBlank() || escrowPayloadB64.isBlank() || idempotencyKey.isBlank()
+            publishSignature69B64.isBlank() || (escrowPayloadB64.isBlank() && cardSealB64 == null) ||
+            idempotencyKey.isBlank()
         ) {
             return PendingFinalizeResult.Failure(PendingPublishFailure.VALIDATION_FAILED, retryable = false)
         }
@@ -344,7 +349,8 @@ class PendingDeliveryPublishRepository internal constructor(
                 PendingFinalizeRequestDto.serializer(),
                 PendingFinalizeRequestDto(
                     publishStatementB64, publishSignature69B64,
-                    escrowPayloadB64, idempotencyKey,
+                    escrowPayloadB64.takeIf { cardSealB64 == null }, cardSealB64, senderCodeSealedB64,
+                    idempotencyKey,
                 ),
             )
         } catch (_: Exception) {
@@ -471,7 +477,7 @@ class PendingDeliveryPublishRepository internal constructor(
         }
         return try {
             require(dto.state == "PENDING")
-            require(dto.deliveryId.isNotBlank() && dto.locatorCode.length == 5 &&
+            require(dto.deliveryId.isNotBlank() && (dto.locatorCode.length == 5 || dto.locatorCode.isEmpty()) &&
                 dto.claimExpiresAt >= 0 && dto.hint.isNotBlank())
             PendingFinalizeResult.Finalized(
                 dto.deliveryId, dto.locatorCode, dto.claimExpiresAt, dto.hint,

@@ -486,7 +486,7 @@ class PendingJourneyDeviceTest {
                     blobPort = dev.hryshyn.remanence.pending.PendingPublishFlow.BlobPort { _, blobId, _, _, _, _ ->
                         dev.hryshyn.remanence.core.data.network.PendingBlobResult.Uploaded(blobId, 11L)
                     },
-                    finalizePort = dev.hryshyn.remanence.pending.PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _ ->
+                    finalizePort = dev.hryshyn.remanence.pending.PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _, _, _ ->
                         dev.hryshyn.remanence.core.data.network.PendingFinalizeResult.Finalized(
                             deliveryId, "AB3DE", 1814317432L, "a•••@•••",
                         )

@@ -20,6 +20,8 @@ data class PendingSenderIdentity(
     val userId: String,
     val bundleId: String,
     val signingHandle: KeysetHandle,
+    /** ADR-020: the sender's own HPKE public key, for reading the code back. */
+    val cardPublicHandle: KeysetHandle? = null,
 )
 
 /** Raw sender content for one pending gift (photo JPEGs as authored). */
@@ -167,7 +169,7 @@ class PendingSenderViewModel(
     private val _destination = MutableStateFlow("")
     val destination: StateFlow<String> = _destination.asStateFlow()
 
-    private val _kind = MutableStateFlow("email")
+    private val _kind = MutableStateFlow("phone")
     val kind: StateFlow<String> = _kind.asStateFlow()
 
     fun onDestinationChange(value: String) {

@@ -79,6 +79,8 @@ class PendingPublishFlow(
             escrowPayloadB64: String,
             idempotencyKey: String,
             token: String,
+            cardSealB64: String?,
+            senderCodeSealedB64: String?,
         ): PendingFinalizeResult
     }
 
@@ -97,6 +99,10 @@ class PendingPublishFlow(
         val statementB64: String,
         val statementSignature69B64: String,
         val escrowPayloadB64: String,
+        /** ADR-020: set for a card gift; the code never reaches the server. */
+        val cardSealB64: String? = null,
+        val senderCodeSealedB64: String? = null,
+        val cardCode: String? = null,
     )
 
     fun interface MaterialPort {
@@ -332,6 +338,7 @@ class PendingPublishFlow(
             finalizePort.finalize(
                 deliveryId, material.statementB64, material.statementSignature69B64,
                 material.escrowPayloadB64, finalizeKey, finalToken,
+                material.cardSealB64, material.senderCodeSealedB64,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -341,7 +348,7 @@ class PendingPublishFlow(
         if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
         return when (finalized) {
             is PendingFinalizeResult.Finalized ->
-                State.Published(finalized.deliveryId, finalized.locatorCode, finalized.hint)
+                State.Published(finalized.deliveryId, material.cardCode ?: finalized.locatorCode, finalized.hint)
             is PendingFinalizeResult.Failure -> State.Failed(when (finalized.reason) {
                 PendingPublishFailure.SEND_LIMIT_REACHED -> Reason.SEND_LIMIT_REACHED
                 PendingPublishFailure.SEND_ACCESS_UNAVAILABLE -> Reason.SEND_ACCESS_UNAVAILABLE

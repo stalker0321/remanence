@@ -248,7 +248,7 @@ class CreatePendingBoundaryPublishTest {
                     onBlob?.invoke()
                     PendingBlobResult.Uploaded(blobId, 11L)
                 },
-                finalize = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _ ->
+                finalize = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _, _, _ ->
                     finalizer?.invoke(deliveryId) ?: PendingFinalizeResult.Finalized(
                         deliveryId, "AB3DE", 1814317432L, "a•••@•••",
                     )

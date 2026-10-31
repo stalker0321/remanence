@@ -19,7 +19,7 @@ export async function openRecipientEnvelope(
   info: Uint8Array,
   ciphertext: Uint8Array,
 ): Promise<Uint8Array> {
-  if (info.length === 0 || info.length > 128) throw new ProtocolError('OVERSIZED')
+  if (info.length === 0 || info.length > 256) throw new ProtocolError('OVERSIZED')
   if (ciphertext.length < 53 || ciphertext.length > limits.recipientEnvelopeCiphertext) {
     throw new ProtocolError('OVERSIZED')
   }
@@ -42,7 +42,7 @@ export async function openHpke(
   info: Uint8Array,
   ciphertext: Uint8Array,
 ): Promise<Uint8Array> {
-  if (info.length === 0 || info.length > 128) throw new ProtocolError('OVERSIZED')
+  if (info.length === 0 || info.length > 256) throw new ProtocolError('OVERSIZED')
   if (ciphertext.length < 53 || ciphertext.length > limits.recipientEnvelopeCiphertext) {
     throw new ProtocolError('OVERSIZED')
   }

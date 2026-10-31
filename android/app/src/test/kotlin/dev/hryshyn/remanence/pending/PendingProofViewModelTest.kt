@@ -296,7 +296,7 @@ class PendingProofViewModelTest {
                 )
             },
             hpke = setup.recipientPrivate,
-            claim = ProofClaimPort { _, _, _, _, _ ->
+            claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                 submitted += 1
                 dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Failure(
                     dev.hryshyn.remanence.core.data.network.ClaimFailure.CLAIM_CONFLICT,
@@ -340,7 +340,7 @@ class PendingProofViewModelTest {
             ownBundleKey = com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
                 setup.recipientPrivate.publicKeysetHandle,
             ),
-            claim = ProofClaimPort { _, _, _, _, _ ->
+            claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                 submitted += 1
                 dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                     "55555555-6666-7777-8888-999999999999",
@@ -774,7 +774,7 @@ class PendingProofViewModelTest {
                 ownBundleKey = vectors.recipientPublicBytes,
                 servicePin = vectors.servicePin,
                 admittedStore = store,
-                claim = ProofClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -841,7 +841,7 @@ class PendingProofViewModelTest {
                         blobId, vectors.recognitionBlob,
                     )
                 },
-                claim = ProofClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -896,7 +896,7 @@ class PendingProofViewModelTest {
                         blobId, vectors.recognitionBlob.copyOf().also { it[0] = (it[0] + 1).toByte() },
                     )
                 },
-                claim = ProofClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -977,7 +977,7 @@ class PendingProofViewModelTest {
                         500, true,
                     )
                 },
-                claim = ProofClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -1030,7 +1030,7 @@ class PendingProofViewModelTest {
                 ownBundleKey = vectors.recipientPublicBytes,
                 servicePin = vectors.servicePin,
                 admittedStore = store,
-                claim = ProofClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -1079,7 +1079,7 @@ class PendingProofViewModelTest {
                 ownBundleKey = vectors.recipientPublicBytes,
                 servicePin = vectors.servicePin,
                 admittedStore = store,
-                claim = ProofClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         otherClaimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -1138,7 +1138,7 @@ class PendingProofViewModelTest {
                 ownBundleKey = vectors.recipientPublicBytes,
                 servicePin = vectors.servicePin,
                 admittedStore = store,
-                claim = ProofClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -1187,7 +1187,7 @@ class PendingProofViewModelTest {
         ownBundleKey = vectors.recipientPublicBytes,
         servicePin = vectors.servicePin,
         admittedStore = store,
-        claim = ProofClaimPort { _, intentB64, sigB64, _, _ ->
+        claim = ProofClaimPort { _, intentB64, sigB64, _, _, _, _ ->
             submitted[0] = Base64.getDecoder().decode(intentB64)
             submitted[1] = Base64.getDecoder().decode(sigB64)
             dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
@@ -1393,7 +1393,7 @@ class PendingProofViewModelTest {
                 ownBundleKey = vectors.recipientPublicBytes,
                 servicePin = vectors.servicePin,
                 admittedStore = store,
-                claim = ProofClaimPort { _, intentB64, sigB64, opId, _ ->
+                claim = ProofClaimPort { _, intentB64, sigB64, opId, _, _, _ ->
                     submitted[0] = Base64.getDecoder().decode(intentB64)
                     submitted[1] = Base64.getDecoder().decode(sigB64)
                     submittedOpId = opId
@@ -1592,7 +1592,7 @@ class PendingProofViewModelTest {
             ownBundleKey = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
                 setup.recipientPrivate.publicKeysetHandle,
             ),
-            claim = ProofClaimPort { _, _, _, _, _ ->
+            claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                 throw AssertionError("no intent may dispatch after a mid-await flap")
             },
         )
@@ -1645,7 +1645,7 @@ class PendingProofViewModelTest {
             ownBundleKey = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
                 setup.recipientPrivate.publicKeysetHandle,
             ),
-            claim = ProofClaimPort { _, _, _, _, _ ->
+            claim = ProofClaimPort { _, _, _, _, _, _, _ ->
                 throw AssertionError("no intent may dispatch after a mid-await rotation")
             },
         )

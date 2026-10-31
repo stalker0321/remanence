@@ -126,7 +126,7 @@ class PendingBoundaryPublishTest {
             blobPort = PendingPublishFlow.BlobPort { _, blobId, _, _, _, _ ->
                 PendingBlobResult.Uploaded(blobId, 11L)
             },
-            finalizePort = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _ ->
+            finalizePort = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _, _, _ ->
                 PendingFinalizeResult.Finalized(
                     deliveryId, "AB3DE", 1814317432L, "a•••@•••",
                 )
@@ -165,7 +165,7 @@ class PendingBoundaryPublishTest {
             blobPort = PendingPublishFlow.BlobPort { _, blobId, _, _, _, _ ->
                 PendingBlobResult.Uploaded(blobId, 11L)
             },
-            finalizePort = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _ ->
+            finalizePort = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _, _, _ ->
                 PendingFinalizeResult.Finalized(
                     deliveryId, "AB3DE", 1814317432L, "a•••@•••",
                 )
@@ -290,7 +290,7 @@ class PendingBoundaryPublishTest {
             blobPort = PendingPublishFlow.BlobPort { _, blobId, _, _, _, _ ->
                 PendingBlobResult.Uploaded(blobId, 11L)
             },
-            finalizePort = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _ ->
+            finalizePort = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _, _, _ ->
                 PendingFinalizeResult.Finalized(
                     deliveryId, "AB3DE", 1814317432L, "a•••@•••",
                 )

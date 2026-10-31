@@ -46,6 +46,7 @@ okhttp-coroutines = { group = "com.squareup.okhttp3", name = "okhttp-coroutines"
 okhttp-mockwebserver3 = { group = "com.squareup.okhttp3", name = "mockwebserver3", version.ref = "okhttp" }
 protobuf-javalite = { group = "com.google.protobuf", name = "protobuf-javalite", version.ref = "protobuf" }
 tink-android = { group = "com.google.crypto.tink", name = "tink-android", version.ref = "tink" }
+bouncycastle-prov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version = "1.80" }
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version = "1.4.1" }
 room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }

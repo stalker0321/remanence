@@ -2,7 +2,8 @@ import type { MemoryKeys } from '../auth/memoryKeys'
 import type { KeyCapabilities } from '../crypto/keyOwner'
 import { fieldBytes, fieldNumber, readMessage } from '../protocol/proto'
 import { arrayBuffer, bytesToHex } from '../protocol/bytes'
-import { artifactAad, recipientEnvelopeInfo } from '../protocol/context'
+import { recipientEnvelopeInfo } from '../protocol/context'
+import { capsuleArtifactAad, openClaimedEnvelope } from '../gift/openClaimed'
 import { ProtocolError } from '../protocol/errors'
 import { uuidToBytes } from '../protocol/uuid'
 import type { ScanGrant } from '../scan/grant'
@@ -77,7 +78,8 @@ export async function openGrantedPostcard(
     }
     return current
   }
-  const opened = await fresh().openEnvelope(recipientEnvelopeInfo({
+  const claimed = capsule.pending ? await openClaimedEnvelope(fresh(), capsule) : null
+  const opened = claimed ? claimed.owned : await fresh().openEnvelope(recipientEnvelopeInfo({
     capsuleId: capsule.capsuleId,
     senderUserId: capsule.senderUserId,
     recipientUserId: capsule.recipientUserId,
@@ -87,29 +89,26 @@ export async function openGrantedPostcard(
   const plains: Uint8Array[] = []
   try {
     fresh()
-    const envelope = parseEnvelope(opened)
-    if (
-      !equalBytes(envelope.capsuleId, uuidToBytes(capsule.capsuleId))
-      || !equalBytes(envelope.senderUserId, uuidToBytes(capsule.senderUserId))
-      || !equalBytes(envelope.recipientUserId, uuidToBytes(capsule.recipientUserId))
-      || !equalBytes(envelope.senderBundleId, uuidToBytes(capsule.senderKeyBundleId))
-      || !equalBytes(envelope.recipientBundleId, uuidToBytes(capsule.recipientKeyBundleId))
-      || !equalBytes(envelope.statementSha256, capsule.statementSha256)
-    ) {
-      throw new CollageError('INTEGRITY')
+    if (claimed) {
+      keyset = claimed.keyset.slice()
+    } else {
+      const envelope = parseEnvelope(opened)
+      if (
+        !equalBytes(envelope.capsuleId, uuidToBytes(capsule.capsuleId))
+        || !equalBytes(envelope.senderUserId, uuidToBytes(capsule.senderUserId))
+        || !equalBytes(envelope.recipientUserId, uuidToBytes(capsule.recipientUserId))
+        || !equalBytes(envelope.senderBundleId, uuidToBytes(capsule.senderKeyBundleId))
+        || !equalBytes(envelope.recipientBundleId, uuidToBytes(capsule.recipientKeyBundleId))
+        || !equalBytes(envelope.statementSha256, capsule.statementSha256)
+      ) {
+        throw new CollageError('INTEGRITY')
+      }
+      keyset = envelope.keyset.slice()
+      envelope.keyset.fill(0)
     }
-    keyset = envelope.keyset.slice()
-    envelope.keyset.fill(0)
     const contentPlain = await fresh().decryptArtifact(
       keyset,
-      artifactAad({
-        capsuleId: capsule.capsuleId,
-        blobId: content.blobId,
-        kind: 'CONTENT_MANIFEST',
-        ordinal: -1,
-        senderUserId: capsule.senderUserId,
-        recipientUserId: capsule.recipientUserId,
-      }),
+      capsuleArtifactAad(capsule, content.blobId, 'CONTENT_MANIFEST', -1),
       content.ciphertext,
       'CONTENT_MANIFEST',
     )
@@ -128,14 +127,7 @@ export async function openGrantedPostcard(
       if (!sealed || !declared) throw new CollageError('INTEGRITY')
       const plain = await fresh().decryptArtifact(
         keyset,
-        artifactAad({
-          capsuleId: capsule.capsuleId,
-          blobId,
-          kind: 'PHOTO',
-          ordinal: source.ordinal,
-          senderUserId: capsule.senderUserId,
-          recipientUserId: capsule.recipientUserId,
-        }),
+        capsuleArtifactAad(capsule, blobId, 'PHOTO', source.ordinal),
         sealed.ciphertext,
         'PHOTO',
       )

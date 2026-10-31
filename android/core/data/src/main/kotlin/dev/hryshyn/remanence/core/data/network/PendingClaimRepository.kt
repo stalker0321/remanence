@@ -30,6 +30,7 @@ import okhttp3.ResponseBody
  * lives in `core:crypto`; this file is transport + strict shapes only.
  */
 enum class ClaimFailure {
+    CARD_PROOF_REQUIRED,
     NETWORK,
     RATE_LIMITED,
     HTTP,
@@ -50,6 +51,8 @@ sealed interface ClaimOptionsResult {
         val expiresAt: Long,
         val hpkeChallengeB64: String,
         val claimChallengeB64: String,
+        /** ADR-020: card gifts only. The device seals its envelope against this. */
+        val claimBindingB64: String? = null,
     ) : ClaimOptionsResult
 
     data class Failure(
@@ -81,6 +84,7 @@ private data class ClaimOptionsResponseDto(
     @kotlinx.serialization.SerialName("expires_at") val expiresAt: Long,
     @kotlinx.serialization.SerialName("hpke_challenge_b64") val hpkeChallengeB64: String,
     @kotlinx.serialization.SerialName("claim_challenge_b64") val claimChallengeB64: String,
+    @kotlinx.serialization.SerialName("claim_binding_b64") val claimBindingB64: String? = null,
 )
 
 @Serializable
@@ -88,6 +92,8 @@ private data class ClaimSubmitRequestDto(
     @kotlinx.serialization.SerialName("claim_intent_b64") val claimIntentB64: String,
     @kotlinx.serialization.SerialName("claim_intent_signature_69_b64") val claimIntentSignature69B64: String,
     @kotlinx.serialization.SerialName("idempotency_key") val idempotencyKey: String,
+    @kotlinx.serialization.SerialName("envelope_b64") val envelopeB64: String? = null,
+    @kotlinx.serialization.SerialName("card_proof_b64") val cardProofB64: String? = null,
 )
 
 @Serializable
@@ -105,6 +111,7 @@ private val CLAIM_PROBLEM_CODES = setOf(
     "RATE_LIMITED",
     "VALIDATION_FAILED",
     "ADDRESS_PROOF_REQUIRED",
+    "CARD_PROOF_REQUIRED",
     "CLAIM_CONFLICT",
     "IDEMPOTENCY_CONFLICT",
     "RECIPIENT_KEY_STALE",
@@ -117,6 +124,7 @@ private fun mapClaimProblem(code: String): ClaimFailure = when (code) {
     "RATE_LIMITED" -> ClaimFailure.RATE_LIMITED
     "VALIDATION_FAILED" -> ClaimFailure.VALIDATION_FAILED
     "ADDRESS_PROOF_REQUIRED" -> ClaimFailure.ADDRESS_PROOF_REQUIRED
+    "CARD_PROOF_REQUIRED" -> ClaimFailure.CARD_PROOF_REQUIRED
     "CLAIM_CONFLICT" -> ClaimFailure.CLAIM_CONFLICT
     "IDEMPOTENCY_CONFLICT" -> ClaimFailure.IDEMPOTENCY_CONFLICT
     "RECIPIENT_KEY_STALE" -> ClaimFailure.RECIPIENT_KEY_STALE
@@ -157,6 +165,8 @@ class PendingClaimRepository internal constructor(
         claimIntentSignature69B64: String,
         idempotencyKey: String,
         accessToken: String,
+        envelopeB64: String? = null,
+        cardProofB64: String? = null,
     ): ClaimSubmitResult {
         if (accessToken.isBlank() || deliveryId.isBlank() || claimIntentB64.isBlank() ||
             claimIntentSignature69B64.isBlank() || idempotencyKey.isBlank()
@@ -166,7 +176,7 @@ class PendingClaimRepository internal constructor(
         val body = try {
             NetworkJson.encodeToString(
                 ClaimSubmitRequestDto.serializer(),
-                ClaimSubmitRequestDto(claimIntentB64, claimIntentSignature69B64, idempotencyKey),
+                ClaimSubmitRequestDto(claimIntentB64, claimIntentSignature69B64, idempotencyKey, envelopeB64, cardProofB64),
             )
         } catch (_: Exception) {
             return ClaimSubmitResult.Failure(ClaimFailure.VALIDATION_FAILED, retryable = false)

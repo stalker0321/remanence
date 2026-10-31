@@ -91,7 +91,20 @@ class RemanenceViewModelFactory(
             ) as T
         dev.hryshyn.remanence.ui.history.HistoryViewModel::class.java ->
             dev.hryshyn.remanence.ui.history.HistoryViewModel(
-                port = container.apiStack.outgoingHistoryRepository,
+                port = dev.hryshyn.remanence.pending.CardCodeHistoryPort(container.apiStack.outgoingHistoryRepository) { sealed, capsuleId ->
+                    val row = container.currentAccountStore.loadEntity()
+                    val loaded = row?.let { container.ownerIdentityStores.resolve(it.userId, it.activeKeyBundleId) }
+                    val identity = loaded as? dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
+                    identity?.let {
+                        try {
+                            dev.hryshyn.remanence.core.crypto.PendingCardSeal.openCodeFromSelf(
+                                java.util.Base64.getDecoder().decode(sealed), capsuleId, it.encryptionHandle,
+                            )
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                },
                 captureLease = container.apiStack::captureSessionRequestLease,
                 leaseLive = container.apiStack::isSessionRequestLeaseLive,
                 boundary = container.sessionBoundary,

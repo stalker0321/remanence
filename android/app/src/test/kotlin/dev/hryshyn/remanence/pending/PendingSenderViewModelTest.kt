@@ -136,7 +136,7 @@ class PendingSenderViewModelTest {
                     blobPort = PendingPublishFlow.BlobPort { _, blobId, _, _, _, _ ->
                         PendingBlobResult.Uploaded(blobId, 11L)
                     },
-                    finalizePort = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _ ->
+                    finalizePort = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _, _, _ ->
                         finalizer?.invoke() ?: PendingFinalizeResult.Finalized(
                             deliveryId, "AB3DE", 1814317432L, "a•••@•••",
                         )

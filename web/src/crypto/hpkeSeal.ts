@@ -35,7 +35,7 @@ const suite = new CipherSuite({
   aead: new Aes256Gcm(),
 })
 
-const INFO_MAX = 128
+const INFO_MAX = 256
 const TINK_PREFIX_BYTE = 1
 const ENC_BYTES = 32
 const TAG_BYTES = 16

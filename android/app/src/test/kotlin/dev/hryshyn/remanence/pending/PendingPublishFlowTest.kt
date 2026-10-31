@@ -93,7 +93,7 @@ class PendingPublishFlowTest {
         blob: PendingPublishFlow.BlobPort = PendingPublishFlow.BlobPort { _, _, _, _, _, _ ->
             PendingBlobResult.Uploaded("cccccccc-dddd-eeee-ffff-000000000001", 12L)
         },
-        finalize: PendingPublishFlow.FinalizePort = PendingPublishFlow.FinalizePort { _, _, _, _, _, _ ->
+        finalize: PendingPublishFlow.FinalizePort = PendingPublishFlow.FinalizePort { _, _, _, _, _, _, _, _ ->
             PendingFinalizeResult.Finalized(
                 "0198f0a0-0000-7000-8000-00000000d401",
                 "AB3DE",
@@ -120,7 +120,7 @@ class PendingPublishFlowTest {
             PendingPublishFailure.HTTP to PendingPublishFlow.Reason.FINALIZE_UNKNOWN,
         )) {
             var started = 0
-            val publisher = flow(finalize = PendingPublishFlow.FinalizePort { _, _, _, _, _, _ ->
+            val publisher = flow(finalize = PendingPublishFlow.FinalizePort { _, _, _, _, _, _, _, _ ->
                 assertEquals(1, started)
                 PendingFinalizeResult.Failure(reason, if (reason == PendingPublishFailure.SEND_LIMIT_REACHED) 409 else 503, reason != PendingPublishFailure.SEND_LIMIT_REACHED)
             })
@@ -139,7 +139,7 @@ class PendingPublishFlowTest {
 
     @Test fun cancellationAfterFinalPostAdmissionCannotAvoidInvocationFence() = runTest {
         var started = false
-        val publisher = flow(finalize = PendingPublishFlow.FinalizePort { _, _, _, _, _, _ ->
+        val publisher = flow(finalize = PendingPublishFlow.FinalizePort { _, _, _, _, _, _, _, _ ->
             assertTrue(started)
             throw kotlinx.coroutines.CancellationException("synthetic cancellation after final POST")
         })
@@ -180,7 +180,7 @@ class PendingPublishFlowTest {
     @Test
     fun finalizeConflictMaps() = runTest {
         val result = flow(
-            finalize = PendingPublishFlow.FinalizePort { _, _, _, _, _, _ ->
+            finalize = PendingPublishFlow.FinalizePort { _, _, _, _, _, _, _, _ ->
                 PendingFinalizeResult.Failure(PendingPublishFailure.IDEMPOTENCY_CONFLICT, 409, false)
             },
         ).publish(frozenPending(), capsule, "k1", "k2")
@@ -221,7 +221,7 @@ class PendingPublishFlowTest {
             blobPort = PendingPublishFlow.BlobPort { _, _, _, _, _, _ ->
                 PendingBlobResult.Uploaded("b", 1L)
             },
-            finalizePort = PendingPublishFlow.FinalizePort { _, _, _, _, _, _ ->
+            finalizePort = PendingPublishFlow.FinalizePort { _, _, _, _, _, _, _, _ ->
                 PendingFinalizeResult.Finalized("d", "AB3DE", 1L, "h")
             },
             materialPort = PendingPublishFlow.MaterialPort { null },
@@ -289,7 +289,7 @@ class PendingPublishFlowTest {
                 blobs += 1
                 PendingBlobResult.Uploaded(blobId, 11L)
             },
-            finalizePort = PendingPublishFlow.FinalizePort { _, _, _, _, _, _ ->
+            finalizePort = PendingPublishFlow.FinalizePort { _, _, _, _, _, _, _, _ ->
                 PendingFinalizeResult.Failure(PendingPublishFailure.NETWORK, retryable = true)
             },
             materialPort = PendingPublishFlow.MaterialPort { material() },

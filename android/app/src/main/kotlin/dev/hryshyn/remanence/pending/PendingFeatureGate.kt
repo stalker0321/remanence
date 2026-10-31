@@ -6,12 +6,9 @@ import dev.hryshyn.remanence.BuildConfig
  * T186: compile-time + runtime gate for the experimental pending-recipient
  * journey (T184 contract).
  *
- * - Default OFF in every variant; only debug honours
- *   `-Premanence.pending.enabled=true` (see app/build.gradle.kts).
- * - Release and beta hard-wire `REMANENCE_PENDING_ENABLED=false`.
- * - The pending-enabled build uses the isolated `.pendingtest` package and
- *   the `Remanence Pending Test` label; it must never talk to the live beta
- *   backend (`/onboarding-test/` on `remanence.hryshyn.dev`).
+ * - Default OFF in every variant. `-Premanence.pending.enabled=true` turns it
+ *   on with the service pin in the same build (see app/build.gradle.kts). The
+ *   server has its own flags, so this alone never opens the feature (ADR-020).
  *
  * All pending screens, outbox work, and sender-route branches must check
  * [isEnabled] first and render/act as if the feature does not exist when

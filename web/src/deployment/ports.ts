@@ -21,6 +21,7 @@ export function deploymentPorts(config: DeploymentConfig | null, allowed: () => 
     try { guard(); return result } catch (error) { result.prf?.fill(0); throw error }
   }
   return {
+    pendingServicePin: target?.pendingServicePin,
     transport: {
       // Preserve the HTTP ports' Promise contract even when admission fails.
       // Local retirement must not be interrupted before best-effort cleanup can catch it.

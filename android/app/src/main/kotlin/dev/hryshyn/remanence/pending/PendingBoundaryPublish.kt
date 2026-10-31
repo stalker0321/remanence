@@ -129,6 +129,7 @@ object PendingBoundaryPublish {
                     signingHandle = keys.signingHandle,
                     capsuleKeyset = keys.capsuleKeyset,
                     photos = authored.photos.map { it.jpeg },
+                    cardSenderPublic = identity.cardPublicHandle.takeIf { frozen.channel == "sms" },
                 )
             } else {
                 PendingCapsulePublisher.publishFull(
@@ -151,6 +152,7 @@ object PendingBoundaryPublish {
                     },
                     noteUtf8 = authored.manifests.noteUtf8,
                     expression = authored.manifests.expression,
+                    cardSenderPublic = identity.cardPublicHandle.takeIf { frozen.channel == "sms" },
                 )
             }
         } catch (cancelled: CancellationException) {
@@ -182,6 +184,11 @@ object PendingBoundaryPublish {
                         .encodeToString(publication.signature),
                     escrowPayloadB64 = java.util.Base64.getEncoder()
                         .encodeToString(publication.escrow),
+                    cardSealB64 = publication.card?.let { java.util.Base64.getEncoder().encodeToString(it.seal) },
+                    senderCodeSealedB64 = publication.card?.let {
+                        java.util.Base64.getEncoder().encodeToString(it.senderCodeSealed)
+                    },
+                    cardCode = publication.card?.code,
                 )
             },
             sessionGate = sessionGate,

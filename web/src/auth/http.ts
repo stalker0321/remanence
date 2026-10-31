@@ -10,6 +10,9 @@ const DRAFT_PATH = '/v1/capsules'
 /** Exact canonical ciphertext upload route: `/v1/capsules/{uuid}/blobs/{uuid}`. */
 const UPLOAD_PATH = /^\/v1\/capsules\/([0-9a-f-]{36})\/blobs\/([0-9a-f-]{36})$/
 const PENDING_CANCEL_PATH = /^\/v2\/pending-deliveries\/([0-9a-f-]{36})\/cancel$/
+/** ADR-020: the first-gift journey. Exact shapes, nothing else under /v2/. */
+const GIFT_POST_PATH = /^\/v2\/(?:phone-proofs(?:\/[0-9a-f-]{36}\/check)?|pending-deliveries\/[0-9a-f-]{36}\/claim(?:\/options)?)$/
+const GIFT_GET_PATH = /^\/v2\/(?:pending-incoming|pending-deliveries\/[0-9a-f-]{36}\/(?:claim|control|blobs\/[0-9a-f-]{36}))$/
 
 export interface ApiResult {
   status: number
@@ -161,7 +164,7 @@ export function fetchTransport(origin: string): ApiTransport & ByteTransport & U
       return { status: response.status, body: await readBoundedBytes(response, input.maxBytes) }
     },
     async request(input) {
-      if (input.path.startsWith('/v2/') && input.method !== 'POST') throw new AuthError('TRANSPORT_FAILED')
+      if (input.path.startsWith('/v2/') && input.method !== 'POST' && !GIFT_GET_PATH.test(input.path)) throw new AuthError('TRANSPORT_FAILED')
       const headers: Record<string, string> = {
         accept: 'application/json',
         [PROFILE_HEADER]: PROFILE_VALUE,
@@ -239,6 +242,7 @@ function safeApiPath(path: string): boolean {
   if (path === '/music/v1/search') return true
   const pendingCancel = PENDING_CANCEL_PATH.exec(path)
   if (pendingCancel && isCanonicalUuid(pendingCancel[1] as string)) return true
+  if (GIFT_POST_PATH.test(path) || GIFT_GET_PATH.test(path)) return true
   if (!path.startsWith('/v1/')) return false
   const parts = path.split('/')
   if (parts.length < 3 || parts[0] !== '' || parts[1] !== 'v1') return false

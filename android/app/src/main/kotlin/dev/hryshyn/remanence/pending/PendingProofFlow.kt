@@ -57,6 +57,8 @@ fun PendingProofFlow(
                 PendingProofViewModel.ProofState.RequestingAttempt,
                 PendingProofViewModel.ProofState.CheckingCode,
                 PendingProofViewModel.ProofState.LoadingOptions,
+                is PendingProofViewModel.ProofState.PhoneRequired,
+                PendingProofViewModel.ProofState.WrongCardCode,
                 -> {
                     CircularProgressIndicator(modifier = Modifier.testTag("pending_proof_working"))
                     Spacer(Modifier.height(8.dp))

@@ -176,16 +176,6 @@ class AppContainer private constructor(
     }
 
     val apiBaseUrl: ApiBaseUrl = ApiBaseUrl.parse(BuildConfig.API_BASE_URL).also {
-        // T188-B2 GLOBAL fail-closed: a pending-enabled build must never be
-        // constructed against the live beta backend. This fires in the
-        // container constructor before ANY client (auth/sync/upload/health/
-        // telemetry/retire) is created. Default/beta/release builds (pending
-        // OFF) are unaffected.
-        if (BuildConfig.REMANENCE_PENDING_ENABLED &&
-            !dev.hryshyn.remanence.pending.PendingFeatureGate.isIsolatedApiAccepted(BuildConfig.API_BASE_URL)
-        ) {
-            throw IllegalStateException("pending-enabled build requires an isolated API base (live beta forbidden)")
-        }
         // T186 M7c: capability profile header, pending builds ONLY.
         // Ordinary beta/default builds never send it.
         if (BuildConfig.REMANENCE_PENDING_ENABLED) {
@@ -1498,9 +1488,15 @@ class AppContainer private constructor(
                     }
                 }
             },
-            claimPort = dev.hryshyn.remanence.pending.ProofClaimPort { deliveryId, intentB64, sigB64, opId, token ->
+            claimPort = dev.hryshyn.remanence.pending.ProofClaimPort { deliveryId, intentB64, sigB64, opId, token, envelope, cardProof ->
                 val claimRepo = dev.hryshyn.remanence.core.data.network.PendingClaimRepository.create(apiBaseUrl)
-                claimRepo.submit(deliveryId, intentB64, sigB64, opId, token)
+                claimRepo.submit(deliveryId, intentB64, sigB64, opId, token, envelope, cardProof)
+            },
+            phoneProofPort = object : dev.hryshyn.remanence.pending.PhoneProofPort {
+                private val repository = dev.hryshyn.remanence.core.data.network.PendingPhoneProofRepository.create(apiBaseUrl)
+                override suspend fun start(phoneE164: String, token: String) = repository.start(phoneE164, token)
+                override suspend fun check(proofId: String, code: String, token: String) =
+                    repository.check(proofId, code, token)
             },
             // T186 M7c: session id from the fenced holder, bound to the
             // LIVE lease owner (never borrowed across accounts). Null
@@ -1561,8 +1557,8 @@ class AppContainer private constructor(
             blob = dev.hryshyn.remanence.pending.PendingPublishFlow.BlobPort { delivery, blob, bytes, size, sha, token ->
                 publishRepo.uploadBlob(delivery, blob, bytes, size, sha, token)
             },
-            finalize = dev.hryshyn.remanence.pending.PendingPublishFlow.FinalizePort { delivery, statement, signature, escrow, key, token ->
-                publishRepo.finalize(delivery, statement, signature, escrow, key, token)
+            finalize = dev.hryshyn.remanence.pending.PendingPublishFlow.FinalizePort { delivery, statement, signature, escrow, key, token, cardSeal, senderCode ->
+                publishRepo.finalize(delivery, statement, signature, escrow, key, token, cardSeal, senderCode)
             },
             gate = pendingSessionGate,
             account = {
@@ -1615,8 +1611,8 @@ class AppContainer private constructor(
                     blobPort = dev.hryshyn.remanence.pending.PendingPublishFlow.BlobPort { delivery, blob, bytes, size, sha, token ->
                         publishRepo.uploadBlob(delivery, blob, bytes, size, sha, token)
                     },
-                    finalizePort = dev.hryshyn.remanence.pending.PendingPublishFlow.FinalizePort { delivery, statement, signature, escrow, key, token ->
-                        publishRepo.finalize(delivery, statement, signature, escrow, key, token)
+                    finalizePort = dev.hryshyn.remanence.pending.PendingPublishFlow.FinalizePort { delivery, statement, signature, escrow, key, token, cardSeal, senderCode ->
+                        publishRepo.finalize(delivery, statement, signature, escrow, key, token, cardSeal, senderCode)
                     },
                     materialPort = materialPort,
                     sessionGate = pendingSessionGate,
@@ -1666,6 +1662,8 @@ class AppContainer private constructor(
                 } else {
                     dev.hryshyn.remanence.pending.PendingSenderIdentity(
                         summary.userId, summary.activeKeyBundleId, signing,
+                        (loaded as? dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available)
+                            ?.encryptionHandle?.publicKeysetHandle,
                     )
                 }
             },

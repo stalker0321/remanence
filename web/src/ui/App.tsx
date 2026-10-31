@@ -26,10 +26,13 @@ import { ScanError } from '../scan/errors'
 import { type RecognitionEngine } from '../scan/grant'
 import { explainScan } from '../scan/notice'
 import { receivePostcard } from '../scan/receive'
+import { GiftPage } from '../gift/GiftPage'
+import type { ServicePin } from '../gift/claim'
 import { senderHandles } from '../scan/senders'
 import { createRecognitionEngine } from '../scan/recognitionEngine'
 import { downloadCiphertext } from '../sync/incoming'
 import { fetchCompleteIncoming, wipeIncomingCatalog } from '../sync/incomingAll'
+import { fetchPendingIncoming } from '../sync/pendingIncoming'
 import { buildRecognitionIndex, type RecognitionIndex } from '../scan/recognitionIndex'
 import { canvasTextMeasurer } from '../collage/measure'
 import { CreatorComposer, type CreatorComposerPhoto } from '../collage/CreatorComposer'
@@ -78,6 +81,7 @@ export function App({
   photos,
   music,
   atomicRegistration,
+  pendingServicePin,
   deploymentUnavailable = false,
 }: {
   store: SessionStore
@@ -96,6 +100,8 @@ export function App({
   /** Explicit configured DEV/TEST composition; absent/default keeps registration paused. */
   atomicRegistration?: AtomicPort
   deploymentUnavailable?: boolean
+  /** ADR-020: public key that signs first-gift claims. Absent keeps the journey off. */
+  pendingServicePin?: ServicePin
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const held = useSyncExternalStore(memory.subscribe, memory.getSnapshot)
@@ -112,7 +118,7 @@ export function App({
 
   useEffect(() => {
     if (previousRoute.current === route) return
-    if (route === 'account' && ['scan', 'create', 'history'].includes(previousRoute.current)) setAccountReturn(previousRoute.current)
+    if (route === 'account' && ['scan', 'create', 'history', 'gift'].includes(previousRoute.current)) setAccountReturn(previousRoute.current)
     else if (route !== 'account') setAccountReturn(null)
     previousRoute.current = route
     const heading = content.current?.querySelector('h1')
@@ -190,7 +196,8 @@ export function App({
       {deploymentUnavailable ? <p className="notice notice--warning" role="alert" data-deployment-unavailable>{t('deploymentUnavailable')}</p> : null}
       <ShellStatus t={t} details={false} />
       <main className={`route-content route-${route}`} id="route-content" ref={content} tabIndex={-1}>
-      {route === 'home' ? <Home t={t} signedIn={view.phase !== 'signed-out'} /> : null}
+      {route === 'home' ? <Home t={t} signedIn={view.phase !== 'signed-out'} giftEnabled={pendingServicePin !== undefined} /> : null}
+      {route === 'gift' && pendingServicePin ? <GiftPage t={t} store={store} keys={keys} transport={transport} pin={pendingServicePin} language={view.language} /> : null}
       {route === 'history' ? <HistoryPage key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} language={view.language} /> : null}
       {route === 'scan' ? (
         <Scan
@@ -202,6 +209,7 @@ export function App({
           memory={memory}
           transport={transport}
           engine={engine}
+          pendingServicePin={pendingServicePin}
         />
       ) : null}
       {route === 'create' ? (
@@ -250,11 +258,16 @@ export function App({
   )
 }
 
-function Home({ t, signedIn }: { t: (key: MessageKey) => string; signedIn: boolean }) {
+function Home({ t, signedIn, giftEnabled }: { t: (key: MessageKey) => string; signedIn: boolean; giftEnabled: boolean }) {
   return (
     <>
       <header className="home-intro"><h1>{t('homeTitle')}</h1></header>
       <div className="home-actions">
+      {giftEnabled ? <a className="action-card action-card--receive" href={href('gift')} aria-label={t('homeGiftTitle')}>
+        <h2>{t('homeGiftTitle')}</h2>
+        <p>{t('homeGiftBody')}</p>
+        <span className="action-card-footer"><span>{t('homeGiftAction')}</span><span className="arrow-tile"><Icon name="arrow" /></span></span>
+      </a> : null}
       <a className="action-card action-card--receive" href={href('scan')} aria-label={t('scan')}>
         <h2>{t('homeOpenTitle')}</h2>
         <p>{t('homeOpenBody')}</p>
@@ -280,6 +293,7 @@ export function Scan({
   memory,
   transport,
   engine,
+  pendingServicePin,
 }: {
   t: (key: MessageKey) => string
   camera: CameraPort
@@ -289,6 +303,7 @@ export function Scan({
   memory: PresentationMemory
   transport: ApiTransport & ByteTransport
   engine?: RecognitionEngine
+  pendingServicePin?: ServicePin
 }) {
   const host = useRef<HTMLDivElement>(null)
   const session = useRef<CameraSession | null>(null)
@@ -432,6 +447,18 @@ export function Scan({
       // catalog to the unchanged index/engine/grant flow. Terminal non-null
       // server cursors are normalized only after exhaustion.
       const incoming = await fetchCompleteIncoming(store, transport, controller.signal)
+      if (controller.signal.aborted) return
+      if (pendingServicePin) {
+        // ADR-020: claimed first gifts join the same catalog and the same scan.
+        const current = store.getSnapshot()
+        const secrets = store.secretsFor(current.generation)
+        if (current.accountId && current.bundleId && secrets) {
+          incoming.items.push(...await fetchPendingIncoming(
+            transport, () => secrets.accessToken, { accountId: current.accountId, bundleId: current.bundleId },
+            pendingServicePin, controller.signal,
+          ))
+        }
+      }
       if (controller.signal.aborted) return
       if (incoming.items.length === 0) {
         onNotice('emptyIndex')

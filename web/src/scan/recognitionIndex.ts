@@ -1,6 +1,7 @@
 import type { MemoryKeys } from '../auth/memoryKeys'
 import type { ApiTransport, ByteTransport } from '../auth/http'
-import { artifactAad, recipientEnvelopeInfo } from '../protocol/context'
+import { recipientEnvelopeInfo } from '../protocol/context'
+import { capsuleArtifactAad, openClaimedEnvelope } from '../gift/openClaimed'
 import { bytesToHex } from '../protocol/bytes'
 import { uuidToBytes } from '../protocol/uuid'
 import type { SessionStore } from '../session/session'
@@ -360,6 +361,7 @@ export async function buildRecognitionIndex(deps: BuildRecognitionIndexDeps): Pr
           envelopeCiphertext: envelopeCopy,
           statementSha256: statementCopy,
           blobs: blobsCopy,
+          ...(item.pending ? { pending: item.pending } : {}),
         },
       })
     }
@@ -374,8 +376,13 @@ export async function buildRecognitionIndex(deps: BuildRecognitionIndexDeps): Pr
       try {
         // ---- envelope open (owned plaintext) + strict schema/binding ----
         let opened: Uint8Array
+        let claimedKeyset: Uint8Array | null = null
         try {
-          opened = ownItem(await caps.openEnvelope(
+          if (item.downloadItem.pending) {
+            const claimed = await openClaimedEnvelope(caps, item.downloadItem)
+            opened = ownItem(claimed.owned)
+            claimedKeyset = claimed.keyset
+          } else opened = ownItem(await caps.openEnvelope(
             recipientEnvelopeInfo({
               capsuleId: item.capsuleId,
               senderUserId: item.senderUserId,
@@ -391,7 +398,14 @@ export async function buildRecognitionIndex(deps: BuildRecognitionIndexDeps): Pr
         fenceOrRefuse()
         let views: EnvelopeViews
         try {
-          views = scanEnvelopeViews(opened)
+          views = claimedKeyset
+            ? {
+                capsuleId: uuidToBytes(item.capsuleId), senderUserId: uuidToBytes(item.senderUserId),
+                recipientUserId: uuidToBytes(fence.accountId), senderBundleId: uuidToBytes(item.senderKeyBundleId),
+                recipientBundleId: uuidToBytes(item.recipientKeyBundleId), statementSha256: item.statementSha256,
+                keyset: claimedKeyset,
+              }
+            : scanEnvelopeViews(opened)
         } catch (error) {
           if (error instanceof RecognitionIndexError) throw error
           refuse('invalid')
@@ -423,14 +437,7 @@ export async function buildRecognitionIndex(deps: BuildRecognitionIndexDeps): Pr
         try {
           manifestPlain = ownItem(await caps.decryptArtifact(
             views.keyset,
-            artifactAad({
-              capsuleId: item.capsuleId,
-              blobId: item.recognitionBlobId,
-              kind: 'RECOGNITION_MANIFEST',
-              ordinal: -1,
-              senderUserId: item.senderUserId,
-              recipientUserId: fence.accountId,
-            }),
+            capsuleArtifactAad(item.downloadItem, item.recognitionBlobId, 'RECOGNITION_MANIFEST', -1),
             ciphertext,
             'RECOGNITION_MANIFEST',
           ))

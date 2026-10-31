@@ -303,22 +303,25 @@ fun CreateScreen(
                         // section below is inert for pending gifts.
                         val pendingCode by viewModel.pendingPublication.collectAsStateWithLifecycle()
                         if (pendingCode != null) {
+                            Spacer(Modifier.height(16.dp))
+                            Text(
+                                stringResource(R.string.pending_card_write_title),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
                             Spacer(Modifier.height(8.dp))
                             Text(
+                                android.net.Uri.parse(dev.hryshyn.remanence.BuildConfig.API_BASE_URL).host.orEmpty(),
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.testTag("create_pending_site"),
+                            )
+                            Text(
                                 pendingCode!!.locatorCode,
-                                style = MaterialTheme.typography.headlineSmall,
+                                style = MaterialTheme.typography.headlineMedium,
                                 modifier = Modifier.testTag("create_pending_code"),
                             )
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                pendingCode!!.hint,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = HoldColors.Muted,
-                                modifier = Modifier.testTag("create_pending_hint"),
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                stringResource(R.string.pending_sender_code_note),
+                                stringResource(R.string.pending_card_write_body),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = HoldColors.Muted,
                             )
@@ -471,9 +474,9 @@ private fun RecipientLookupContent(viewModel: CreateViewModel, recentRecipientsC
                     val app = context.applicationContext as RemanenceApplication
                     app.container.newPendingSenderViewModel(
                         senderScope,
-                        contentPort = dev.hryshyn.remanence.pending.PendingSenderContentPort {
-                            viewModel.pendingSenderContent()
-                        },
+                        // A card gift always publishes at the Create boundary, with its
+                        // recognition manifest, never from this sheet.
+                        contentPort = dev.hryshyn.remanence.pending.PendingSenderContentPort { null },
                         onFrozenRoute = viewModel::onPendingRouteFrozen,
                         // T186 M12e-gap2: the SAME session capsule id the
                         // boundary publishes under (route.capsule_id ==

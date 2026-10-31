@@ -5,6 +5,7 @@ import { limits } from '../protocol/limits'
 import { parseAes256GcmKeyset, tinkPrefixKeyId } from './tink'
 
 const prefix = utf8(ARTIFACT_AAD_PREFIX)
+const prefixV2 = utf8('postmark/artifact/v2')
 
 export async function decryptArtifact(
   keyset: Uint8Array,
@@ -21,7 +22,8 @@ export async function decryptArtifact(
         : 0
   if (cap === 0) throw new ProtocolError('UNKNOWN_KIND')
   if (ciphertext.length < limits.artifactOverhead || ciphertext.length > cap) throw new ProtocolError('OVERSIZED')
-  if (!startsWith(aad, prefix) || aad[prefix.length] !== 0) throw new ProtocolError('AAD_REJECTED')
+  const known = [prefix, prefixV2].some((head) => startsWith(aad, head) && aad[head.length] === 0)
+  if (!known) throw new ProtocolError('AAD_REJECTED')
   const keyId = tinkPrefixKeyId(ciphertext)
   const parsed = parseAes256GcmKeyset(keyset)
   if (parsed.keyId !== keyId) {

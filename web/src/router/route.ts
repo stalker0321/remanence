@@ -1,4 +1,4 @@
-export const routes = ['home', 'scan', 'create', 'account', 'settings', 'history'] as const
+export const routes = ['home', 'scan', 'create', 'account', 'settings', 'history', 'gift'] as const
 
 export type RouteName = (typeof routes)[number]
 
@@ -19,6 +19,8 @@ export function parseRoute(hash: string): RouteName {
       return 'settings'
     case '/history':
       return 'history'
+    case '/gift':
+      return 'gift'
     default:
       return 'home'
   }

@@ -25,6 +25,7 @@ android {
 
 dependencies {
     api(libs.tink.android)
+    implementation(libs.bouncycastle.prov)
     implementation(project(":core:model"))
     testImplementation(kotlin("test-junit5"))
     testImplementation(libs.kotlinx.serialization.json)

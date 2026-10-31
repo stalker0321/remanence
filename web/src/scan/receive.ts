@@ -92,7 +92,8 @@ export async function receivePostcard(
     currentToken()
     onAdmission?.()
     currentToken()
-    await admitFirstOpen(transport, item.capsuleId, currentToken, signal)
+    // A first gift's opening needs no server admission: the claim already fixed ownership.
+    if (!item.pending) await admitFirstOpen(transport, item.capsuleId, currentToken, signal)
     currentToken()
     showGrantedPostcard(session, memory, opened)
   } catch (error) {

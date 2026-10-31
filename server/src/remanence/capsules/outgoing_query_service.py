@@ -166,12 +166,11 @@ class OutgoingQueryService:
                     "is_self": row["recipient_id"] == owner if v1 else None,
                 },
                 "locator": _locator(row, mode=mode, custody=custody),
-                # ADR-020: readable only by the sender's own key.
-                "card_code_sealed_b64": (
-                    base64.b64encode(bytes(row["sender_code_sealed"])).decode()
-                    if row["sender_code_sealed"] is not None else None
-                ),
                 "cancel_action": cancel, "cancel_deadline": _iso(deadline),
+                # ADR-020: readable only by the sender's own key. Absent rather
+                # than null, because older clients reject unknown fields.
+                **({"card_code_sealed_b64": base64.b64encode(bytes(row["sender_code_sealed"])).decode()}
+                   if row["sender_code_sealed"] is not None else {}),
             })
         next_cursor = _cursor(owner, rows[-1]["created_at"], rows[-1]["protocol_version"], rows[-1]["capsule_id"]) if has_more else None
         return {"items": items, "has_more": has_more, "next_cursor": next_cursor}

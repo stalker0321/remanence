@@ -1,7 +1,6 @@
-import { unb64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
 import type { ApiTransport } from '../auth/http'
 import { directoryBundle, verifyDomainSignature, type ServicePin } from '../gift/claim'
-import { CLAIM_BINDING_DOMAIN, PENDING_PUBLISH_DOMAIN, parseBinding, parseStatement, statementHash } from '../gift/wire'
+import { CLAIM_BINDING_DOMAIN, PENDING_PUBLISH_DOMAIN, fromBase64, parseBinding, parseStatement, statementHash } from '../gift/wire'
 import type { IncomingCapsule } from './incoming'
 
 const MAX_ITEMS = 50
@@ -45,15 +44,15 @@ export async function fetchPendingIncoming(
     if (claim.status !== 200 || control.status !== 200) return null
     const claimBody = claim.body as Record<string, string>
     const controlBody = control.body as Record<string, string>
-    const statementRaw = unb64(controlBody.publish_statement_b64 as string)
+    const statementRaw = fromBase64(controlBody.publish_statement_b64 as string)
     const statement = parseStatement(statementRaw)
     const h = await statementHash(statementRaw)
     if (statement.capsuleId !== capsuleId || statement.serviceKeyId !== pin.keyId) return null
     const sender = await directoryBundle(transport, token(), statement.senderKeyBundleId, signal)
     if (!sender || sender.userId !== statement.senderUserId) return null
-    if (!await verifyDomainSignature(sender.signing, PENDING_PUBLISH_DOMAIN, statementRaw, unb64(controlBody.publish_signature_69_b64 as string))) return null
-    const bindingRaw = unb64(claimBody.claim_binding_b64 as string)
-    if (!await verifyDomainSignature(unb64(pin.publicKeysetB64), CLAIM_BINDING_DOMAIN, bindingRaw, unb64(claimBody.claim_signature_69_b64 as string))) return null
+    if (!await verifyDomainSignature(sender.signing, PENDING_PUBLISH_DOMAIN, statementRaw, fromBase64(controlBody.publish_signature_69_b64 as string))) return null
+    const bindingRaw = fromBase64(claimBody.claim_binding_b64 as string)
+    if (!await verifyDomainSignature(fromBase64(pin.publicKeysetB64), CLAIM_BINDING_DOMAIN, bindingRaw, fromBase64(claimBody.claim_signature_69_b64 as string))) return null
     const binding = parseBinding(bindingRaw)
     if (binding.capsuleId !== capsuleId || !same(binding.statementSha256, h)
       || binding.recipientUserId !== account.accountId || binding.serviceKeyId !== pin.keyId) return null
@@ -63,7 +62,7 @@ export async function fetchPendingIncoming(
       recipientUserId: account.accountId,
       senderKeyBundleId: statement.senderKeyBundleId,
       recipientKeyBundleId: binding.recipientKeyBundleId,
-      envelopeCiphertext: unb64(claimBody.envelope_b64 as string),
+      envelopeCiphertext: fromBase64(claimBody.envelope_b64 as string),
       statementSha256: h,
       blobs: statement.blobs,
       pending: {

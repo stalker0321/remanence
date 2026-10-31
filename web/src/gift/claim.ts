@@ -1,4 +1,3 @@
-import { unb64, b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
 import type { ApiTransport } from '../auth/http'
 import type { MemoryKeys } from '../auth/memoryKeys'
 import { sealRecipientEnvelope } from '../crypto/hpkeSeal'
@@ -9,8 +8,13 @@ import { openSeal, parseSeal, type OpenedSeal } from './cardSeal'
 import {
   CLAIM_BINDING_DOMAIN, CLAIM_CHALLENGE_DOMAIN, CLAIMED_ENVELOPE_DOMAIN, PENDING_PUBLISH_DOMAIN,
   claimIntent, domainInput, envelopeContext, envelopePlaintext, keyCommitment, parseBinding, parseChallenge,
-  parseStatement, statementHash,
+  fromBase64, parseStatement, statementHash, toBase64,
 } from './wire'
+
+/** The directory speaks the recovery helpers' base64url. */
+function directoryKeyset(value: string): Uint8Array {
+  return fromBase64(value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '='))
+}
 
 export interface ServicePin { keyId: string; publicKeysetB64: string }
 
@@ -48,7 +52,7 @@ export async function directoryBundle(transport: ApiTransport, token: string, bu
   const root = response.status === 200 ? response.body as Record<string, unknown> | null : null
   if (!root || root.key_bundle_id !== bundleId || typeof root.user_id !== 'string'
     || typeof root.signing_public_keyset !== 'string' || typeof root.encryption_public_keyset !== 'string') return null
-  return { userId: root.user_id, signing: unb64(root.signing_public_keyset), encryption: unb64(root.encryption_public_keyset) }
+  return { userId: root.user_id, signing: directoryKeyset(root.signing_public_keyset), encryption: directoryKeyset(root.encryption_public_keyset) }
 }
 
 /**
@@ -81,7 +85,7 @@ export async function claimCardGift(deps: {
     return secrets.accessToken
   }
   for (const gift of gifts) {
-    const seal = parseSeal(unb64(gift.card_seal_b64))
+    const seal = parseSeal(fromBase64(gift.card_seal_b64))
     const opened: OpenedSeal | null = await openSeal(secret, seal)
     if (signal?.aborted) { opened?.keyset.fill(0); opened?.proof.fill(0); return 'stale' }
     if (!opened) continue
@@ -95,28 +99,28 @@ export async function claimCardGift(deps: {
   return 'wrong-code'
 
   async function claimOne(gift: GiftDto, opened: OpenedSeal): Promise<ClaimOutcome> {
-    const statementRaw = unb64(gift.publish_statement_b64)
+    const statementRaw = fromBase64(gift.publish_statement_b64)
     const statement = parseStatement(statementRaw)
     const h = await statementHash(statementRaw)
     if (statement.capsuleId !== gift.capsule_id || statement.deliveryTargetId !== gift.delivery_target_id || statement.serviceKeyId !== pin.keyId) return 'refused'
     const sender = await directoryBundle(transport, token(), statement.senderKeyBundleId, signal)
     if (!sender || sender.userId !== statement.senderUserId) return 'refused'
-    if (!await verifyDomainSignature(sender.signing, PENDING_PUBLISH_DOMAIN, statementRaw, unb64(gift.publish_signature_69_b64))) return 'refused'
+    if (!await verifyDomainSignature(sender.signing, PENDING_PUBLISH_DOMAIN, statementRaw, fromBase64(gift.publish_signature_69_b64))) return 'refused'
     // What the sender signed must commit to exactly what the code opened.
     if (!same(await keyCommitment(gift.capsule_id, gift.delivery_target_id, opened.keyset), statement.keyCommitment)) return 'refused'
 
     const options = await transport.request({ path: `/v2/pending-deliveries/${gift.delivery_id}/claim/options`, method: 'POST', token: token(), signal })
     const body = options.status === 200 ? options.body as Record<string, unknown> | null : null
     if (!body || typeof body.claim_challenge_b64 !== 'string' || typeof body.hpke_challenge_b64 !== 'string' || typeof body.claim_binding_b64 !== 'string') return 'refused'
-    const challengeRaw = unb64(body.claim_challenge_b64)
+    const challengeRaw = fromBase64(body.claim_challenge_b64)
     const challenge = parseChallenge(challengeRaw)
     if (challenge.capsuleId !== gift.capsule_id || challenge.deliveryTargetId !== gift.delivery_target_id
       || challenge.recipientUserId !== caps!.accountId || challenge.recipientKeyBundleId !== caps!.bundleId) return 'refused'
-    const nonce = await caps!.openEnvelope(domainInput(CLAIM_CHALLENGE_DOMAIN, challengeRaw), unb64(body.hpke_challenge_b64))
+    const nonce = await caps!.openEnvelope(domainInput(CLAIM_CHALLENGE_DOMAIN, challengeRaw), fromBase64(body.hpke_challenge_b64))
     const nonceSha256 = await statementHash(nonce)
     if (!same(nonceSha256, challenge.nonceSha256)) return 'refused'
 
-    const bindingRaw = unb64(body.claim_binding_b64)
+    const bindingRaw = fromBase64(body.claim_binding_b64)
     const binding = parseBinding(bindingRaw)
     const own = await directoryBundle(transport, token(), caps!.bundleId, signal)
     if (!own || !same(binding.statementSha256, h) || binding.capsuleId !== gift.capsule_id
@@ -152,18 +156,18 @@ export async function claimCardGift(deps: {
       token: token(),
       signal,
       body: {
-        claim_intent_b64: b64(intent),
-        claim_intent_signature_69_b64: b64(signature),
+        claim_intent_b64: toBase64(intent),
+        claim_intent_signature_69_b64: toBase64(signature),
         idempotency_key: operationId,
-        envelope_b64: b64(envelope),
-        card_proof_b64: b64(opened.proof),
+        envelope_b64: toBase64(envelope),
+        card_proof_b64: toBase64(opened.proof),
       },
     })
     const result = claimed.status === 200 ? claimed.body as Record<string, unknown> | null : null
     if (!result || typeof result.claim_binding_b64 !== 'string' || typeof result.claim_signature_69_b64 !== 'string') return 'refused'
-    const signedBinding = unb64(result.claim_binding_b64)
+    const signedBinding = fromBase64(result.claim_binding_b64)
     if (!same(signedBinding, bindingRaw)) return 'refused'
-    const verified = await verifyDomainSignature(unb64(pin.publicKeysetB64), CLAIM_BINDING_DOMAIN, signedBinding, unb64(result.claim_signature_69_b64))
+    const verified = await verifyDomainSignature(fromBase64(pin.publicKeysetB64), CLAIM_BINDING_DOMAIN, signedBinding, fromBase64(result.claim_signature_69_b64))
     return verified ? 'claimed' : 'refused'
   }
 }

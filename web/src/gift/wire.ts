@@ -7,6 +7,17 @@ import type { IncomingBlob } from '../sync/incoming'
 const KIND = { 1: 'RECOGNITION_MANIFEST', 2: 'CONTENT_MANIFEST', 3: 'PHOTO' } as const
 const KIND_VALUE = { RECOGNITION_MANIFEST: 1, CONTENT_MANIFEST: 2, PHOTO: 3 } as const
 
+/** The pending API speaks standard base64, unlike the recovery helpers' base64url. */
+export function fromBase64(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), (ch) => ch.charCodeAt(0))
+}
+
+export function toBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
 export function domainInput(name: string, message: Uint8Array): Uint8Array {
   return concat([utf8(name), Uint8Array.of(0), message])
 }

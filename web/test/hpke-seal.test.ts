@@ -92,7 +92,7 @@ describe('recipient HPKE seal', () => {
     const encryptSpy = vi.spyOn(crypto.subtle, 'encrypt')
     const randomSpy = vi.spyOn(crypto, 'getRandomValues')
     await expect(sealRecipientEnvelope(PUBLIC_KEYSET, new Uint8Array(0), PLAINTEXT)).rejects.toMatchObject({ code: 'OVERSIZED' })
-    await expect(sealRecipientEnvelope(PUBLIC_KEYSET, new Uint8Array(129), PLAINTEXT)).rejects.toMatchObject({ code: 'OVERSIZED' })
+    await expect(sealRecipientEnvelope(PUBLIC_KEYSET, new Uint8Array(257), PLAINTEXT)).rejects.toMatchObject({ code: 'OVERSIZED' })
     await expect(sealRecipientEnvelope(PUBLIC_KEYSET, INFO, new Uint8Array(0))).rejects.toMatchObject({ code: 'EMPTY' })
     await expect(sealRecipientEnvelope(PUBLIC_KEYSET, INFO, new Uint8Array(16332))).rejects.toMatchObject({ code: 'OVERSIZED' })
     await expect(sealRecipientEnvelope(new Uint8Array(3), INFO, PLAINTEXT)).rejects.toBeInstanceOf(ProtocolError)

@@ -71,6 +71,11 @@ class PendingDelivery(Base):
         UniqueConstraint("delivery_target_id", name="uq_pending_deliveries_target"),
         Index("ix_pending_deliveries_sender", "sender_user_id"),
         Index("ix_pending_deliveries_state", "state"),
+        Index(
+            "ix_pending_deliveries_lookup_tag",
+            "destination_lookup_tag",
+            postgresql_where=text("state = 'PENDING'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, nullable=False)
@@ -117,6 +122,12 @@ class PendingDelivery(Base):
     # Validated R3 blob declarations (kind/ordinal/size/sha per blob).
     # Bound at finalize: S artifacts must match exactly. JSON list.
     blob_declarations: Mapped[list | None] = mapped_column(JSONTYPE, nullable=True)
+    # ADR-020: gifts are found by this HMAC of the verified number; wiped with
+    # the seal at any terminal state. The hint is public, it is on the card.
+    destination_lookup_tag: Mapped[bytes | None] = mapped_column(LargeBinary(32), nullable=True)
+    recipient_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # The card code sealed to the sender's own key: only the sender can read it back.
+    sender_code_sealed: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -140,6 +151,8 @@ class AddressProofAttempt(Base):
         CheckConstraint("guesses >= 0", name="ck_proof_attempts_guesses_nonneg"),
         CheckConstraint("dispatches >= 0", name="ck_proof_attempts_dispatches_nonneg"),
         Index("ix_proof_attempts_delivery", "delivery_id"),
+        Index("ix_proof_attempts_address_time", "address_lookup_tag", "created_at"),
+        Index("ix_proof_attempts_created", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, nullable=False)
@@ -207,6 +220,10 @@ class ClaimChallenge(Base):
     nonce_sha256: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ADR-020: the device seals the envelope to itself, so it must know the
+    # binding first. The service signs these exact bytes at claim.
+    claim_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    claim_binding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -121,7 +121,8 @@ class PendingSendRoute(Base):
     # AEAD-sealed normalized destination (T183 encrypted-at-rest contract).
     # Raw recipient destinations never reach SQL; lookup uses the
     # server-secret HMAC tag in delivery_address_bindings, never this blob.
-    sealed_destination: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Wiped (NULL) once the gift reaches a terminal state.
+    sealed_destination: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     target_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     target_bundle_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     delivery_target_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)

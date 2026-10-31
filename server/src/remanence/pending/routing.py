@@ -43,11 +43,8 @@ class RoutingError(RuntimeError):
 
 
 def seal_destination(*, normalized: str, key_32: bytes, mode: str) -> bytes:
-    """Encrypt-at-rest dev adapter for route destinations. Dev/test only
-    with an explicit synthetic key; prod/beta refused (KMS envelope is
-    the production path, wired at deployment)."""
-    if mode in ("prod", "beta"):
-        raise RoutingError("PROTOCOL_UNSUPPORTED")
+    """Encrypt-at-rest for route destinations under the application key."""
+    _ = mode
     try:
         primitive = aead_from_raw_key(key_32)
         return primitive.encrypt(normalized.encode("utf-8"), _DESTINATION_AAD)

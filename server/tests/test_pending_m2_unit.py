@@ -76,17 +76,18 @@ def test_pending_prod_without_custody_rejected() -> None:
         )
 
 
-def test_pending_prod_with_allowlisted_custody_accepted() -> None:
+def test_pending_prod_with_card_seal_secrets_accepted() -> None:
     settings = Settings(
         mode=AppMode.PROD,
         database_url="postgresql+psycopg://u:p@127.0.0.1:1/db",
         blob_root="/tmp/blobs",
         pending_protocol_enabled=True,
-        pending_kms_key_id="kms-1",
-        pending_allowed_kms_key_ids=["kms-1"],
+        pending_master_secret="synthetic-master-secret-32-bytes-minimum",
+        pending_service_key_id=str(uuid.uuid4()),
+        pending_service_keyset_b64="c3ludGhldGlj",
         pending_hmac_secret="synthetic-test-secret-32-bytes-minimum",
     )
-    assert settings.pending_kms_key_id == "kms-1"
+    assert settings.pending_kms_key_id is None
 
 
 def test_pending_master_requires_hmac_secret() -> None:
@@ -152,13 +153,11 @@ def test_decide_route_matrix() -> None:
 # --- sealed destinations ------------------------------------------------------------
 
 
-def test_sealed_destination_roundtrip_and_prod_refusal() -> None:
+def test_sealed_destination_roundtrip() -> None:
     key = bytes([0x0C] * 32)
     sealed = seal_destination(normalized="a42@example.test", key_32=key, mode="test")
     assert b"a42@example.test" not in sealed
     assert open_destination(sealed=sealed, key_32=key) == "a42@example.test"
-    with pytest.raises(RoutingError):
-        seal_destination(normalized="a42@example.test", key_32=key, mode="prod")
     with pytest.raises(RoutingError):
         open_destination(sealed=b"garbage", key_32=key)
 

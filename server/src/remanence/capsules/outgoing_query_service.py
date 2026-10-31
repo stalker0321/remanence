@@ -70,6 +70,7 @@ def _projection(owner: uuid.UUID):
         Capsule.recipient_user_id.label("recipient_id"), User.handle_normalized.label("handle"),
         GiftLocator.state.label("locator_state"), GiftLocator.code_ciphertext,
         GiftLocator.code_hmac, GiftLocator.hint_mask,
+        cast(null(), PendingDelivery.sender_code_sealed.type).label("sender_code_sealed"),
     ).join(User, User.id == Capsule.recipient_user_id).outerjoin(
         GiftLocator, and_(GiftLocator.capsule_id == Capsule.id, ~collision),
     ).where(Capsule.sender_user_id == owner)
@@ -82,7 +83,9 @@ def _projection(owner: uuid.UUID):
         cast(null(), Capsule.revoked_at.type).label("revoked_at"),
         cast(null(), UUID).label("recipient_id"), cast(null(), String).label("handle"),
         GiftLocator.state.label("locator_state"), GiftLocator.code_ciphertext,
-        GiftLocator.code_hmac, GiftLocator.hint_mask,
+        GiftLocator.code_hmac,
+        func.coalesce(GiftLocator.hint_mask, PendingDelivery.recipient_hint).label("hint_mask"),
+        PendingDelivery.sender_code_sealed,
     ).outerjoin(GiftLocator, and_(
         GiftLocator.id == PendingDelivery.locator_id,
         GiftLocator.capsule_id == PendingDelivery.capsule_id,
@@ -163,6 +166,11 @@ class OutgoingQueryService:
                     "is_self": row["recipient_id"] == owner if v1 else None,
                 },
                 "locator": _locator(row, mode=mode, custody=custody),
+                # ADR-020: readable only by the sender's own key.
+                "card_code_sealed_b64": (
+                    base64.b64encode(bytes(row["sender_code_sealed"])).decode()
+                    if row["sender_code_sealed"] is not None else None
+                ),
                 "cancel_action": cancel, "cancel_deadline": _iso(deadline),
             })
         next_cursor = _cursor(owner, rows[-1]["created_at"], rows[-1]["protocol_version"], rows[-1]["capsule_id"]) if has_more else None

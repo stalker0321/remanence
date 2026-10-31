@@ -11,7 +11,7 @@ from psycopg import sql
 from sqlalchemy.engine import make_url
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
-_HEAD = "0019_pending_fk_names"
+_HEAD = "0020_card_seal"
 _HEAD_TABLES = {
     "account_send_access",
     "address_proof_attempts",

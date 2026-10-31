@@ -16,7 +16,7 @@ from typing import BinaryIO
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from remanence.pending import domains
+from remanence.pending import card_seal, domains
 from remanence.pending.claim_models import PendingDelivery
 from remanence.pending.locator_store import activate, allocate_reserved
 from remanence.pending.models import GiftLocator
@@ -282,6 +282,9 @@ def finalize_delivery(
     operation_id: uuid.UUID | None = None,
     clock: Callable[[], datetime] | None = None,
     send_access_mode: SendAccessMode = SendAccessMode.OFF,
+    destination_lookup_tag: bytes | None = None,
+    recipient_hint: str | None = None,
+    sender_code_sealed: bytes | None = None,
 ) -> tuple[PendingDelivery, str]:
     """Finalize a DRAFT into PENDING + ACTIVE locator in one flush.
 
@@ -401,24 +404,36 @@ def finalize_delivery(
         domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw,
         signature_69,
     )
-    from remanence.pending.canonical import CanonicalError as _CanonicalError
-    from remanence.pending.canonical import parse_strict as _parse_strict
+    card_vault = isinstance(vault, card_seal.CardSealVault)
+    if card_vault:
+        # ADR-020: nothing here opens the gift. The code stays on the card.
+        if destination_lookup_tag is None or recipient_hint is None or delivery.channel != "sms":
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+        if sender_code_sealed is None or not 0 < len(sender_code_sealed) <= card_seal.MAX_SEALED_CODE_BYTES:
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+        try:
+            card_seal.verify_binding(card_seal.parse_seal(escrow_payload_raw), statement, statement_hash)
+        except card_seal.CardSealError as exc:
+            raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
+    else:
+        from remanence.pending.canonical import CanonicalError as _CanonicalError
+        from remanence.pending.canonical import parse_strict as _parse_strict
 
-    try:
-        escrow_payload = _parse_strict(dv2.PendingEscrowPlaintextV1, escrow_payload_raw)
-    except _CanonicalError as exc:
-        raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
-    if (
-        bytes(escrow_payload.publish_statement_sha256) != statement_hash
-        or bytes(escrow_payload.address_commitment) != bytes(statement.address_commitment)
-        or bytes(escrow_payload.key_commitment) != bytes(statement.key_commitment)
-        or uuid.UUID(bytes=bytes(escrow_payload.capsule_id)) != delivery.capsule_id
-        or uuid.UUID(bytes=bytes(escrow_payload.delivery_target_id)) != delivery.delivery_target_id
-        or uuid.UUID(bytes=bytes(escrow_payload.sender_user_id)) != delivery.sender_user_id
-        or escrow_payload.claim_expires_at_epoch_seconds
-        != statement.claim_expires_at_epoch_seconds
-    ):
-        raise PublicationError("PROTOCOL_UNSUPPORTED")
+        try:
+            escrow_payload = _parse_strict(dv2.PendingEscrowPlaintextV1, escrow_payload_raw)
+        except _CanonicalError as exc:
+            raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
+        if (
+            bytes(escrow_payload.publish_statement_sha256) != statement_hash
+            or bytes(escrow_payload.address_commitment) != bytes(statement.address_commitment)
+            or bytes(escrow_payload.key_commitment) != bytes(statement.key_commitment)
+            or uuid.UUID(bytes=bytes(escrow_payload.capsule_id)) != delivery.capsule_id
+            or uuid.UUID(bytes=bytes(escrow_payload.delivery_target_id)) != delivery.delivery_target_id
+            or uuid.UUID(bytes=bytes(escrow_payload.sender_user_id)) != delivery.sender_user_id
+            or escrow_payload.claim_expires_at_epoch_seconds
+            != statement.claim_expires_at_epoch_seconds
+        ):
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
     aad = build_escrow_aad(
         capsule_id=delivery.capsule_id.bytes,
         delivery_target_id=delivery.delivery_target_id.bytes,
@@ -435,21 +450,24 @@ def finalize_delivery(
     )
     check_deadlines()
     try:
-        handle = vault.seal(escrow_payload, aad)
+        handle = vault.seal(escrow_payload_raw, aad) if card_vault else vault.seal(escrow_payload, aad)
     except VaultError as exc:
         raise PublicationError("PROVIDER_UNAVAILABLE") from exc
     check_deadlines()
-    locator, code = allocate_reserved(
-        session, capsule_id=delivery.capsule_id, hint_mask=hint_mask, hmac_key=locator_hmac_key
-    )
-    if locator_code_key_mode in ("prod", "beta"):
-        raise PublicationError("PROTOCOL_UNSUPPORTED")
-    code_primitive = aead_from_raw_key(locator_code_key_32)
-    activate(
-        session,
-        locator_id=locator.id,
-        code_ciphertext=code_primitive.encrypt(code.encode("ascii"), b"pending-locator-code-v1"),
-    )
+    locator = None
+    code = ""
+    if not card_vault:
+        locator, code = allocate_reserved(
+            session, capsule_id=delivery.capsule_id, hint_mask=hint_mask, hmac_key=locator_hmac_key
+        )
+        if locator_code_key_mode in ("prod", "beta"):
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+        code_primitive = aead_from_raw_key(locator_code_key_32)
+        activate(
+            session,
+            locator_id=locator.id,
+            code_ciphertext=code_primitive.encrypt(code.encode("ascii"), b"pending-locator-code-v1"),
+        )
     delivery.publish_statement = statement_raw
     delivery.publish_statement_sha256 = statement_hash
     delivery.publish_signature = signature_69
@@ -460,7 +478,10 @@ def finalize_delivery(
     delivery.vault_key_id = handle.key_id
     delivery.vault_ciphertext = handle.ciphertext
     delivery.vault_binding_hex = handle.binding_digest_hex
-    delivery.locator_id = locator.id
+    delivery.locator_id = locator.id if locator is not None else None
+    delivery.destination_lookup_tag = destination_lookup_tag
+    delivery.recipient_hint = recipient_hint
+    delivery.sender_code_sealed = sender_code_sealed
     delivery.finalize_operation_id = operation_id
     delivery.finalize_request_digest = request_digest
     delivery.state = "PENDING"
@@ -494,4 +515,41 @@ def cancel_delivery(session: Session, *, delivery_id: uuid.UUID, sender_user_id:
     delivery.state = "CANCELLED"
     if delivery.locator_id is not None:
         retire_locator(session, locator_id=delivery.locator_id, terminal=True)
+    if delivery.vault_name == card_seal.VAULT_NAME:
+        wipe_gift_secrets(session, delivery)
     session.flush()
+
+
+def wipe_gift_secrets(session: Session, delivery: PendingDelivery) -> None:
+    """ADR-020: at a terminal state nothing about the seal or the number stays."""
+    from remanence.pending.models import PendingSendRoute
+
+    delivery.vault_ciphertext = None
+    delivery.vault_name = None
+    delivery.vault_key_id = None
+    delivery.vault_binding_hex = None
+    delivery.destination_lookup_tag = None
+    delivery.sender_code_sealed = None
+    route = session.get(PendingSendRoute, delivery.route_id) if delivery.route_id else None
+    if route is not None:
+        route.sealed_destination = None
+
+
+def expire_card_gifts(session: Session, *, now: datetime, limit: int = 50) -> int:
+    """Bounded sweep: past-deadline card gifts lose their seal and number."""
+    rows = session.scalars(
+        select(PendingDelivery)
+        .where(
+            PendingDelivery.state == "PENDING",
+            PendingDelivery.vault_name == card_seal.VAULT_NAME,
+            PendingDelivery.claim_expires_at <= now,
+        )
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    ).all()
+    for row in rows:
+        row.state = "EXPIRED"
+        wipe_gift_secrets(session, row)
+    if rows:
+        session.flush()
+    return len(rows)

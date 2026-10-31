@@ -69,6 +69,22 @@ class Settings(BaseSettings):
     # synthetic in tests). Required whenever the pending master flag is on:
     # without it the registry cannot bootstrap tags at runtime.
     pending_hmac_secret: SecretStr | None = None
+    # ADR-020: first gifts keyed by the card. One master secret derives the
+    # application keys. The service keyset signs claim bindings for the clients.
+    pending_master_secret: SecretStr | None = None
+    pending_service_key_id: str | None = None
+    pending_service_keyset_b64: SecretStr | None = None
+    pending_bulkgate_application_id: str | None = None
+    pending_bulkgate_application_token: SecretStr | None = None
+    pending_bulkgate_sender_name: str | None = None
+    pending_sms_daily_cap: int = 200
+    # Calling codes: EU, EEA, UK, Switzerland and Ukraine. Everything else is
+    # refused to the sender up front and gets no SMS.
+    pending_sms_country_prefixes: list[str] = Field(default_factory=lambda: [
+        "30", "31", "32", "33", "34", "351", "352", "353", "354", "356", "357", "358", "359",
+        "36", "370", "371", "372", "380", "385", "386", "39", "40", "41", "420", "421", "423",
+        "43", "44", "45", "46", "47", "48", "49",
+    ])
 
     @model_validator(mode="after")
     def require_pending_custody(self) -> Self:
@@ -83,10 +99,12 @@ class Settings(BaseSettings):
             raise ValueError("pending requires an explicit address HMAC secret")
         if self.pending_protocol_enabled and self.mode in (AppMode.PROD, AppMode.BETA):
             if (
-                not self.pending_kms_key_id
-                or self.pending_kms_key_id not in self.pending_allowed_kms_key_ids
+                self.pending_master_secret is None
+                or len(self.pending_master_secret.get_secret_value()) < 32
+                or not self.pending_service_key_id
+                or self.pending_service_keyset_b64 is None
             ):
-                raise ValueError("pending in prod/beta requires configured independent custody")
+                raise ValueError("pending in prod/beta requires the card-seal secrets")
         return self
 
     @model_validator(mode="after")

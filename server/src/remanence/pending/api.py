@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -35,7 +35,9 @@ from remanence.api.dependencies import (
     get_db_session,
     get_upload_reservations,
 )
+from remanence.pending import card_seal
 from remanence.pending import claim as claim_service
+from remanence.pending import phone_proof
 from remanence.pending import locator_store, proof as proof_service
 from remanence.pending import profiles as profile_service
 from remanence.pending import publication as publication_service
@@ -87,7 +89,10 @@ class PendingDeliveryRequest(Strict):
 class FinalizeRequest(Strict):
     publish_statement_b64: str
     publish_signature_69_b64: str
-    escrow_payload_b64: str
+    escrow_payload_b64: str | None = None
+    # ADR-020: exactly one of escrow (non-production) or card seal.
+    card_seal_b64: str | None = None
+    sender_code_sealed_b64: str | None = None
     idempotency_key: uuid.UUID
 
 
@@ -112,6 +117,18 @@ class ClaimRequest(Strict):
     claim_intent_b64: str
     claim_intent_signature_69_b64: str
     idempotency_key: uuid.UUID
+    # ADR-020: the device sealed this envelope to itself, and proves the code.
+    envelope_b64: str | None = None
+    card_proof_b64: str | None = None
+
+
+class PhoneProofRequest(Strict):
+    phone: str = Field(min_length=1, max_length=32)
+    sms_text_version: str
+
+
+class PhoneProofCheckRequest(Strict):
+    code: str = Field(min_length=1, max_length=16)
 
 
 class AckRequest(Strict):
@@ -216,6 +233,46 @@ class LookupRateLimiter:
         return True
 
 
+class PhoneProofLimiter:
+    """Per-account request budget, counted before any lookup so hitting it
+    says nothing about a number. In-process: one backend instance today."""
+
+    MINUTE_CAP = 5
+    DAY_CAP = 20
+
+    def __init__(self) -> None:
+        self._seen: dict[uuid.UUID, list[float]] = {}
+
+    def check(self, account: uuid.UUID, *, now_ts: float) -> bool:
+        seen = [t for t in self._seen.get(account, []) if t > now_ts - 86400.0]
+        if len(seen) >= self.DAY_CAP or sum(t > now_ts - 60.0 for t in seen) >= self.MINUTE_CAP:
+            self._seen[account] = seen
+            return False
+        seen.append(now_ts)
+        self._seen[account] = seen
+        return True
+
+
+def _phone_limiter(request: Request) -> PhoneProofLimiter:
+    limiter = getattr(request.app.state, "pending_phone_limiter", None)
+    if limiter is None:
+        limiter = PhoneProofLimiter()
+        request.app.state.pending_phone_limiter = limiter
+    return limiter
+
+
+def _dispatch_sms(sender, *, attempt_id: str, to_e164: str, text: str) -> None:
+    """Runs after the response. A failed send only costs the user a resend."""
+    import logging
+
+    try:
+        if sender is None:
+            raise RuntimeError("no sms provider")
+        sender.send(attempt_id=attempt_id, to_e164=to_e164, text=text)
+    except Exception:
+        logging.getLogger(__name__).warning("pending sms dispatch failed")
+
+
 def _lookup_limiter(request: Request) -> LookupRateLimiter:
     limiter = getattr(request.app.state, "pending_lookup_limiter", None)
     if limiter is None:
@@ -238,6 +295,7 @@ def _map_error(exc: Exception) -> JSONResponse:
         "CLAIM_CONFLICT": 409,
         "HANDLE_IMMUTABLE": 409,
         "RATE_LIMITED": 429,
+        "CARD_PROOF_REQUIRED": 403,
         "CLIENT_UPGRADE_REQUIRED": 426,
         "PROTOCOL_UNSUPPORTED": 404,
         "RECIPIENT_KEY_STALE": 409,
@@ -357,10 +415,18 @@ def send_routes(
 
     try:
         kind = payload.destination.kind
+        card_mode = isinstance(ctx.get("vault"), card_seal.CardSealVault)
         if kind == "email":
+            if card_mode:
+                # ADR-020: phone only at launch. Nothing would prove an email.
+                return _problem("ADDRESS_UNAVAILABLE", 400)
             normalized = normalize_email_destination(payload.destination.value)
         elif kind == "phone":
             normalized = normalize_phone_destination(payload.destination.value)
+            if card_mode and not phone_proof.country_allowed(
+                normalized, request.app.state.settings.pending_sms_country_prefixes
+            ):
+                return _problem("COUNTRY_UNSUPPORTED", 400)
         else:
             normalized = payload.destination.value
         # Existing send policy: the sender needs a completed (handleful)
@@ -595,17 +661,42 @@ def finalize_pending_delivery(
             except Exception:
                 return None
 
+        card_mode = isinstance(ctx["vault"], card_seal.CardSealVault)
+        if card_mode == (payload.card_seal_b64 is None) or (not card_mode and payload.escrow_payload_b64 is None):
+            db.rollback()
+            return _problem("PROTOCOL_UNSUPPORTED", 404)
+        lookup_tag_value = None
+        recipient_hint = None
+        if card_mode and hint_probe is not None and hint_probe.route_id is not None:
+            from remanence.pending.models import PendingSendRoute as _Route
+            from remanence.pending.registry import lookup_tag as _lookup_tag
+
+            route = db.get(_Route, hint_probe.route_id)
+            if route is not None and route.sealed_destination is not None:
+                number = routing_service.open_destination(
+                    sealed=bytes(route.sealed_destination), key_32=ctx["destination_key"]
+                )
+                lookup_tag_value = _lookup_tag("phone", number, ctx["hmac_key"])
+                recipient_hint = phone_proof.card_hint(number)
         delivery, code = publication_service.finalize_delivery(
             db,
             delivery_id=delivery_id,
             principal_user_id=principal.user_id,
             statement_raw=_b64decode(payload.publish_statement_b64, max_bytes=8192),
             signature_69=_b64decode(payload.publish_signature_69_b64, max_bytes=128),
-            escrow_payload_raw=_b64decode(payload.escrow_payload_b64, max_bytes=2048),
+            escrow_payload_raw=_b64decode(
+                payload.card_seal_b64 if card_mode else payload.escrow_payload_b64, max_bytes=2048
+            ),
+            destination_lookup_tag=lookup_tag_value,
+            recipient_hint=recipient_hint,
+            sender_code_sealed=(
+                _b64decode(payload.sender_code_sealed_b64, max_bytes=card_seal.MAX_SEALED_CODE_BYTES)
+                if card_mode and payload.sender_code_sealed_b64 is not None else None
+            ),
             vault=ctx["vault"],
             expected_service_key_id=ctx["service_key_id"],
             locator_hmac_key=ctx["hmac_key"],
-            locator_code_key_32=ctx["locator_code_key"],
+            locator_code_key_32=ctx.get("locator_code_key", b""),
             locator_code_key_mode=request.app.state.settings.mode.value,
             hint_mask=hint_mask,
             now=datetime.now(timezone.utc),
@@ -848,17 +939,21 @@ def claim_challenge(
             session_id=principal.session_id,
             attempt_id=attempt.id,
             now=datetime.now(timezone.utc),
+            service_key_id=ctx.get("service_key_id"),
         )
         db.commit()
     except Exception as exc:
         db.rollback()
         return _map_error(exc)
-    return {
+    body = {
         "challenge_id": str(challenge.id),
         "expires_at": int(challenge.expires_at.timestamp()),
         "hpke_challenge_b64": base64.b64encode(sealed).decode(),
         "claim_challenge_b64": base64.b64encode(challenge_raw).decode(),
     }
+    if challenge.claim_binding is not None:
+        body["claim_binding_b64"] = base64.b64encode(bytes(challenge.claim_binding)).decode()
+    return body
 
 
 @router.post("/v2/pending-deliveries/{delivery_id}/claim")
@@ -889,6 +984,14 @@ def submit_claim(
             alias_evidence_method="otp",
             proof_mac_key=ctx["proof_mac_key"],
             now=datetime.now(timezone.utc),
+            client_envelope=(
+                _b64decode(payload.envelope_b64, max_bytes=claim_service.MAX_CLIENT_ENVELOPE_BYTES)
+                if payload.envelope_b64 is not None else None
+            ),
+            card_proof=(
+                _b64decode(payload.card_proof_b64, max_bytes=64)
+                if payload.card_proof_b64 is not None else None
+            ),
         )
         db.commit()
     except Exception as exc:
@@ -1373,6 +1476,132 @@ def list_pending_incoming(
     return {"items": items, "next_cursor": next_cursor}
 
 
+def _gift_dto(db: Session, delivery, attempt, ctx) -> dict:
+    """Released only after phone proof. Holds the server half: useless without
+    the code that is on the card and never reached this server."""
+    statement = publication_service.parse_statement(bytes(delivery.publish_statement))
+    aad = claim_service.build_escrow_aad(
+        capsule_id=delivery.capsule_id.bytes,
+        delivery_target_id=delivery.delivery_target_id.bytes,
+        sender_user_id=delivery.sender_user_id.bytes,
+        publish_statement_sha256=bytes(delivery.publish_statement_sha256),
+        address_commitment=bytes(delivery.address_commitment),
+        key_commitment=bytes(delivery.key_commitment),
+        claim_policy_version=1,
+        claim_expires_at_epoch_seconds=statement.claim_expires_at_epoch_seconds,
+    )
+    seal = ctx["vault"].open_seal(
+        claim_service.SealedHandle(
+            vault=delivery.vault_name or "",
+            key_id=delivery.vault_key_id or "",
+            ciphertext=bytes(delivery.vault_ciphertext or b""),
+            binding_digest_hex=delivery.vault_binding_hex or "",
+        ),
+        aad,
+    )
+    return {
+        "delivery_id": str(delivery.id),
+        "capsule_id": str(delivery.capsule_id),
+        "delivery_target_id": str(delivery.delivery_target_id),
+        "proof_id": str(attempt.id),
+        "claim_expires_at": int(delivery.claim_expires_at.timestamp()),
+        "publish_statement_b64": base64.b64encode(bytes(delivery.publish_statement)).decode(),
+        "publish_signature_69_b64": base64.b64encode(bytes(delivery.publish_signature)).decode(),
+        "card_seal_b64": base64.b64encode(seal.SerializeToString(deterministic=True)).decode(),
+    }
+
+
+@router.post("/v2/phone-proofs")
+def start_phone_proof(
+    payload: PhoneProofRequest, request: Request, background: BackgroundTasks,
+    db: Session = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
+    """Same answer whether or not the number has a gift (ADR-020)."""
+    import time as _time
+
+    from remanence.pending.normalize import NormalizationError, normalize_phone_destination
+
+    ctx = _gate(request, "pending_claims_enabled")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    if payload.sms_text_version != SMS_CONSENT_TEXT_VERSION:
+        return _problem("VALIDATION_FAILED", 400)
+    try:
+        normalized = normalize_phone_destination(payload.phone)
+    except NormalizationError:
+        return _problem("VALIDATION_FAILED", 400)
+    if not _phone_limiter(request).check(principal.user_id, now_ts=_time.time()):
+        return _problem("RATE_LIMITED", 429)
+    settings = request.app.state.settings
+    try:
+        started = phone_proof.start_phone_proof(
+            db,
+            normalized_phone=normalized,
+            account_user_id=principal.user_id,
+            session_id=principal.session_id,
+            registry_hmac_key=ctx["hmac_key"],
+            destination_tag_key=ctx["hmac_key"],
+            otp_key=ctx["otp_key"],
+            proof_mac_key=ctx["proof_mac_key"],
+            now=datetime.now(timezone.utc),
+            allowed_prefixes=settings.pending_sms_country_prefixes,
+            daily_sms_cap=settings.pending_sms_daily_cap,
+            sms_host=settings.recovery_rp_id,
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return _map_error(exc)
+    if started.dispatch_to is not None:
+        background.add_task(
+            _dispatch_sms,
+            ctx.get("sms_sender"),
+            attempt_id=str(started.proof_id),
+            to_e164=started.dispatch_to,
+            text=started.dispatch_text,
+        )
+    return {"proof_id": str(started.proof_id), "expires_at": int(started.expires_at.timestamp())}
+
+
+@router.post("/v2/phone-proofs/{proof_id}/check")
+def check_phone_proof(
+    proof_id: uuid.UUID, payload: PhoneProofCheckRequest, request: Request,
+    db: Session = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
+    ctx = _gate(request, "pending_claims_enabled")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    try:
+        verified = phone_proof.check_phone_proof(
+            db,
+            proof_id=proof_id,
+            account_user_id=principal.user_id,
+            session_id=principal.session_id,
+            code=payload.code.strip(),
+            otp_key=ctx["otp_key"],
+            proof_mac_key=ctx["proof_mac_key"],
+            destination_tag_key=ctx["hmac_key"],
+            now=datetime.now(timezone.utc),
+        )
+        gifts = [_gift_dto(db, delivery, attempt, ctx) for delivery, attempt in verified]
+        db.commit()
+    except ProofError as exc:
+        if exc.commit_counters:
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+        else:
+            db.rollback()
+        return _map_error(exc)
+    except Exception as exc:
+        db.rollback()
+        return _map_error(exc)
+    return JSONResponse({"gifts": gifts}, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v2/gift-lookups")
 def gift_lookup(payload: GiftLookupRequest, request: Request, db: Session = Depends(get_db_session)):
     import time as _time
@@ -1380,6 +1609,9 @@ def gift_lookup(payload: GiftLookupRequest, request: Request, db: Session = Depe
     ctx = _gate(request, "pending_protocol_enabled")
     if isinstance(ctx, JSONResponse):
         return ctx
+    if isinstance(ctx.get("vault"), card_seal.CardSealVault):
+        # ADR-020: no public lookup in the card flow, gifts are found by proven phone.
+        return _problem("PROTOCOL_UNSUPPORTED", 404)
     client_host = request.client.host if request.client is not None else "unknown"
     if not _lookup_limiter(request).check(client_host, now_ts=_time.time()):
         return _problem("RATE_LIMITED", 429)

@@ -156,3 +156,43 @@ message PendingEscrowAadV1 {
   uint32 claim_policy_version = 10;  // 1
   int64 claim_expires_at_epoch_seconds = 11;
 }
+
+// ADR-020 card seal. The device that sends a first gift builds these; the
+// server never sees the code from the card, so it cannot open the sealed key.
+message CardKdfV1 {
+  uint32 version = 1;  // 1: Argon2id
+  uint32 time_cost = 2;  // 3
+  uint32 memory_kib = 3;  // 65536
+  uint32 parallelism = 4;  // 1
+  bytes salt = 5;  // 32 random bytes
+}
+
+// What the code and the server half together unlock.
+message CardSealPlaintextV1 {
+  uint32 version = 1;  // 1
+  bytes capsule_aead_keyset = 2;  // exact K bytes
+  AddressOpening address_opening = 3;
+}
+
+// AES-256-GCM additional data for sealed_key: domain || 0x00 || canonical.
+message CardSealAadV1 {
+  uint32 version = 1;  // 1
+  bytes capsule_id = 2;  // UUID bytes exactly 16
+  bytes delivery_target_id = 3;  // UUID bytes exactly 16
+  bytes sender_user_id = 4;  // UUID bytes exactly 16
+  bytes publish_statement_sha256 = 5;  // H, 32 bytes
+  bytes address_commitment = 6;  // D, 32 bytes
+  bytes key_commitment = 7;  // KC, 32 bytes
+  int64 claim_expires_at_epoch_seconds = 8;
+}
+
+// Sent at finalize in place of the escrow plaintext. Holds no key material
+// that opens the gift without the code.
+message PendingCardSealV1 {
+  uint32 version = 1;  // 1
+  CardSealAadV1 binding = 2;
+  CardKdfV1 kdf = 3;
+  bytes server_half = 4;  // 32 random bytes
+  bytes sealed_key = 5;  // nonce(12) || ciphertext || tag(16)
+  bytes claim_proof_verifier = 6;  // SHA-256(proof), 32 bytes
+}

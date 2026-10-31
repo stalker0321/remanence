@@ -60,6 +60,27 @@ class SmsVerifyProvider:
         raise NotImplementedError
 
 
+class SmsSender:
+    """ADR-020: carries a server-generated code to the STORED number. The
+    server keeps the code's HMAC and checks it locally."""
+
+    def send(self, *, attempt_id: str, to_e164: str, text: str) -> str:
+        raise NotImplementedError
+
+
+class MockSmsSender(SmsSender):
+    """Isolated-test handset: records messages by number. Mode-gated."""
+
+    def __init__(self, *, mode: str = "test") -> None:
+        if mode in ("prod", "beta"):
+            raise ProviderError("PROVIDER_UNAVAILABLE")
+        self.messages: dict[str, list[str]] = {}
+
+    def send(self, *, attempt_id: str, to_e164: str, text: str) -> str:
+        self.messages.setdefault(to_e164, []).append(text)
+        return f"mock-sms-{attempt_id}"
+
+
 class FailClosedEmailSender(TransactionalEmailSender):
     def send(self, *, attempt_id: str, stored_destination: str, code: str, locale: str) -> str:
         raise ProviderError("PROVIDER_UNAVAILABLE")

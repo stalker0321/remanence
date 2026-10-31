@@ -54,6 +54,10 @@ def create_app(
     pending_ctx: dict | None = None,
 ) -> FastAPI:
     resolved = Settings() if settings is None else settings
+    if resolved.pending_protocol_enabled and pending_ctx is None and resolved.mode in (AppMode.PROD, AppMode.BETA):
+        from remanence.pending.production import build_production_ctx
+
+        pending_ctx = build_production_ctx(resolved)
     if resolved.pending_protocol_enabled and pending_ctx is None:
         # M4 gated composition: the master flag alone never enables the
         # experimental router — explicit custody/keys/providers context is
@@ -78,12 +82,13 @@ def create_app(
         # Fail closed in production-likes: dev vaults and mock/test
         # providers must never be injectable where real custody and
         # delivery are required.
-        from remanence.pending.vault import ProductionKmsVault as _KmsVault
+        from remanence.pending.card_seal import CardSealVault as _CardSealVault
 
-        vault = pending_ctx.get("vault")
-        if not isinstance(vault, _KmsVault):
-            raise ValueError("prod/beta pending requires KMS vault custody")
-        for key in ("email_sender", "sms_provider"):
+        if not isinstance(pending_ctx.get("vault"), _CardSealVault):
+            raise ValueError("prod/beta pending requires the card seal; escrow is refused")
+        if resolved.pending_locator_issuance_enabled:
+            raise ValueError("prod/beta pending has no public locator")
+        for key in ("email_sender", "sms_provider", "sms_sender"):
             provider = pending_ctx.get(key)
             if provider is not None and type(provider).__name__.startswith(("Mock", "Fake")):
                 raise ValueError(f"prod/beta pending forbids test {key}")

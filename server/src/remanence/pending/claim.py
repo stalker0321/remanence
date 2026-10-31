@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from remanence.pending import domains
+from remanence.pending import card_seal, domains
 from remanence.pending.claim_models import (
     AddressProofAttempt,
     ClaimChallenge,
@@ -36,6 +36,7 @@ from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 from remanence.users.models import User
 
 CHALLENGE_TTL = timedelta(minutes=5)
+MAX_CLIENT_ENVELOPE_BYTES = 4096
 
 
 class ClaimError(RuntimeError):
@@ -104,6 +105,7 @@ def claim_options(
     session_id: uuid.UUID,
     attempt_id: uuid.UUID,
     now: datetime,
+    service_key_id: uuid.UUID | None = None,
 ) -> tuple[ClaimChallenge, bytes, bytes]:
     """Verified attempt + current ACTIVE bundle -> bound HPKE nonce
     challenge. The nonce is sealed to the AUTHORITATIVE bundle bytes from
@@ -185,6 +187,27 @@ def claim_options(
         nonce_sha256=hashlib.sha256(nonce).digest(),
         expires_at=now + CHALLENGE_TTL,
     )
+    if delivery.vault_name == card_seal.VAULT_NAME:
+        if service_key_id is None:
+            raise ClaimError("PROVIDER_UNAVAILABLE")
+        challenge.claim_id = uuid.uuid4()
+        challenge.claim_binding = dv2.ClaimBindingV1(
+            binding_version=1,
+            capsule_protocol_version=2,
+            capsule_id=delivery.capsule_id.bytes,
+            delivery_target_id=delivery.delivery_target_id.bytes,
+            publish_statement_sha256=bytes(delivery.publish_statement_sha256),
+            address_commitment=bytes(delivery.address_commitment),
+            recipient_user_id=account_user_id.bytes,
+            recipient_key_bundle_id=bundle.id.bytes,
+            recipient_encryption_public_keyset_sha256=hashlib.sha256(
+                bytes(bundle.encryption_public_keyset)
+            ).digest(),
+            claim_id=challenge.claim_id.bytes,
+            claimed_at_epoch_seconds=int(now.timestamp()),
+            claim_policy_version=1,
+            claim_signing_key_id=service_key_id.bytes,
+        ).SerializeToString(deterministic=True)
     session.add(challenge)
     session.flush()
     return challenge, sealed, context_raw
@@ -211,6 +234,8 @@ def execute_claim(
     proof_mac_key: bytes,
     now: datetime,
     clock=None,
+    client_envelope: bytes | None = None,
+    card_proof: bytes | None = None,
 ) -> PendingClaim:
     """Full atomic claim. Authenticated principal (account/session from the
     server session layer — never the client intent) is checked
@@ -247,7 +272,10 @@ def execute_claim(
         raise ClaimError("CLAIM_CONFLICT")
     if bytes(intent.publish_statement_sha256) != bytes(delivery.publish_statement_sha256 or b""):
         raise ClaimError("CLAIM_CONFLICT")
-    digest = _request_digest(intent_raw, operation_id)
+    digest = _request_digest(
+        intent_raw + (hashlib.sha256(client_envelope).digest() if client_envelope else b""),
+        operation_id,
+    )
     # Idempotent replay / conflict before any crypto work — reachable in
     # both PENDING (double-submit) and CLAIMED (lost-response retry).
     # The authenticated principal must own the stored result; a foreign
@@ -396,9 +424,21 @@ def execute_claim(
         ciphertext=bytes(delivery.vault_ciphertext or b""),
         binding_digest_hex=delivery.vault_binding_hex or "",
     )
+    card_gift = delivery.vault_name == card_seal.VAULT_NAME
     try:
-        payload = vault.open(handle, aad)
-    except VaultError as exc:
+        if card_gift:
+            # ADR-020: proof of the code. Holding the phone alone must never
+            # be able to burn the gift with a garbage envelope.
+            seal = vault.open_seal(handle, aad)
+            if client_envelope is None or not 0 < len(client_envelope) <= MAX_CLIENT_ENVELOPE_BYTES:
+                raise ClaimError("PROTOCOL_UNSUPPORTED")
+            if card_proof is None or not card_seal.proof_matches(seal, card_proof):
+                raise ClaimError("CARD_PROOF_REQUIRED")
+            if challenge.claim_binding is None or challenge.claim_id is None:
+                raise ClaimError("ADDRESS_PROOF_REQUIRED")
+        else:
+            payload = vault.open(handle, aad)
+    except (VaultError, card_seal.CardSealError) as exc:
         raise ClaimError("PROVIDER_UNAVAILABLE") from exc
     # Expiry recheck on a POST-vault clock read: a slow unwrap may cross
     # proof/challenge/gift expiry. Production default is a fresh wall
@@ -409,25 +449,29 @@ def execute_claim(
     post_now = clock() if clock is not None else datetime.now(_timezone.utc)
     if attempt.expires_at <= post_now or challenge.expires_at <= post_now or delivery.claim_expires_at <= post_now:
         raise ClaimError("PROOF_EXPIRED")
-    claim_id = uuid.uuid4()
-    binding = dv2.ClaimBindingV1(
-        binding_version=1,
-        capsule_protocol_version=2,
-        capsule_id=delivery.capsule_id.bytes,
-        delivery_target_id=delivery.delivery_target_id.bytes,
-        publish_statement_sha256=bytes(delivery.publish_statement_sha256),
-        address_commitment=bytes(delivery.address_commitment),
-        recipient_user_id=account_id.bytes,
-        recipient_key_bundle_id=bundle_id.bytes,
-        recipient_encryption_public_keyset_sha256=hashlib.sha256(
-            bytes(bundle.encryption_public_keyset)
-        ).digest(),
-        claim_id=claim_id.bytes,
-        claimed_at_epoch_seconds=int(post_now.timestamp()),
-        claim_policy_version=1,
-        claim_signing_key_id=service_key_id.bytes,
-    )
-    binding_raw = binding.SerializeToString(deterministic=True)
+    if card_gift:
+        claim_id = challenge.claim_id
+        binding_raw = bytes(challenge.claim_binding)
+    else:
+        claim_id = uuid.uuid4()
+        binding = dv2.ClaimBindingV1(
+            binding_version=1,
+            capsule_protocol_version=2,
+            capsule_id=delivery.capsule_id.bytes,
+            delivery_target_id=delivery.delivery_target_id.bytes,
+            publish_statement_sha256=bytes(delivery.publish_statement_sha256),
+            address_commitment=bytes(delivery.address_commitment),
+            recipient_user_id=account_id.bytes,
+            recipient_key_bundle_id=bundle_id.bytes,
+            recipient_encryption_public_keyset_sha256=hashlib.sha256(
+                bytes(bundle.encryption_public_keyset)
+            ).digest(),
+            claim_id=claim_id.bytes,
+            claimed_at_epoch_seconds=int(post_now.timestamp()),
+            claim_policy_version=1,
+            claim_signing_key_id=service_key_id.bytes,
+        )
+        binding_raw = binding.SerializeToString(deterministic=True)
     binding_hash = hashlib.sha256(binding_raw).digest()
     try:
         binding_sig = service_signer.sign(
@@ -437,35 +481,38 @@ def execute_claim(
         raise ClaimError("PROVIDER_UNAVAILABLE") from exc
     if len(binding_sig) != 69:
         raise ClaimError("PROVIDER_UNAVAILABLE")
-    context = dv2.ClaimedEnvelopeContextV2(
-        protocol_version=2,
-        capsule_id=delivery.capsule_id.bytes,
-        delivery_target_id=delivery.delivery_target_id.bytes,
-        sender_user_id=delivery.sender_user_id.bytes,
-        recipient_user_id=account_id.bytes,
-        recipient_key_bundle_id=bundle_id.bytes,
-        publish_statement_sha256=bytes(delivery.publish_statement_sha256),
-        claim_binding_sha256=binding_hash,
-    )
-    plaintext = dv2.ClaimedEnvelopePlaintextV2(
-        binding=context,
-        capsule_aead_keyset=bytes(payload.capsule_aead_keyset),
-        address_opening=payload.address_opening,
-    )
-    try:
-        recipient_public = tink.KeysetHandle.read_no_secret(
-            tink.BinaryKeysetReader(bytes(bundle.encryption_public_keyset))
+    if card_gift:
+        envelope = client_envelope
+    else:
+        context = dv2.ClaimedEnvelopeContextV2(
+            protocol_version=2,
+            capsule_id=delivery.capsule_id.bytes,
+            delivery_target_id=delivery.delivery_target_id.bytes,
+            sender_user_id=delivery.sender_user_id.bytes,
+            recipient_user_id=account_id.bytes,
+            recipient_key_bundle_id=bundle_id.bytes,
+            publish_statement_sha256=bytes(delivery.publish_statement_sha256),
+            claim_binding_sha256=binding_hash,
         )
-        from tink import hybrid
+        plaintext = dv2.ClaimedEnvelopePlaintextV2(
+            binding=context,
+            capsule_aead_keyset=bytes(payload.capsule_aead_keyset),
+            address_opening=payload.address_opening,
+        )
+        try:
+            recipient_public = tink.KeysetHandle.read_no_secret(
+                tink.BinaryKeysetReader(bytes(bundle.encryption_public_keyset))
+            )
+            from tink import hybrid
 
-        enc = recipient_public.primitive(hybrid.HybridEncrypt)
-        envelope = enc.encrypt(
-            plaintext.SerializeToString(deterministic=True),
-            domains.domain_prefix(domains.CLAIMED_ENVELOPE_DOMAIN)
-            + context.SerializeToString(deterministic=True),
-        )
-    except Exception as exc:
-        raise ClaimError("RECIPIENT_KEY_STALE") from exc
+            enc = recipient_public.primitive(hybrid.HybridEncrypt)
+            envelope = enc.encrypt(
+                plaintext.SerializeToString(deterministic=True),
+                domains.domain_prefix(domains.CLAIMED_ENVELOPE_DOMAIN)
+                + context.SerializeToString(deterministic=True),
+            )
+        except Exception as exc:
+            raise ClaimError("RECIPIENT_KEY_STALE") from exc
     claim = PendingClaim(
         delivery_target_id=delivery.delivery_target_id,
         delivery_id=delivery.id,
@@ -505,6 +552,10 @@ def execute_claim(
     delivery.vault_name = None
     delivery.vault_key_id = None
     delivery.vault_binding_hex = None
+    if card_gift:
+        from remanence.pending.publication import wipe_gift_secrets
+
+        wipe_gift_secrets(session, delivery)
     _insert_incoming_availability(
         session,
         account_id=account_id,

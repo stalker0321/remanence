@@ -67,7 +67,10 @@ def test_populated_additive_upgrade_preserves_every_existing_table(populated):
         for name, old in before.items():
             table = Table(name, MetaData(), autoload_with=db.connection())
             current = list(db.execute(select(table)).mappings())
-            assert sorted(map(repr, current)) == sorted(map(repr, old)), name
+            # Later migrations may add columns; every value that existed must survive.
+            columns = list(old[0].keys()) if old else []
+            kept = [{column: row[column] for column in columns} for row in current]
+            assert sorted(map(repr, kept)) == sorted(repr(dict(row)) for row in old), name
         assert db.get(RegistrationPolicy, 1).required is False
         for model in MODELS[1:]: assert list(db.scalars(select(model))) == []
 
@@ -75,7 +78,7 @@ def test_populated_additive_upgrade_preserves_every_existing_table(populated):
 def test_empty_upgrade_matches_orm_and_no_permanent_foreign_key_weakening(me_env):
     with me_env[1]() as db:
         inspector = inspect(db.connection())
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0019_pending_fk_names"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0020_card_seal"
         for model in MODELS:
             table = model.__table__
             assert {x["name"] for x in inspector.get_columns(table.name)} == set(table.c.keys())

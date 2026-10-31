@@ -127,8 +127,10 @@ internal class PostcardPainter {
             postcard.quad.map { it.x.toFloat() }.average().toFloat(),
             postcard.quad.map { it.y.toFloat() }.average().toFloat(),
         )
-        val dx = (stage.width / 2f - cardCenter.x * scale).coerceIn(stage.width - photo.width * scale, 0f)
-        val dy = (stage.height / 2f - cardCenter.y * scale).coerceIn(stage.height - photo.height * scale, 0f)
+        // The covering edge can land a hair short of the stage in float math;
+        // an inverted range would throw, so the overflow is never positive.
+        val dx = (stage.width / 2f - cardCenter.x * scale).coerceIn(min(stage.width - photo.width * scale, 0f), 0f)
+        val dy = (stage.height / 2f - cardCenter.y * scale).coerceIn(min(stage.height - photo.height * scale, 0f), 0f)
         val photoAlpha = 1f - lift
         if (photoAlpha > 0f) {
             photoRect.set(dx, dy, dx + photo.width * scale, dy + photo.height * scale)

@@ -24,8 +24,8 @@ from remanence.auth.models import AuthSession
 from remanence.recovery.models import RecoveryRecord, RecoveryChallenge
 from remanence.settings import Settings, AppMode
 
-RP = "remanence.hryshyn.dev"
-ORIGIN = "https://remanence.hryshyn.dev"
+RP = "remanence.to"
+ORIGIN = "https://remanence.to"
 
 
 def test_setup_status_is_owner_bound_and_supports_resume(env):
@@ -241,7 +241,7 @@ def test_browser_route_and_assets_are_feature_gated_and_no_store(env):
     assert client.get("/recovery-test/secret.env").status_code == 404
 
 
-@pytest.mark.parametrize("origin", ["http://remanence.hryshyn.dev", "https://evil.example", "https://remanence.hryshyn.dev/path", "android:apk-key-hash:invalid"])
+@pytest.mark.parametrize("origin", ["http://remanence.to", "https://evil.example", "https://remanence.to/path", "android:apk-key-hash:invalid"])
 def test_unsafe_origin_configuration_refused(origin):
     with pytest.raises(ValueError):
         Settings(mode=AppMode.TEST, recovery_enabled=True, recovery_origins=[origin])

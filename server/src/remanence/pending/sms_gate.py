@@ -22,6 +22,7 @@ from remanence.pending.providers import ProviderError, SmsSender
 
 CLOUD_API = "https://api.sms-gate.app/3rdparty/v1"
 TIMEOUT_SECONDS = 15
+USER_AGENT = "remanence-server/1 (+https://remanence.to)"
 # Matches the 10 minute attempt; a code delivered later is useless.
 TTL_SECONDS = 600
 # The phone derives the same key per message; this stays quick on older phones.
@@ -67,7 +68,9 @@ class SmsGateSender(SmsSender):
         request = urllib.request.Request(
             f"{self._api}/messages",
             data=json.dumps(self._body(to_e164, text)).encode("utf-8"),
-            headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
+            # Their Cloudflare refuses urllib's default agent (error 1010).
+            headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json",
+                     "User-Agent": USER_AGENT},
             method="POST",
         )
         try:

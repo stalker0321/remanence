@@ -15,7 +15,9 @@ internal class AtomicRegistrationViewModel(container: AppContainer) : ViewModel(
     private val environment = atomicEnvironment(container)
     private val controller = AtomicRegistrationController(environment)
     val state = controller.state
-    private fun enabled() = BuildConfig.DEBUG && BuildConfig.REMANENCE_ATOMIC_REGISTRATION &&
+    // The beta build is not debuggable and is the one Play ships with atomic
+    // registration on, so the build flags alone decide; never BuildConfig.DEBUG.
+    private fun enabled() = BuildConfig.REMANENCE_ATOMIC_REGISTRATION &&
         BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED && BuildConfig.REMANENCE_RECOVERY_ENABLED
 
     fun begin(credentials: GoogleCredentialPort) {

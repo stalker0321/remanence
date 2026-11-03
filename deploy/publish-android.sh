@@ -33,7 +33,7 @@ git -C "$repo" fetch -q origin
 git -C "$repo" merge-base --is-ancestor HEAD "origin/$(git -C "$repo" rev-parse --abbrev-ref HEAD)" \
   || { echo "HEAD is not pushed" >&2; exit 1; }
 code=$(sed -n 's/^remanence.androidVersionCode=//p' "$repo/android/gradle.properties")
-echo "building $sha, versionCode $code, first gifts ${pending_env:+on}${pending_env:-off}"
+echo "building $sha, versionCode $code, first gifts $([ -n "$pending_env" ] && echo on || echo off)"
 
 git -C "$repo" archive --format=tar HEAD | ssh $msi "mkdir -p $qa/$sha && tar -x -C $qa/$sha"
 trap 'ssh $msi "rm -rf $qa/$sha $qa/tmp/*" || true' EXIT

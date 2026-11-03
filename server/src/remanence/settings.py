@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     pending_twilio_account_sid: str | None = None
     pending_twilio_auth_token: SecretStr | None = None
     pending_twilio_sender: str | None = None
+    # SMS Gateway for Android: the owner's phone sends test SMS from its SIM.
+    pending_smsgate_username: str | None = None
+    pending_smsgate_password: SecretStr | None = None
+    pending_smsgate_passphrase: SecretStr | None = None
     pending_sms_daily_cap: int = 200
     # Calling codes: EU, EEA, UK, Switzerland and Ukraine. Everything else is
     # refused to the sender up front and gets no SMS.
@@ -109,8 +113,10 @@ class Settings(BaseSettings):
                 or self.pending_service_keyset_b64 is None
             ):
                 raise ValueError("pending in prod/beta requires the card-seal secrets")
-        if self.pending_bulkgate_application_id and self.pending_twilio_account_sid:
-            raise ValueError("configure one SMS provider: BulkGate or Twilio")
+        providers = (self.pending_bulkgate_application_id, self.pending_twilio_account_sid,
+                     self.pending_smsgate_username)
+        if sum(1 for configured in providers if configured) > 1:
+            raise ValueError("configure one SMS provider: BulkGate, Twilio or SMS Gateway")
         return self
 
     @model_validator(mode="after")

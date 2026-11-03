@@ -336,3 +336,69 @@ def test_twilio_body_and_answers(monkeypatch) -> None:
         sender.send(attempt_id="a", to_e164="+31612345612", text="t")
     with _pytest.raises(ProviderError):
         sms_twilio.TwilioSmsSender(account_sid="nope", auth_token="tok", sender="+3197000000000")
+
+
+def _smsgate_decrypt(passphrase: str, value: str) -> str:
+    """The sms-gate reference client's decrypt: PBKDF2-SHA1, AES-256-CBC, IV = salt."""
+    import base64
+
+    from cryptography.hazmat.primitives import hashes, padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+    _, algorithm, params, salt_b64, data_b64 = value.split("$")
+    assert algorithm == "aes-256-cbc/pbkdf2-sha1"
+    salt = base64.b64decode(salt_b64)
+    key = PBKDF2HMAC(algorithm=hashes.SHA1(), length=32, salt=salt,
+                     iterations=int(params.removeprefix("i="))).derive(passphrase.encode())
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(salt)).decryptor()
+    padded = decryptor.update(base64.b64decode(data_b64)) + decryptor.finalize()
+    unpadder = padding.PKCS7(128).unpadder()
+    return (unpadder.update(padded) + unpadder.finalize()).decode()
+
+
+def test_smsgate_body_encryption_and_answers(monkeypatch) -> None:
+    import base64
+    import io
+    import json
+
+    import pytest as _pytest
+
+    from remanence.pending import sms_gate
+    from remanence.pending.providers import ProviderError
+
+    captured = {}
+
+    class _Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def _open(request, timeout):
+        captured.update(json.loads(request.data), url=request.full_url, auth=request.get_header("Authorization"))
+        return _Response(json.dumps({"id": "m1", "state": "Pending"}).encode())
+
+    monkeypatch.setattr(sms_gate.urllib.request, "urlopen", _open)
+    plain = sms_gate.SmsGateSender(username="U", password="pw")
+    assert plain.send(attempt_id="a", to_e164="+380501234512", text="123456 code") == "m1"
+    assert captured["url"] == "https://api.sms-gate.app/3rdparty/v1/messages"
+    assert captured["phoneNumbers"] == ["+380501234512"] and captured["textMessage"] == {"text": "123456 code"}
+    assert captured["auth"] == "Basic " + base64.b64encode(b"U:pw").decode()
+    assert "pw" not in repr(plain)
+
+    captured.clear()
+    sealed = sms_gate.SmsGateSender(username="U", password="pw", passphrase="phrase")
+    sealed.send(attempt_id="a", to_e164="+380501234512", text="123456 code\n\n@remanence.to #123456")
+    assert captured["isEncrypted"] is True
+    assert "380501234512" not in json.dumps(captured) and "123456" not in json.dumps(captured)
+    assert _smsgate_decrypt("phrase", captured["phoneNumbers"][0]) == "+380501234512"
+    assert _smsgate_decrypt("phrase", captured["textMessage"]["text"]).endswith("@remanence.to #123456")
+
+    def _failed(request, timeout):
+        return _Response(json.dumps({"id": "m2", "state": "Failed"}).encode())
+
+    monkeypatch.setattr(sms_gate.urllib.request, "urlopen", _failed)
+    with _pytest.raises(ProviderError):
+        plain.send(attempt_id="a", to_e164="+380501234512", text="t")

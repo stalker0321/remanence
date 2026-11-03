@@ -55,6 +55,7 @@ def service_public_keyset_b64(keyset_b64: str) -> str:
 
 def build_production_ctx(settings: Settings) -> dict:
     from remanence.pending.sms_bulkgate import BulkGateSmsSender
+    from remanence.pending.sms_twilio import TwilioSmsSender
 
     master = settings.pending_master_secret.get_secret_value().encode("utf-8")
     sms_sender = None
@@ -63,6 +64,12 @@ def build_production_ctx(settings: Settings) -> dict:
             application_id=settings.pending_bulkgate_application_id,
             application_token=settings.pending_bulkgate_application_token.get_secret_value(),
             sender_name=settings.pending_bulkgate_sender_name,
+        )
+    elif settings.pending_twilio_account_sid and settings.pending_twilio_auth_token and settings.pending_twilio_sender:
+        sms_sender = TwilioSmsSender(
+            account_sid=settings.pending_twilio_account_sid,
+            auth_token=settings.pending_twilio_auth_token.get_secret_value(),
+            sender=settings.pending_twilio_sender,
         )
     return {
         "hmac_key": settings.pending_hmac_secret.get_secret_value().encode(),

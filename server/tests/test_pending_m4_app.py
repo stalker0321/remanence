@@ -293,3 +293,46 @@ def test_bulkgate_body_and_answers(monkeypatch) -> None:
     monkeypatch.setattr(sms_bulkgate.urllib.request, "urlopen", _refused)
     with _pytest.raises(ProviderError):
         sender.send(attempt_id="a", to_e164="+31612345612", text="t")
+
+
+def test_twilio_body_and_answers(monkeypatch) -> None:
+    import base64
+    import io
+    import json
+    import urllib.parse
+
+    import pytest as _pytest
+
+    from remanence.pending import sms_twilio
+    from remanence.pending.providers import ProviderError
+
+    captured = {}
+
+    class _Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def _open(request, timeout):
+        captured.update(urllib.parse.parse_qs(request.data.decode()), url=request.full_url,
+                        auth=request.get_header("Authorization"))
+        return _Response(json.dumps({"sid": "SM1", "status": "queued"}).encode())
+
+    monkeypatch.setattr(sms_twilio.urllib.request, "urlopen", _open)
+    sender = sms_twilio.TwilioSmsSender(account_sid="AC123", auth_token="tok", sender="+3197000000000")
+    assert sender.send(attempt_id="a", to_e164="+31612345612", text="123456 is your code") == "SM1"
+    assert captured["url"] == "https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json"
+    assert captured["To"] == ["+31612345612"] and captured["From"] == ["+3197000000000"]
+    assert captured["auth"] == "Basic " + base64.b64encode(b"AC123:tok").decode()
+    assert "tok" not in repr(sender)
+
+    def _failed(request, timeout):
+        return _Response(json.dumps({"sid": "SM2", "status": "failed"}).encode())
+
+    monkeypatch.setattr(sms_twilio.urllib.request, "urlopen", _failed)
+    with _pytest.raises(ProviderError):
+        sender.send(attempt_id="a", to_e164="+31612345612", text="t")
+    with _pytest.raises(ProviderError):
+        sms_twilio.TwilioSmsSender(account_sid="nope", auth_token="tok", sender="+3197000000000")

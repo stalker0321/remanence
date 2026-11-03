@@ -10,6 +10,10 @@ Everything stays off until all of these are done, in this order.
 1. **BulkGate.** Create the account, add credit, and create an application for
    the transactional API. Note its ID and token. Send a test SMS to a Dutch and
    a Ukrainian number from their console and see how fast they arrive.
+   BulkGate needs a company number (KvK). Until then, testing runs on a Twilio
+   trial account: it sends only to numbers verified in Twilio, with a trial
+   prefix. Set `REMANENCE_PENDING_TWILIO_ACCOUNT_SID`, `_AUTH_TOKEN` and
+   `_SENDER` (the trial number) instead of the BulkGate pair; never both.
 2. **Secrets.** Run `server/.venv/bin/python deploy/pending-secrets.py` once.
    Keep the output somewhere safe. Add its server lines and the BulkGate ID and
    token to `server.env`. Losing the master secret strands every unclaimed gift.

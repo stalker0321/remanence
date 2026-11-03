@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     pending_bulkgate_application_id: str | None = None
     pending_bulkgate_application_token: SecretStr | None = None
     pending_bulkgate_sender_name: str | None = None
+    # Twilio carries SMS for testing until BulkGate is connected; never both.
+    pending_twilio_account_sid: str | None = None
+    pending_twilio_auth_token: SecretStr | None = None
+    pending_twilio_sender: str | None = None
     pending_sms_daily_cap: int = 200
     # Calling codes: EU, EEA, UK, Switzerland and Ukraine. Everything else is
     # refused to the sender up front and gets no SMS.
@@ -105,6 +109,8 @@ class Settings(BaseSettings):
                 or self.pending_service_keyset_b64 is None
             ):
                 raise ValueError("pending in prod/beta requires the card-seal secrets")
+        if self.pending_bulkgate_application_id and self.pending_twilio_account_sid:
+            raise ValueError("configure one SMS provider: BulkGate or Twilio")
         return self
 
     @model_validator(mode="after")

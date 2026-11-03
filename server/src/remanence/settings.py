@@ -55,8 +55,8 @@ class Settings(BaseSettings):
     registration_receipt_ttl_seconds: int = Field(default=2592000, gt=0, le=7776000)
     google_client_ids: list[str] = Field(default_factory=list)
     google_presenter_ids: list[str] = Field(default_factory=list)
-    recovery_rp_id: str = "remanence.hryshyn.dev"
-    recovery_origins: list[str] = Field(default_factory=lambda: ["https://remanence.hryshyn.dev"])
+    recovery_rp_id: str = "remanence.to"
+    recovery_origins: list[str] = Field(default_factory=lambda: ["https://remanence.to"])
     # T185 experimental pending-gift flags. ALL default OFF in every mode.
     # Production/beta require configured independent custody (fail closed).
     pending_protocol_enabled: bool = False

@@ -2,7 +2,7 @@
     <string name="beta_privacy_policy">политика конфиденциальности</string>
     <string name="beta_terms">правила использования</string>
     <string name="beta_delete_account">запросить удаление аккаунта</string>
-    <string name="beta_external_failed">не получилось открыть приложение. напишите на hryshyn.dev@gmail.com</string>
+    <string name="beta_external_failed">не получилось открыть приложение. напишите на hello@remanence.to</string>
     <string name="beta_terms_title">перед первой открыткой</string>
     <string name="beta_terms_summary">отправляйте только то, чем вправе делиться. без травли, спама и незаконного. получатель может заблокировать отправителя или пожаловаться</string>
     <string name="beta_terms_agree">я принимаю правила использования</string>

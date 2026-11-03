@@ -24,7 +24,7 @@ import dev.hryshyn.remanence.ui.auth.AccessPage
 import dev.hryshyn.remanence.ui.auth.AccessHeading
 import kotlinx.coroutines.launch
 
-internal const val SUPPORT_EMAIL = "hryshyn.dev@gmail.com"
+internal const val SUPPORT_EMAIL = "hello@remanence.to"
 
 internal fun Context.openRemanenceLink(path: String): Boolean = try {
     startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BuildConfig.API_BASE_URL + "legal/" + path)))

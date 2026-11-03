@@ -2,7 +2,7 @@
     <string name="beta_privacy_policy">privacy policy</string>
     <string name="beta_terms">terms of use</string>
     <string name="beta_delete_account">request account deletion</string>
-    <string name="beta_external_failed">couldn’t open the app. write to hryshyn.dev@gmail.com</string>
+    <string name="beta_external_failed">couldn’t open the app. write to hello@remanence.to</string>
     <string name="beta_terms_title">before your first postcard</string>
     <string name="beta_terms_summary">only send what you have the right to share. no harassment, spam or illegal content. recipients can block or report a sender</string>
     <string name="beta_terms_agree">i accept the terms of use</string>

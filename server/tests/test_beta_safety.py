@@ -80,7 +80,7 @@ def test_public_policy_pages_work_without_account_and_without_secrets(me_env, pa
     client, _ = me_env
     response = client.get("/legal/" + path)
     assert response.status_code == 200
-    assert "hryshyn.dev@gmail.com" in response.text and "Remanence" in response.text
+    assert "hello@remanence.to" in response.text and "Remanence" in response.text
     assert response.headers["content-security-policy"].startswith("default-src 'none'")
     assert "<script" not in response.text
     assert "pm_at_" not in response.text and "pm_rt_" not in response.text

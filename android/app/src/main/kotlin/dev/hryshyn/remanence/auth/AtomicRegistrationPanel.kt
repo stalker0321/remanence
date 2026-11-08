@@ -38,6 +38,9 @@ internal fun AtomicRegistrationPanel(model: AtomicRegistrationViewModel, view: A
     onExitSetup: () -> Unit,
     recoveryContent: @Composable (enabled: Boolean, beforeSignIn: () -> Unit) -> Unit) {
     val activity = LocalContext.current as Activity
+    // This panel only shows while signed out, so a finished setup here is the
+    // one from before a sign-out: it has no actions left, start over instead.
+    LaunchedEffect(view.sessionEstablished) { if (view.sessionEstablished) model.leave() }
     val google = remember(activity) { AndroidGoogleCredentials(activity) }
     val passkeys = remember(activity) { AndroidRecoveryCredentials(activity) }
     val handle = view.handle

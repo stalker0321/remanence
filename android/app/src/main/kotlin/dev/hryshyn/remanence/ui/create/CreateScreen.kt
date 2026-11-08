@@ -310,7 +310,8 @@ fun CreateScreen(
                             )
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                android.net.Uri.parse(dev.hryshyn.remanence.BuildConfig.API_BASE_URL).host.orEmpty(),
+                                // remanence.to/c opens straight on the code entry.
+                                android.net.Uri.parse(dev.hryshyn.remanence.BuildConfig.API_BASE_URL).host.orEmpty() + "/c",
                                 style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier.testTag("create_pending_site"),
                             )

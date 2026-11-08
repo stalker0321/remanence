@@ -111,7 +111,10 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
         }
         if (restore) {
             // Stable composition site for the lifetime of the sign-in operation.
-            recoveryContent(!view.busy, onLeave)
+            // Leaving the Google setup resets its phase. After Google found an
+            // existing account, hold this screen as "existing" so the passkey
+            // sign-in it just started is not torn down with the setup.
+            recoveryContent(!view.busy) { showExisting(true); onLeave() }
             if (existing) HoldTextButton(enabled = enabled, onClick = { showExisting(false) },
                 modifier = Modifier.testTag("atomic_new_account")) { Text(stringResource(R.string.rework_new_account)) }
         } else {

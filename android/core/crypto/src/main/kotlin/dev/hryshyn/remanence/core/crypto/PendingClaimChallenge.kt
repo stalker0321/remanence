@@ -99,6 +99,22 @@ object PendingClaimChallenge {
         return nonce
     }
 
+    /**
+     * The session the server bound this challenge to. The app learns its own
+     * session id only at sign-in and keeps it in memory, so after a process
+     * restart it takes it from here. The server checks it against the bearer.
+     */
+    fun sessionIdOf(challengeRaw: ByteArray): String {
+        val raw = try {
+            ClaimChallengeV1.parseFrom(challengeRaw).sessionId.toByteArray()
+        } catch (_: Exception) {
+            throw GeneralSecurityException("pending claim challenge malformed")
+        }
+        if (raw.size != 16) throw GeneralSecurityException("pending claim challenge session malformed")
+        val buffer = java.nio.ByteBuffer.wrap(raw)
+        return UUID(buffer.long, buffer.long).toString()
+    }
+
     /** Frozen §2 domain for the claim-challenge HPKE info. */
     const val CLAIM_CHALLENGE_DOMAIN: String = "postmark/claim-challenge/v1"
 }

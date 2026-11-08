@@ -66,6 +66,16 @@ class AtomicSignInEntryTest {
         rule.onNodeWithTag("atomic_new_account").assertIsNotEnabled()
     }
 
+    @Test fun passkeyAfterGoogleFoundTheAccountKeepsItsScreen() {
+        // Google said the account exists: the restore screen comes from the setup phase.
+        view = AtomicView(AtomicPhase.RESTORE_REQUIRED); mount()
+        rule.onNodeWithTag("recovery_restore").performScrollTo().performClick()
+        // Leaving the setup reset the phase, yet the started passkey sign-in stays mounted.
+        rule.onNodeWithTag("recovery_restore").assertExists()
+        rule.onNodeWithTag("access_google").assertDoesNotExist()
+        assertEquals(AtomicPhase.IDLE, view.phase); assertEquals(1, restoreCalls)
+    }
+
     @Test fun switchingToExistingPasskeyRetiresReservedOwnerWithoutNewKeys() {
         runBlocking { controller.begin(fixture.google) }
         // Returning to the welcome page retires the old setup before an existing sign-in.

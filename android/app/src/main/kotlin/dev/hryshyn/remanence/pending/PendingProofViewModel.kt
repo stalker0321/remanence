@@ -1149,11 +1149,12 @@ class PendingProofViewModel(
         } catch (_: IllegalArgumentException) {
             null
         } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
-        // Session id is NOT persisted client-side (explicit block):
-        // without it the intent cannot submit, so stop at a verified,
-        // signed, ready intent instead of inventing an id.
+        // The challenge was issued for this very bearer, so it names the
+        // session. The id remembered at sign-in can be gone after a process
+        // restart or belong to an earlier session after a token replacement;
+        // either way the intent would never match.
         val sessionId = try {
-            sessionIdProvider()
+            PendingClaimChallenge.sessionIdOf(challengeRaw)
         } catch (_: Exception) {
             null
         }

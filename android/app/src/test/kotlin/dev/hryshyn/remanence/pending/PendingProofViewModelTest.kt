@@ -372,7 +372,7 @@ class PendingProofViewModelTest {
     }
 
     @Test
-    fun blockedWithoutSessionId() = runTest {
+    fun sessionIdComesFromTheChallengeAfterARestart() = runTest {
         val setup = challengeSetup()
         val viewModel = vm(
             options = {
@@ -393,10 +393,8 @@ class PendingProofViewModelTest {
         viewModel.onCodeChange("12345678")
         viewModel.checkCode()
         testScheduler.advanceUntilIdle()
-        assertEquals(
-            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.BLOCKED),
-            viewModel.state.value,
-        )
+        // The in-memory id from sign-in is gone; the challenge names the session.
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
     }
 
     @Test

@@ -192,11 +192,14 @@ export function App({
     <div className="shell" inert={presenting} tabIndex={-1}>
       <button className="skip-content" onClick={() => content.current?.focus()}>{t('skipContent')}</button>
       <header className="bar">
-        <a className="mark" href={href('home')} aria-label={`remanence · ${t('navHome')}`} aria-current={route === 'home' ? 'page' : undefined}>remanence<span className="mark-dot" aria-hidden="true">.</span></a>
-        <nav className="main-nav" aria-label={t('navMain')}>
-          {(['scan', 'create', 'history', 'settings'] as const).map((item) => <a key={item} href={href(item)} aria-current={route === item ? 'page' : undefined}>
-            <Icon name={({ scan: 'scan', create: 'postcard', history: 'history', settings: 'settings' } as const)[item]} />
-            <span>{t(({ scan: 'navScan', create: 'navMake', history: 'navHistory', settings: 'settingsTitle' } as const)[item])}</span>
+        <a className="mark" href={href('home')} aria-label={`remanence · ${t('navHome')}`} aria-current={route === 'home' ? 'page' : undefined}>remanence</a>
+        {/* Wide screens: a top menu. Phones: the Android tab bar (home, history,
+            settings) once signed in; open and make live on the home cards. */}
+        <nav className={`main-nav${view.phase === 'signed-out' ? ' main-nav--signed-out' : ''}`} aria-label={t('navMain')}>
+          {(['home', 'scan', 'create', 'history', 'settings'] as const).map((item) => <a key={item} href={href(item)} aria-current={route === item ? 'page' : undefined}
+            className={item === 'home' ? 'nav-phone' : item === 'scan' || item === 'create' ? 'nav-wide' : undefined}>
+            <Icon name={({ home: 'home', scan: 'scan', create: 'postcard', history: 'history', settings: 'settings' } as const)[item]} />
+            <span>{t(({ home: 'navHome', scan: 'navScan', create: 'navMake', history: 'navHistory', settings: 'settingsTitle' } as const)[item])}</span>
           </a>)}
         </nav>
         <div className="header-tools">
@@ -257,7 +260,7 @@ export function App({
       {deploymentUnavailable || notice === 'errorRegion' || (route === 'account' && atomicRegistration) ? null : <p className="notice" role="alert">{t(notice)}</p>}
       </main>
       {view.phase !== 'signed-out' && route !== 'account' && route !== 'settings' ? <p className="session-status" role="status"><Icon name="key" />{t(phaseKey(view.phase))}</p> : null}
-      <footer className="site-footer"><span>remanence<span aria-hidden="true">.</span></span><p>{t('homePrivate')}</p></footer>
+      <footer className="site-footer"><span>remanence</span><p>{t('homePrivate')}</p></footer>
     </div>
     {presenting && held ? (
       <CollageStage held={held} t={t} onClose={() => navigation.closeSheet()} navigation={{

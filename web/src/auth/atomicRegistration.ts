@@ -23,6 +23,8 @@ interface Owner {
   buffers: Set<Uint8Array>; candidate: Candidate | null; intent: FinalIntent | null
   grant: string | null; credential: string | null; login: SignInInput | null
   pending: Promise<void> | null
+  /** The chosen handle, only to name the passkey in the password manager. */
+  handle?: string
   /** Only the public creation response. Retained until staging is reconciled. */
   created: { flow: string; response: PublicAssertion } | null
   creationUnresolved: boolean
@@ -86,7 +88,7 @@ export class AtomicRegistration {
     const owner = this.#owner
     if (!owner || owner.pending || this.#view.phase !== 'handle') return
     try {
-      normalizeHandle(rawHandle)
+      owner.handle = normalizeHandle(rawHandle)
       this.#requireReserved(owner)
       this.#show(owner.credential ? 'verify' : owner.created || owner.creationUnresolved ? 'credential-pending' : 'passkey')
     } catch (error) { this.#show('handle', errorCode(error)) }
@@ -224,7 +226,7 @@ export class AtomicRegistration {
     let creationPrf: Uint8Array | null = null
     if (!owner.created) {
       if (owner.creationUnresolved) throw new AtomicError('PASSKEY_CREATION_UNRESOLVED')
-      const begin = await this.#post(owner, 'credential/options', { epoch })
+      const begin = await this.#post(owner, 'credential/options', owner.handle ? { epoch, handle: owner.handle } : { epoch })
       const flow = uuid(begin.flow)
       if (object(object(begin.options).user).id !== b64(uuidToBytes(owner.setup!.reservation.account_id))) throw new AtomicError('WRONG_ACCOUNT')
       let created: PasskeyAssertion

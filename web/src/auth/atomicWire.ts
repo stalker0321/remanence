@@ -25,7 +25,7 @@ export interface FinalIntent {
 }
 export type SetupAction = 'credential/options' | 'credential/verify' | 'setup/options' | 'setup/verify' | 'finalize' | 'leave' | 'cancel' | 'restart'
 export interface SetupBodies {
-  'credential/options': { epoch: number }
+  'credential/options': { epoch: number; handle?: string }
   'credential/verify': { epoch: number; flow: string; response: PublicAssertion }
   'setup/options': { epoch: number; credential_id: string }
   'setup/verify': { epoch: number; flow: string; response: PublicAssertion }

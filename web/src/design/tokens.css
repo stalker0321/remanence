@@ -453,3 +453,9 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
   button,a.button,.action-card { transition:none; }
   .action-card:hover,.action-card:active { transform:none; }
 }
+
+/* Google's branding for its sign-in button; never themed with the app's colours. */
+button.google-button { gap:10px; min-height:44px; padding:0 14px; border:1px solid #747775; border-radius:.6rem;
+  background:#fff; color:#1f1f1f; font:500 14px/20px Roboto,"Google Sans",Arial,sans-serif; letter-spacing:.25px; }
+button.google-button:not(:disabled):not([aria-disabled="true"]):hover { background:#f7f8f8; border-color:#747775; }
+.google-button .google-g { width:20px; height:20px; flex:none; }

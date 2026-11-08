@@ -63,7 +63,7 @@ import { SessionStore } from '../session/session'
 import { HistoryPage } from '../history/HistoryPage'
 import { RecentRecipients } from '../history/RecentRecipients'
 import { SendAccessSection } from '../access/SendAccessSection'
-import { Icon, StepTrail } from './Primitives'
+import { GoogleButton, Icon, StepTrail } from './Primitives'
 import { CameraFeedback, type CameraFailure } from './CameraFeedback'
 
 export function App({
@@ -1606,11 +1606,10 @@ function Account({
       {signedIn && (unlocked || returnTo === 'history') && returnTo ? <div className="actions"><a className="button primary" href={href(returnTo)}>{t(returnTo === 'create' ? 'returnMake' : returnTo === 'scan' ? 'returnOpen' : 'returnHistory')}<Icon name="arrow" /></a></div> : null}
       <div className="actions">
         {signedIn ? null : (
-          <button
-            type="button"
-            className="primary"
+          <GoogleButton
             ref={primary}
-            aria-disabled={busy}
+            label={t('continueGoogle')}
+            busy={busy}
             onClick={() => {
               void run(async (signal) => {
                 const outcome = await continueWithGoogle(store, transport, google, signal, draft)
@@ -1620,9 +1619,7 @@ function Account({
                 return outcome.kind === 'needs-handle' ? null : explainGoogle(outcome)
               })
             }}
-          >
-            {t('continueGoogle')}
-          </button>
+          />
         )}
         {signedIn && !unlocked && draft.bundleId() === view.bundleId ? (
           <button

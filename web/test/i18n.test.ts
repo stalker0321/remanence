@@ -19,7 +19,8 @@ describe('languages', () => {
   it('keeps the house style: lowercase start, no closing period (docs/copy-style.md)', () => {
     for (const locale of [en, ru, uk]) for (const [key, text] of Object.entries(locale)) {
       expect(text.trim(), key).toBe(text)
-      expect(/^(Google|JPEG)/.test(text) || text[0] === text[0]!.toLowerCase(), `${key}: ${text}`).toBe(true)
+      // Google's sign-in button must carry Google's own wording, capital first.
+      expect(key === 'continueGoogle' || /^(Google|JPEG)/.test(text) || text[0] === text[0]!.toLowerCase(), `${key}: ${text}`).toBe(true)
       expect(/[^.]\.$/.test(text), `${key}: ${text}`).toBe(false)
     }
   })

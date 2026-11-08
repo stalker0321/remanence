@@ -5,7 +5,7 @@
     <string name="mvp_recovery_ready">access is saved and checked</string>
     <string name="mvp_recovery_not_ready">access isn’t checked yet</string>
     <string name="mvp_privacy_summary">photos and words are encrypted on your phone before they leave it</string>
-    <string name="mvp_google_continue">continue with Google</string>
+    <string name="mvp_google_continue">Continue with Google</string>
     <string name="mvp_handle_title">pick a username</string>
     <string name="mvp_handle_label">username</string>
     <string name="mvp_continue">continue</string>

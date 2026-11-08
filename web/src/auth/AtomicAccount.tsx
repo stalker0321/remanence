@@ -10,7 +10,7 @@ import type { MemoryKeys } from './memoryKeys'
 import { explainFailure, explainRestore } from './notice'
 import type { PasskeyPort } from './passkey'
 import { restoreSignedInAccount } from './restore'
-import { Icon, StepTrail } from '../ui/Primitives'
+import { GoogleButton, Icon, StepTrail } from '../ui/Primitives'
 import './atomicAccount.css'
 
 /** Mounted only through the existing explicit deployment admission. */
@@ -108,7 +108,7 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     {!signedIn && !choosing && !stopped && handle && (creating || verifying || pendingCredential) ? <p className="setup-handle"><span>{t('atomicHandleSummary')}</span><strong>@{handle.replace(/^@/, '').toLowerCase()}</strong></p> : null}
     <div className="actions">
       {stopped ? <a className="button primary" href={href('home')} onClick={leave}>{t('atomicLeave')}</a> : null}
-      {!signedIn && start ? <button className="primary google-button" aria-disabled={busy} onClick={() => { void controller.begin() }}>{t('continueGoogle')}</button> : null}
+      {!signedIn && start ? <GoogleButton label={t('continueGoogle')} busy={busy} onClick={() => { void controller.begin() }} /> : null}
       {!signedIn && creating ? <button className="primary" aria-disabled={busy} onClick={() => { void controller.createPasskey(handle) }}><Icon name="key" />{t('atomicCreate')}</button> : null}
       {!signedIn && pendingCredential && !unreadableCreation ? <button className="primary" aria-disabled={busy} onClick={() => { void controller.createPasskey(handle) }}>{t('atomicLink')}</button> : null}
       {!signedIn && verifying ? <button className={unsupported ? undefined : 'primary'} aria-disabled={busy} onClick={() => { void controller.save(handle) }}><Icon name="key" />{t(unsupported ? 'atomicVerifyAgain' : 'atomicVerify')}</button> : null}

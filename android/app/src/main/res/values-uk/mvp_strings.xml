@@ -5,7 +5,7 @@
     <string name="mvp_recovery_ready">доступ збережено й перевірено</string>
     <string name="mvp_recovery_not_ready">доступ ще не перевірено</string>
     <string name="mvp_privacy_summary">фото й слова шифруються на телефоні, перш ніж його залишити</string>
-    <string name="mvp_google_continue">продовжити через Google</string>
+    <string name="mvp_google_continue">Продовжити з Google</string>
     <string name="mvp_handle_title">оберіть нік</string>
     <string name="mvp_handle_label">нік</string>
     <string name="mvp_continue">продовжити</string>

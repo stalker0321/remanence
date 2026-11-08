@@ -313,6 +313,8 @@
   "homeGiftTitle": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
   "homeGiftAction": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
   "giftCodeTitle": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
+  "giftStep": "First gift by postcard code: which of the three steps this is.",
+  "giftCodeBody": "First gift by postcard code: what the code on the card looks like.",
   "giftCodeLabel": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
   "giftCodeInvalid": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
   "giftContinue": "First gift by postcard code: the page a new recipient follows, see ADR-020.",

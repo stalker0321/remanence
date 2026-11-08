@@ -313,6 +313,8 @@
   "homeGiftTitle": "got a postcard with a code on the back?",
   "homeGiftAction": "enter the code",
   "giftCodeTitle": "enter the code from the back of the postcard",
+  "giftStep": "step {n} of 3",
+  "giftCodeBody": "nine letters and numbers, just as they’re written on the card",
   "giftCodeLabel": "code",
   "giftCodeInvalid": "that doesn’t look like the code. it has nine symbols",
   "giftContinue": "continue",

@@ -105,59 +105,71 @@ export function GiftPage({ t, store, keys, transport, pin, language }: {
   }
 
   const error = invalid ? <p role="alert" className="error">{t(invalid)}</p> : null
+  // The same three steps as the app: code from the card, number, code from the SMS.
+  const stepNumber = step === 'code' || step === 'wrong-code' ? 1 : step === 'phone' && unlocked ? 2 : step === 'sms' ? 3 : null
+  const heading = (title: string, lead?: string) => <header className="page-heading">
+    {stepNumber ? <p className="gift-step">{t('giftStep').replace('{n}', String(stepNumber))}</p> : null}
+    <h1>{title}</h1>{lead ? <p className="page-lead">{lead}</p> : null}
+  </header>
+  const primary = (label: MessageKey, disabled: boolean) => <div className="actions">
+    <button type="submit" className="primary" disabled={disabled} aria-disabled={busy || undefined}>{t(label)}<Icon name="arrow" /></button>
+  </div>
 
-  return <section className="gift-page">
-    {step === 'code' || step === 'wrong-code' ? <form onSubmit={async (event) => {
+  return <section className="card gift-page recipient-picker">
+    {step === 'code' || step === 'wrong-code' ? <form className="handle-form" onSubmit={async (event) => {
       event.preventDefault()
       const parsed = takeCode()
       if (!parsed) return
       if (step === 'wrong-code') await open(parsed.secret, gifts)
       else setStep('phone')
     }}>
-      <h1>{t(step === 'code' ? 'giftCodeTitle' : 'giftWrongCodeTitle')}</h1>
-      {step === 'wrong-code' ? <p>{t('giftWrongCodeBody')}</p> : null}
+      {heading(t(step === 'code' ? 'giftCodeTitle' : 'giftWrongCodeTitle'), t(step === 'code' ? 'giftCodeBody' : 'giftWrongCodeBody'))}
       <label>{t('giftCodeLabel')}
-        <input value={typed} onChange={(event) => { setTyped(event.target.value); setInvalid(null) }}
+        <input className="gift-code-input" value={typed} onChange={(event) => { setTyped(groupCode(event.target.value)); setInvalid(null) }}
           autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} inputMode="text" placeholder="XXX-XXX-XXX" />
       </label>
       {error}
-      <div className="actions"><button type="submit" disabled={typed.trim() === ''}>{t('giftContinue')}<Icon name="arrow" /></button></div>
+      {primary('giftContinue', typed.replace(/-/g, '').length !== 9)}
     </form> : null}
     {step === 'phone' && code ? (!unlocked
-      ? <div><h1>{t('giftSignInTitle')}</h1><p>{t('giftSignInBody')}</p>
-        <div className="actions"><a className="button" href={href('account')}>{t('giftSignIn')}<Icon name="arrow" /></a></div></div>
-      : <form onSubmit={(event) => { event.preventDefault(); void askSms() }}>
-        <h1>{t('giftPhoneTitle').replace('{digits}', code.hintDigits)}</h1>
-        <p>{t('giftPhoneBody')}</p>
-        <label>{t('giftCountryLabel')}
-          <select value={country} onChange={(event) => setCountry(event.target.value)}>
-            {countries.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-        </label>
-        <label>{t('giftPhoneLabel')}
-          <input value={phone} onChange={(event) => { setPhone(event.target.value); setInvalid(null) }} type="tel" autoComplete="tel" inputMode="tel" />
-        </label>
+      ? <div className="handle-form">{heading(t('giftSignInTitle'), t('giftSignInBody'))}
+        <div className="actions"><a className="button primary" href={href('account')}>{t('giftSignIn')}<Icon name="arrow" /></a></div></div>
+      : <form className="handle-form" onSubmit={(event) => { event.preventDefault(); void askSms() }}>
+        {heading(t('giftPhoneTitle').replace('{digits}', code.hintDigits), t('giftPhoneBody'))}
+        <div className="gift-phone">
+          <label>{t('giftCountryLabel')}
+            <select value={country} onChange={(event) => setCountry(event.target.value)}>
+              {countries.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+          <label>{t('giftPhoneLabel')}
+            <input value={phone} onChange={(event) => { setPhone(event.target.value); setInvalid(null) }} type="tel" autoComplete="tel" inputMode="tel" />
+          </label>
+        </div>
         {error}
-        <div className="actions"><button type="submit" disabled={busy || phone.trim() === ''}>{t('giftSendSms')}<Icon name="arrow" /></button></div>
+        {primary('giftSendSms', busy || phone.trim() === '')}
       </form>) : null}
-    {step === 'sms' ? <form onSubmit={(event) => { event.preventDefault(); void checkSms() }}>
-      <h1>{t('giftSmsTitle')}</h1>
-      <p>{t('giftSmsBody')}</p>
+    {step === 'sms' ? <form className="handle-form" onSubmit={(event) => { event.preventDefault(); void checkSms() }}>
+      {heading(t('giftSmsTitle'), t('giftSmsBody'))}
       <label>{t('giftSmsLabel')}
-        <input value={sms} onChange={(event) => { setSms(event.target.value); setInvalid(null) }} autoComplete="one-time-code" inputMode="numeric" />
+        <input className="gift-sms-input" value={sms} onChange={(event) => { setSms(event.target.value.replace(/\D/g, '').slice(0, 8)); setInvalid(null) }} autoComplete="one-time-code" inputMode="numeric" />
       </label>
       {error}
-      <div className="actions">
-        <button type="submit" disabled={busy || sms.trim() === ''}>{t('giftContinue')}<Icon name="arrow" /></button>
-        <button type="button" className="secondary" onClick={() => setStep('phone')}>{t('giftChangeNumber')}</button>
-      </div>
+      {primary('giftContinue', busy || sms.trim() === '')}
+      <button type="button" className="quiet" onClick={() => setStep('phone')}>{t('giftChangeNumber')}</button>
     </form> : null}
-    {step === 'opening' ? <div role="status"><h1>{t('giftOpening')}</h1></div> : null}
-    {step === 'done' ? <div><h1>{t('giftDoneTitle')}</h1><p>{t('giftDoneBody')}</p>
-      <div className="actions"><a className="button" href={href('scan')}>{t('scan')}<Icon name="arrow" /></a></div></div> : null}
-    {step === 'none' ? <div><h1>{t('giftNoneTitle')}</h1><p>{t('giftNoneBody')}</p>
-      <div className="actions"><button type="button" onClick={() => setStep('phone')}>{t('giftChangeNumber')}</button></div></div> : null}
-    {step === 'failed' ? <div><h1>{t('giftFailedTitle')}</h1><p>{t('giftFailedBody')}</p>
-      <div className="actions"><button type="button" onClick={() => setStep('phone')}>{t('giftTryAgain')}</button></div></div> : null}
+    {step === 'opening' ? <div role="status" className="gift-opening">{heading(t('giftOpening'))}<span className="gift-spinner" aria-hidden="true" /></div> : null}
+    {step === 'done' ? <div className="handle-form">{heading(t('giftDoneTitle'), t('giftDoneBody'))}
+      <div className="actions"><a className="button primary" href={href('scan')}>{t('scan')}<Icon name="arrow" /></a></div></div> : null}
+    {step === 'none' ? <div className="handle-form">{heading(t('giftNoneTitle'), t('giftNoneBody'))}
+      <div className="actions"><button type="button" className="primary" onClick={() => setStep('phone')}>{t('giftChangeNumber')}</button></div></div> : null}
+    {step === 'failed' ? <div className="handle-form">{heading(t('giftFailedTitle'), t('giftFailedBody'))}
+      <div className="actions"><button type="button" className="primary" onClick={() => setStep('phone')}>{t('giftTryAgain')}</button></div></div> : null}
   </section>
+}
+
+/** X4T-P9R-K12, as written on the card: capitals, dashes after every three. */
+export function groupCode(raw: string): string {
+  const plain = raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 9)
+  return plain.replace(/(.{3})(?=.)/g, '$1-')
 }

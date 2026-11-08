@@ -313,6 +313,8 @@
   "homeGiftTitle": "пришла открытка с кодом на обороте?",
   "homeGiftAction": "ввести код",
   "giftCodeTitle": "введите код с обратной стороны открытки",
+  "giftStep": "шаг {n} из 3",
+  "giftCodeBody": "девять букв и цифр, как написано на открытке",
   "giftCodeLabel": "код",
   "giftCodeInvalid": "это не похоже на код. в нём девять символов",
   "giftContinue": "продолжить",

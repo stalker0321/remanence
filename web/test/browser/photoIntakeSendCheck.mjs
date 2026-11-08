@@ -158,10 +158,10 @@ try {
           await chooseRecipient(page)
           await freshFront(page, 3)
         } else if (mode === 'unmount') {
-          await page.locator('.card a[href="#/"]').last().click()
+          await page.locator('.card a[href="/"]').last().click()
           await page.waitForFunction(() => document.querySelector('[data-testid=send_button]') === null)
           await capture(page, 'left')
-          await page.locator('a[href="#/create"]').click()
+          await page.locator('a[href="/create"]').click()
           await freshFront(page, 3)
         } else {
           await page.evaluate(() => window.photoIntakeFixture.replaceOwner())

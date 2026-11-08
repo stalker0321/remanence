@@ -33,6 +33,10 @@ function workerProgram(manifest) {
   const { base, entries, namespace, cacheName } = manifest
   const allowed = new Map(entries.map((entry) => [entry.path, entry]))
   const denied = /\/(?:api|v1|v2|auth|recovery|music|blob|blobs|photo|photos|artwork|capsules|opencv)(?:\/|$)|\/(?:app-config|atomic-test-config)\.json$/i
+  // Mirrors isAppPath in src/router/route.ts; /review is a server page.
+  const appPage = (pathname) => pathname.startsWith(base) &&
+    /^(?:c|me|gift|scan|create|account|settings|history|@?[A-Za-z0-9_.]{3,30})\/?$/.test(pathname.slice(base.length)) &&
+    !/^(?:review|legal)\/?$/.test(pathname.slice(base.length))
   const hex = (buffer) => Array.from(new Uint8Array(buffer), (n) => n.toString(16).padStart(2, '0')).join('')
   const validPath = (url) => url.origin === self.location.origin &&
     !url.search && !url.hash && !denied.test(url.pathname) && allowed.has(url.pathname)
@@ -94,9 +98,10 @@ function workerProgram(manifest) {
         request.headers.has('range') || url.origin !== self.location.origin ||
         url.search || denied.test(url.pathname)) return
     // Navigation requests may retain the document fragment. It is not sent
-    // to the server or used as a cache key; the exact path remains mandatory.
-    // Hash routes share the one built document; no other navigation fallback.
-    const path = url.pathname === base ? `${base}index.html` : url.pathname
+    // to the server or used as a cache key. App pages (/scan, /c, /me,
+    // /<nick>) share the one built document; nothing else falls back to it.
+    const path = url.pathname === base || (request.mode === 'navigate' && appPage(url.pathname))
+      ? `${base}index.html` : url.pathname
     if (!allowed.has(path)) return
     event.respondWith((async () => {
       try {

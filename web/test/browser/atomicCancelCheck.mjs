@@ -44,13 +44,13 @@ try {
     check(`${lang}: only explicit restart creates successor, no new provider/key operation`, (await state()).reservationId !== old && (await state()).creates === 1 && (await state()).attempts === 1)
   }
   for (const expired of [false, true]) {
-    await fresh(); await page.evaluate(() => { history.replaceState(null, '', '#/'); history.pushState(null, '', '#/account') })
+    await fresh(); await page.evaluate(() => { history.replaceState(null, '', '/'); history.pushState(null, '', '/account') })
     await candidate(); if (expired) await call('mode', { terminal: true })
     await call('hold', 'cancel:after'); await (await button('cancelRegistration')).click()
     await page.waitForFunction(() => window.atomic.reached() === 'cancel:after')
-    await call('releaseOnBack'); await page.evaluate(() => history.back()); await page.waitForURL('**/#/'); await page.waitForTimeout(60)
+    await call('releaseOnBack'); await page.evaluate(() => history.back()); await page.waitForURL(url => url.pathname === '/'); await page.waitForTimeout(60)
     check(`cancel${expired ? 410 : 200}: native Back fences late reply`, !(await state()).keys && (await state()).phase === 'signed-out' && (await state()).wiped && (await state()).commits === 0)
-    await page.evaluate(() => history.forward()); await page.waitForURL('**/#/account'); await phase('idle')
+    await page.evaluate(() => history.forward()); await page.waitForURL(url => url.pathname === '/account'); await phase('idle')
     check(`cancel${expired ? 410 : 200}: Forward does not resume/restart abandoned setup`, !(await state()).calls.includes('restart') && (await state()).creates === 1)
   }
   check('no durable private/setup persistence', await page.evaluate(async () => localStorage.length === 0 && sessionStorage.length === 0 && (await indexedDB.databases()).length === 0 && (await caches.keys()).length === 0))

@@ -119,6 +119,9 @@ input,textarea { min-width:0; }
 .scan-controls .actions { align-items:stretch; flex-direction:column; }
 .scan-controls .actions a { align-self:flex-start; }
 .scan-account { margin-top:2rem; padding-top:1.5rem; border-top:1px solid var(--line); font-size:.86rem; }
+.scan-gift { margin-top:1.5rem; font-size:.86rem; color:var(--muted); }
+.scan-gift a { display:inline-flex; align-items:center; gap:.3rem; white-space:nowrap; }
+.scan-gift .ui-icon { width:1rem; height:1rem; }
 video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink); border-radius:.5rem; }
 .scan-frame video.preview { margin:0; max-height:65dvh; object-fit:contain; }
 .recipient-picker { max-width:36rem; margin-inline:auto; }

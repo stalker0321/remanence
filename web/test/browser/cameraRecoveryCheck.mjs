@@ -53,7 +53,7 @@ try {
     }
     for (const route of ['scan', 'create']) {
       if (route === 'create') {
-        await page.locator('.main-nav a[href="#/create"]').click()
+        await page.locator('.main-nav a[href="/create"]').click()
         await page.evaluate(() => window.candidateUI.unlock())
         await page.locator('form.handle-form input').fill('friend_qa')
         await page.locator('form.handle-form button[type=submit]').click()
@@ -75,7 +75,7 @@ try {
       check(`${lang}/${route}: explicit retry clears failure and opens one preview`, await page.locator('.camera-feedback').count() === 0)
       await (await button('closeCamera')).click()
       await mode('pending-denied'); await (await button('useCamera')).click()
-      await page.locator('.mark').click(); await page.waitForURL(url => url.hash === '#/')
+      await page.locator('.mark').click(); await page.waitForURL(url => url.pathname === '/')
       await page.evaluate(() => window.candidateUI.rejectCamera())
       await page.waitForTimeout(60)
       check(`${lang}/${route}: stale denial cannot steal focus or publish on Home`, await page.locator('.camera-feedback').count() === 0 && await page.locator('.home-intro h1').evaluate(el => el === document.activeElement))

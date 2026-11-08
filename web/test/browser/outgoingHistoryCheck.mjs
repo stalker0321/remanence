@@ -106,7 +106,7 @@ async function openRow(page, key) {
   return detail
 }
 async function recents(page) {
-  await page.evaluate(() => { window.historyFixture.recipient.restart(); location.hash = '#/create' })
+  await page.evaluate(() => { window.historyFixture.recipient.restart(); history.pushState(null, '', '/create'); dispatchEvent(new Event('remanence:route')) })
   await page.locator('.handle-form input').waitFor()
   await click(page, 'recentTitle')
 }
@@ -130,7 +130,7 @@ try {
       check(`layout ${language}/${width}`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
     }
     await page.locator('.mark').click()
-    await page.locator('a[href="#/history"]').waitFor()
+    await page.locator('a[href="/history"]').waitFor()
     await page.goBack()
     await loaded(page)
     check('browser back returns to real history', await page.locator('[data-testid=history-page]').count() === 1)
@@ -224,8 +224,8 @@ try {
     await page.getByText('Recent recipients are unavailable.', { exact: false }).waitFor()
     mode = 'empty'; await click(page, 'historyRetry')
     await page.getByText('No recent recipients available.', { exact: true }).waitFor()
-    await page.evaluate(() => { location.hash = '#/' })
-    await page.locator('a[href="#/history"]').waitFor()
+    await page.evaluate(() => { history.pushState(null, '', '/'); dispatchEvent(new Event('remanence:route')) })
+    await page.locator('a[href="/history"]').waitFor()
     mode = 'rebound'; await recents(page)
     await page.getByRole('button', { name: '@recipient_qa', exact: true }).click()
     await page.getByText('This handle no longer matches that recipient.', { exact: false }).waitFor()

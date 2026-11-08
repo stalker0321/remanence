@@ -56,7 +56,7 @@ try {
   }
   await call('mode', 'existing')
   for (const [boundary, interruption] of [['options','cancel'], ['passkey','logout'], ['record','replace'], ['record','back']]) {
-    await call('logout'); await page.evaluate(() => { location.hash = '#/account' }); await sign()
+    await call('logout'); await page.evaluate(() => { history.pushState(null, '', '/account'); dispatchEvent(new Event('remanence:route')) }); await sign()
     await call('hold', boundary)
     const trigger = await button('openWithPasskey'); await trigger.focus(); await page.keyboard.press('Enter')
     await page.waitForFunction((point) => window.journey.reached() === point, boundary)
@@ -72,7 +72,7 @@ try {
     check(`${boundary}/${interruption}: no stale unlock`, !(await state()).keys)
     if (interruption === 'replace') check('replacement owner preserved', (await state()).accountId.startsWith('cccc'))
   }
-  await call('logout'); await page.evaluate(() => { location.hash = '#/account' }); await call('hold', 'google-verify')
+  await call('logout'); await page.evaluate(() => { history.pushState(null, '', '/account'); dispatchEvent(new Event('remanence:route')) }); await call('hold', 'google-verify')
   await (await button('continueGoogle')).click(); await page.waitForFunction(() => window.journey.reached() === 'google-verify')
   await (await button('accountCancel')).click(); await call('release'); await page.waitForTimeout(100)
   check('cancelled Google cannot late sign in', (await state()).phase === 'signed-out')

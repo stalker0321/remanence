@@ -46,11 +46,11 @@ async function shot(name) {
 }
 try {
   for (const [route, gate, next] of [['create', 'signInToMake', 'returnMake'], ['scan', 'signInToOpen', 'returnOpen'], ['history', 'signInToHistory', 'returnHistory']]) {
-    await fresh(); await page.locator(`.main-nav a[href="#/${route}"]`).click()
+    await fresh(); await page.locator(`.main-nav a[href="/${route}"]`).click()
     await page.getByRole('link', { name: await page.evaluate(key => window.atomic.messages.en[key], gate), exact: true }).click()
     await begin(); await save(); await phase('ready')
     const intended = page.getByRole('link', { name: await page.evaluate(key => window.atomic.messages.en[key], next), exact: true })
-    check(`${route}: successful onboarding retains original destination`, await intended.getAttribute('href') === `#/${route}`)
+    check(`${route}: successful onboarding retains original destination`, await intended.getAttribute('href') === `/${route}`)
   }
   for (const language of ['en', 'ru', 'uk']) {
     await fresh(); await call('language', language); await begin(language)
@@ -97,15 +97,15 @@ try {
   for (const boundary of ['google/verify:after', 'passkey/create', 'passkey/get', 'setup/verify:after', 'finalize:after', 'record:after']) {
     await fresh()
     // Native history.back(), not a synthetic hashchange-only navigation.
-    await page.evaluate(() => { history.replaceState(null, '', '#/'); history.pushState(null, '', '#/account') })
+    await page.evaluate(() => { history.replaceState(null, '', '/'); history.pushState(null, '', '/account') })
     await call('hold', boundary)
     if (boundary.startsWith('google/')) await (await button('continueGoogle')).click()
     else { await begin(); await save('en', 'ada', boundary) }
     await page.waitForFunction((point) => window.atomic.reached() === point, boundary)
     await call('releaseOnBack'); await page.evaluate(() => history.back())
-    await page.waitForURL('**/#/'); await page.waitForTimeout(60)
+    await page.waitForURL(url => url.pathname === '/'); await page.waitForTimeout(60)
     check(`${boundary}: popstate release cannot late install`, !(await state()).keys && (await state()).phase === 'signed-out' && (await state()).wiped)
-    await page.evaluate(() => history.forward()); await page.waitForURL('**/#/account'); await phase('idle')
+    await page.evaluate(() => history.forward()); await page.waitForURL(url => url.pathname === '/account'); await phase('idle')
     check(`${boundary}: Forward cannot resume old setup implicitly`, (await state()).setup === 'idle')
   }
   await fresh(); await call('mode', { terminal: true }); await (await button('continueGoogle')).click(); await phase('terminal')

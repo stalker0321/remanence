@@ -311,7 +311,6 @@
   "settingsSession": "Settings account table label for the sign-in state.",
   "settingsSignedOut": "Settings paragraph shown when not signed in on this device.",
   "homeGiftTitle": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
-  "homeGiftBody": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
   "homeGiftAction": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
   "giftCodeTitle": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
   "giftCodeLabel": "First gift by postcard code: the page a new recipient follows, see ADR-020.",

@@ -311,7 +311,6 @@
   "settingsSession": "вхід",
   "settingsSignedOut": "на цьому пристрої ви не увійшли",
   "homeGiftTitle": "прийшла листівка з кодом на звороті?",
-  "homeGiftBody": "усередині щось є. застосунок не потрібен",
   "homeGiftAction": "ввести код",
   "giftCodeTitle": "введіть код зі зворотного боку листівки",
   "giftCodeLabel": "код",

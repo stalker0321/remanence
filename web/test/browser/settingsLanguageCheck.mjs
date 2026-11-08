@@ -110,7 +110,7 @@ try {
     try {
       // Desktop settings view (closed menu) for visual review.
       await page.setViewportSize({ width: 800, height: 600 })
-      await page.evaluate(() => { window.location.hash = '#/settings' })
+      await page.evaluate(() => { window.history.pushState(null, '', '/settings'); dispatchEvent(new Event('remanence:route')) })
       await page.waitForTimeout(300)
       await page.screenshot({ path: join(outDir, 'settings-desktop.png'), fullPage: true })
       report.screenshots.push('settings-desktop.png')
@@ -120,7 +120,7 @@ try {
       // regression for the header-vs-Settings anchor defect.
       const width = 320
       await page.setViewportSize({ width, height: 640 })
-      await page.evaluate(() => { window.location.hash = '#/' })
+      await page.evaluate(() => { history.pushState(null, '', '/'); dispatchEvent(new Event('remanence:route')) })
       await page.waitForTimeout(300)
       const langs = [['en', 'English'], ['ru', 'Русский'], ['uk', 'Українська']]
       for (const [code, name] of langs) {
@@ -135,7 +135,7 @@ try {
         await page.waitForTimeout(120)
       }
 
-      await page.evaluate(() => { window.location.hash = '#/settings' })
+      await page.evaluate(() => { window.history.pushState(null, '', '/settings'); dispatchEvent(new Event('remanence:route')) })
       await page.waitForTimeout(300)
       const settingsTrigger = page.locator('.settings-group .language-trigger')
       await settingsTrigger.click()

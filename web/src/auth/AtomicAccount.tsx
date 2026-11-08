@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { MessageKey } from '../i18n/catalog'
-import { href, parseRoute, type RouteName } from '../router/route'
+import { ROUTE_CHANGE, currentRoute, href, type RouteName } from '../router/route'
 import type { SessionStore } from '../session/session'
 import { AtomicRegistration } from './atomicRegistration'
 import type { AtomicPort } from './atomicWire'
@@ -37,19 +37,19 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
 
   useEffect(() => {
     const leave = () => {
-      if (parseRoute(window.location.hash) !== 'account') {
+      if (currentRoute() !== 'account') {
         restore.current?.abort(); controller.leave()
       }
     }
     // Capture phase: fence late callbacks before React unmount (T398 pattern).
     window.addEventListener('popstate', leave, true)
-    window.addEventListener('hashchange', leave, true)
+    window.addEventListener(ROUTE_CHANGE, leave, true)
     const stop = store.subscribe(() => {
       if (store.getSnapshot().phase === 'signed-out') restore.current?.abort()
     })
     return () => {
       window.removeEventListener('popstate', leave, true)
-      window.removeEventListener('hashchange', leave, true)
+      window.removeEventListener(ROUTE_CHANGE, leave, true)
       restore.current?.abort(); stop(); controller.dispose()
     }
   }, [controller, store])

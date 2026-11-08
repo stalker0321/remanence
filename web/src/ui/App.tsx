@@ -14,7 +14,7 @@ import { restoreSignedInAccount } from '../auth/restore'
 import { type Language, type MessageKey } from '../i18n/catalog'
 import { phaseKey, translate } from '../i18n/translate'
 import { writeLanguage, type PreferencePort } from '../preferences/language'
-import { href, parseRoute, type RouteName } from '../router/route'
+import { ROUTE_CHANGE, currentLocation, currentRoute, href, interceptLinks, onRouteChange, type LinkedRecipient, type RouteName } from '../router/route'
 import { PresentationHistory } from '../router/presentationHistory'
 import { LanguageMenu } from './LanguageMenu'
 import { Settings } from './Settings'
@@ -106,7 +106,15 @@ export function App({
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const held = useSyncExternalStore(memory.subscribe, memory.getSnapshot)
   const draft = useRef(new RegistrationDraft())
-  const [route, setRoute] = useState<RouteName>(() => parseRoute(window.location.hash))
+  const [initialLocation] = useState(() => {
+    const location = currentLocation()
+    // Old #/ links land on the same page under its real path.
+    if (window.location.hash.startsWith('#/')) history.replaceState(history.state, '', href(location.route))
+    return location
+  })
+  const [route, setRoute] = useState<RouteName>(initialLocation.route)
+  // /me and /<nick> preselect who to write to; it outlives a detour to sign in.
+  const [linkedRecipient, setLinkedRecipient] = useState<LinkedRecipient>(initialLocation.recipient)
   const [notice, setNotice] = useState<MessageKey>('errorRegion')
   const navigation = useMemo(() => new PresentationHistory(), [])
   const layers = useSyncExternalStore(navigation.subscribe, navigation.getSnapshot)
@@ -148,7 +156,7 @@ export function App({
       })
     }
     window.addEventListener('popstate', navigation.navigated)
-    window.addEventListener('hashchange', navigation.navigated)
+    window.addEventListener(ROUTE_CHANGE, navigation.navigated)
     navigation.initialize()
     const stopSession = store.subscribe(sync)
     const stopMemory = memory.subscribe(sync)
@@ -157,15 +165,20 @@ export function App({
       stopSession()
       stopMemory()
       window.removeEventListener('popstate', navigation.navigated)
-      window.removeEventListener('hashchange', navigation.navigated)
+      window.removeEventListener(ROUTE_CHANGE, navigation.navigated)
     }
   }, [store, memory, navigation])
 
   useEffect(() => {
     document.documentElement.dataset.remanenceBoot = 'ready'
-    const onHash = () => setRoute(parseRoute(window.location.hash))
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
+    const stopRoutes = onRouteChange(() => {
+      const location = currentLocation()
+      setRoute(location.route)
+      // The sign-in detour and its way back to Create keep the link; any other page drops it.
+      if (location.recipient || (location.route !== 'account' && location.route !== 'create')) setLinkedRecipient(location.recipient)
+    })
+    const stopLinks = interceptLinks()
+    return () => { stopRoutes(); stopLinks() }
   }, [])
 
   function chooseLanguage(language: Language) {
@@ -196,7 +209,7 @@ export function App({
       {deploymentUnavailable ? <p className="notice notice--warning" role="alert" data-deployment-unavailable>{t('deploymentUnavailable')}</p> : null}
       <ShellStatus t={t} details={false} />
       <main className={`route-content route-${route}`} id="route-content" ref={content} tabIndex={-1}>
-      {route === 'home' ? <Home t={t} signedIn={view.phase !== 'signed-out'} giftEnabled={pendingServicePin !== undefined} /> : null}
+      {route === 'home' ? <Home t={t} signedIn={view.phase !== 'signed-out'} /> : null}
       {route === 'gift' && pendingServicePin ? <GiftPage t={t} store={store} keys={keys} transport={transport} pin={pendingServicePin} language={view.language} /> : null}
       {route === 'history' ? <HistoryPage key={`${view.accountId}:${view.generation}`} store={store} transport={transport} t={t} language={view.language} /> : null}
       {route === 'scan' ? (
@@ -213,7 +226,7 @@ export function App({
         />
       ) : null}
       {route === 'create' ? (
-        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} note={note} photos={photos} music={music} onNotice={setNotice} keys={keys} />
+        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} note={note} photos={photos} music={music} onNotice={setNotice} keys={keys} linked={linkedRecipient} onLinkedUsed={() => setLinkedRecipient(null)} />
       ) : null}
       {route === 'settings' ? (
         <Settings
@@ -258,16 +271,11 @@ export function App({
   )
 }
 
-function Home({ t, signedIn, giftEnabled }: { t: (key: MessageKey) => string; signedIn: boolean; giftEnabled: boolean }) {
+function Home({ t, signedIn }: { t: (key: MessageKey) => string; signedIn: boolean }) {
   return (
     <>
       <header className="home-intro"><h1>{t('homeTitle')}</h1></header>
       <div className="home-actions">
-      {giftEnabled ? <a className="action-card action-card--receive" href={href('gift')} aria-label={t('homeGiftTitle')}>
-        <h2>{t('homeGiftTitle')}</h2>
-        <p>{t('homeGiftBody')}</p>
-        <span className="action-card-footer"><span>{t('homeGiftAction')}</span><span className="arrow-tile"><Icon name="arrow" /></span></span>
-      </a> : null}
       <a className="action-card action-card--receive" href={href('scan')} aria-label={t('scan')}>
         <h2>{t('homeOpenTitle')}</h2>
         <p>{t('homeOpenBody')}</p>
@@ -347,10 +355,10 @@ export function Scan({
     // passive unmount cleanup. Same-route presentation history stays owned by
     // PresentationHistory; it is not a departure from this Scan visit.
     const onRouteDeparture = () => {
-      if (parseRoute(window.location.hash) !== 'scan') close()
+      if (currentRoute() !== 'scan') close()
     }
     window.addEventListener('popstate', onRouteDeparture, true)
-    window.addEventListener('hashchange', onRouteDeparture, true)
+    window.addEventListener(ROUTE_CHANGE, onRouteDeparture, true)
     const unsubscribe = store.subscribe(() => {
       const next = store.getSnapshot()
       if (next.accountId !== previous.accountId || next.bundleId !== previous.bundleId ||
@@ -361,7 +369,7 @@ export function Scan({
     })
     return () => {
       window.removeEventListener('popstate', onRouteDeparture, true)
-      window.removeEventListener('hashchange', onRouteDeparture, true)
+      window.removeEventListener(ROUTE_CHANGE, onRouteDeparture, true)
       unsubscribe()
       release()
     }
@@ -564,6 +572,8 @@ export function Scan({
         )}
       </div>
       {store.getSnapshot().phase === 'signed-out' || store.getSnapshot().phase === 'authenticated' ? <aside className="scan-account"><p>{t('scanAccountHint')}</p><div className="actions"><a className="button" href={href('account')} onClick={close}>{t(store.getSnapshot().phase === 'signed-out' ? 'signInToOpen' : 'unlockToOpen')}<Icon name="arrow" /></a></div></aside> : null}
+      {/* ADR-020: a card with a code on the back opens by its code first, not by the camera. */}
+      {pendingServicePin ? <p className="scan-gift">{t('homeGiftTitle')} <a href={href('gift')} onClick={close}>{t('homeGiftAction')}<Icon name="arrow" /></a></p> : null}
       </div>
       </div>
     </section>
@@ -582,6 +592,8 @@ export function Create({
   music,
   onNotice,
   keys,
+  linked = null,
+  onLinkedUsed,
   photoCodec = browserPhotoCodec(document),
   imageDecode = browserImageDecode(),
 }: {
@@ -600,6 +612,9 @@ export function Create({
    * of faking upload success.
    */
   keys?: MemoryKeys
+  /** Recipient from a /me or /<nick> link: looked up once, then confirmed like a typed one. */
+  linked?: LinkedRecipient
+  onLinkedUsed?: () => void
   /**
    * Injectable codec seam for connected tests (default: real browser
    * decoder). Production always uses the default; tests inject a gated
@@ -882,12 +897,12 @@ export function Create({
   // unmount cleanup. Fence this UI search in capture phase, like Scan's Back
   // cleanup; same-Create hash navigation must keep a legitimate search alive.
   useEffect(() => {
-    const leave = () => { if (parseRoute(window.location.hash) !== 'create') stopMusicSearch() }
+    const leave = () => { if (currentRoute() !== 'create') stopMusicSearch() }
     window.addEventListener('popstate', leave, true)
-    window.addEventListener('hashchange', leave, true)
+    window.addEventListener(ROUTE_CHANGE, leave, true)
     return () => {
       window.removeEventListener('popstate', leave, true)
-      window.removeEventListener('hashchange', leave, true)
+      window.removeEventListener(ROUTE_CHANGE, leave, true)
     }
   }, [])
 
@@ -1137,7 +1152,7 @@ export function Create({
     const controller = new AbortController()
     musicAbort.current = controller
     const current = () => mounted.current && musicAbort.current === controller &&
-      !controller.signal.aborted && parseRoute(window.location.hash) === 'create'
+      !controller.signal.aborted && currentRoute() === 'create'
     try {
       const outcome = await searchMusic(store, transport, query, controller.signal)
       if (!current()) return
@@ -1198,6 +1213,14 @@ export function Create({
       }
     }
   }
+
+  useEffect(() => {
+    if (!linked || !open || busy || pending !== null || confirmed !== null) return
+    onLinkedUsed?.()
+    if (linked.kind === 'self') void lookup('self')
+    else { setHandle(linked.handle); void lookup('named', linked.handle) }
+    // lookup reads the current render; the link is consumed exactly once.
+  }, [linked, open])
 
   if (!open) {
     return (
@@ -1516,11 +1539,11 @@ function Account({
   const unlocked = signedIn && view.phase !== 'authenticated'
 
   useEffect(() => {
-    const leave = () => { if (parseRoute(window.location.hash) !== 'account') cancel() }
-    window.addEventListener('hashchange', leave)
+    const leave = () => { if (currentRoute() !== 'account') cancel() }
+    window.addEventListener(ROUTE_CHANGE, leave)
     window.addEventListener('popstate', leave)
     return () => {
-      window.removeEventListener('hashchange', leave)
+      window.removeEventListener(ROUTE_CHANGE, leave)
       window.removeEventListener('popstate', leave)
       abort.current?.abort()
     }

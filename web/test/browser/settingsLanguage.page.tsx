@@ -193,8 +193,8 @@ async function run(): Promise<void> {
   await waitFor(() => bodyText().includes(t('settingsTitle')) && bodyText().includes(t('settingsSignedOut')), 'signed-out settings renders')
   assert('settings shows the account group', bodyText().includes(t('account')))
   assert('settings shows the language group', bodyText().includes(t('language')))
-  assert('settings account link points at the existing account route', document.querySelector('a[href="#/account"]') !== null)
-  assert('settings back link points home', document.querySelector('a[href="#/"]') !== null)
+  assert('settings account link points at the existing account route', document.querySelector('a[href="/account"]') !== null)
+  assert('settings back link points home', document.querySelector('a[href="/"]') !== null)
 
   // --- Settings: language menu works here too (scoped to the settings group) --
   const settingsTrigger = trigger('.settings-group')
@@ -226,8 +226,8 @@ async function run(): Promise<void> {
 
   // --- back link navigates home ------------------------------------------
   navigate('settings')
-  await waitFor(() => document.querySelector('a[href="#/"]') !== null, 'settings back link present')
-  click(document.querySelector('a[href="#/"]')!)
+  await waitFor(() => document.querySelector('a[href="/"]') !== null, 'settings back link present')
+  click(document.querySelector('a[href="/"]')!)
   await waitFor(() => window.location.hash === '#/' || window.location.hash === '', 'back navigates home')
   assert('back link navigates to home', window.location.hash === '#/' || window.location.hash === '')
 }

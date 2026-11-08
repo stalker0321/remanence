@@ -110,8 +110,8 @@ try {
         })
         await capture(page, 'waiting')
         await check('leaving-does-not-claim-cancellation-or-completion', async () => {
-          await page.locator('.card a[href="#/"]').last().click()
-          await page.waitForFunction(() => location.hash === '#/' && document.querySelector('[data-testid=send_button]') === null)
+          await page.locator('.card a[href="/"]').last().click()
+          await page.waitForFunction(() => location.pathname === '/' && document.querySelector('[data-testid=send_button]') === null)
           releaseHeld()
           await page.waitForTimeout(250)
           assert.equal(calls.filter((call) => call.path === '/v1/capsules').length, 1)
@@ -133,7 +133,7 @@ try {
             assert.equal(await page.locator('[data-testid=send_state]').innerText(), await page.evaluate(() => window.sendFeedbackFixture.messages('en').sendWorking))
             assert.equal(calls.length, 1)
             await assertNoPreparationClaims(page, 'en')
-            await page.locator('.card a[href="#/"]').last().focus()
+            await page.locator('.card a[href="/"]').last().focus()
             pendingFocus = await page.evaluateHandle(() => document.activeElement)
             await capture(page, 'waiting')
           })
@@ -204,7 +204,7 @@ try {
           await capture(page, 'result-uk-magnified')
           const before = calls.length
           await page.keyboard.press('Enter')
-          await page.waitForFunction(() => location.hash === '#/' && document.querySelector('[data-testid=send_button]') === null)
+          await page.waitForFunction(() => location.pathname === '/' && document.querySelector('[data-testid=send_button]') === null)
           assert.equal(calls.length, before, 'exit does not retry or reset an attempt')
           assert.equal(await page.evaluate(() => window.sendFeedbackFixture.state().phase), 'keys-unlocked', 'Home exit is not logout')
           assert.equal(await page.evaluate(() => window.sendFeedbackFixture.state().photoCount), 3, 'existing in-memory draft policy is unchanged')

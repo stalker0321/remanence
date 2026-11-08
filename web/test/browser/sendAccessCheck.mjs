@@ -74,9 +74,9 @@ try {
     await settled(page)
     await page.waitForFunction(() => document.querySelector('[data-testid=send-access]') === null)
     check('OFF has neither section nor numbers', await section(page).count() === 0)
-    await page.locator('a[href="#/"]').last().click()
-    await page.locator('a[href="#/create"]').waitFor()
-    check('OFF retains ordinary beta navigation', await page.locator('a[href="#/create"]').count() === 1)
+    await page.locator('a[href="/"]').last().click()
+    await page.locator('a[href="/create"]').waitFor()
+    check('OFF retains ordinary beta navigation', await page.locator('a[href="/create"]').count() === 1)
   })
   await scenario('all-counts-record-lifetime-locales', 'enforce', async (page) => {
     await counts(page, 2, 2)
@@ -158,8 +158,8 @@ try {
   })
   await scenario('unmount-back-fresh-owner-read', 'hold', async (page) => {
     await section(page).getByRole('status').waitFor()
-    await page.locator('a[href="#/"]').last().click()
-    await page.locator('a[href="#/settings"]').waitFor()
+    await page.locator('a[href="/"]').last().click()
+    await page.locator('a[href="/settings"]').waitFor()
     held.splice(0).forEach((release) => release()); await settled(page)
     check('leaving retires request and section', await section(page).count() === 0 && await page.evaluate(() => window.sendAccessFixture.audit[0].aborted))
     mode = 'enforce'; value = dto('enforce', 1, 1)

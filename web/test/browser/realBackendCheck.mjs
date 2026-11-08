@@ -84,8 +84,8 @@ async function button(key, root = page) {
 async function access({ phase, self, other, display = 'counts', mode = 'enforce', lifetime = false }, first = false) {
   const incoming = page.waitForResponse(isPath(accessPath))
   if (first) await page.goto(`${host.url}#/settings`)
-  else if (new URL(page.url()).hash === '#/settings') await page.locator('[data-testid=access-refresh]').click()
-  else await page.evaluate(() => { location.hash = '#/settings' })
+  else if (new URL(page.url()).pathname === '/settings') await page.locator('[data-testid=access-refresh]').click()
+  else await page.evaluate(() => { history.pushState(null, '', '/settings'); dispatchEvent(new Event('remanence:route')) })
   const response = await incoming
   check(`${phase}: response status`, response.status() === (display === 'off' ? 404 : 200))
   check(`${phase}: real private cache header`, response.headers()['cache-control'] === 'private, no-store')
@@ -110,7 +110,7 @@ async function access({ phase, self, other, display = 'counts', mode = 'enforce'
 }
 async function history() {
   const incoming = page.waitForResponse(isPath(historyPath))
-  await page.evaluate(() => { location.hash = '#/history' })
+  await page.evaluate(() => { history.pushState(null, '', '/history'); dispatchEvent(new Event('remanence:route')) })
   const reply = await incoming
   check('history real response200/private', reply.status() === 200 && reply.headers()['cache-control'] === 'private, no-store')
   await page.locator('[data-history-key]').nth(2).waitFor()
@@ -158,7 +158,7 @@ try {
   await cancel(`1:${pending.otherId}`, `/v1/capsules/${pending.otherId}/revoke`, 'REVOKED')
   await cancel(`2:${pending.pendingCapsuleId}`, `/v2/pending-deliveries/${pending.pendingId}/cancel`, 'CANCELLED')
   await access({ phase: 'no-refund', self: 1, other: 0 })
-  await page.evaluate(() => { location.hash = '#/create' })
+  await page.evaluate(() => { history.pushState(null, '', '/create'); dispatchEvent(new Event('remanence:route')) })
   await page.locator('[data-testid=recent-recipients]').waitFor()
   const recentResponse = page.waitForResponse(isPath(recentPath))
   await (await button('recentTitle')).click()

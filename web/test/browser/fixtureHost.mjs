@@ -8,6 +8,9 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve, extname } from 'node:path'
 import { tmpdir } from 'node:os'
 
+// Like Caddy in production: app pages (/scan, /c, /me, /<nick>) get the document.
+const appPage = (name) => /^\/(?:c|me|gift|scan|create|account|settings|history|@?[A-Za-z0-9_.]{3,30})\/?$/.test(name) && !/\.(?:js|mjs|css|html|wasm|otf|svg|png|json|webmanifest)$/.test(name)
+
 export async function fixtureHost(webDir, proof, entry, options = {}) {
   const web = resolve(webDir)
   await mkdir(proof, { recursive: true })
@@ -26,7 +29,7 @@ export async function fixtureHost(webDir, proof, entry, options = {}) {
   const server = createServer(async (req, res) => {
     if (options.handle && await options.handle(req, res)) return
     const name = new URL(req.url, 'http://fixture.invalid').pathname
-    const file = name.startsWith('/fonts/') || name.startsWith('/opencv/') ? join(web, 'public', name) : join(work, 'dist', name === '/' ? 'index.html' : name)
+    const file = name.startsWith('/fonts/') || name.startsWith('/opencv/') ? join(web, 'public', name) : join(work, 'dist', name === '/' || appPage(name) ? 'index.html' : name)
     try {
       const bytes = await readFile(file)
       res.writeHead(200, { 'content-type': { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css', '.otf': 'font/otf' }[extname(file)], 'cache-control': 'no-store' }).end(bytes)

@@ -311,7 +311,6 @@
   "settingsSession": "sign-in",
   "settingsSignedOut": "you’re not signed in on this device",
   "homeGiftTitle": "got a postcard with a code on the back?",
-  "homeGiftBody": "there’s something inside. no app needed",
   "homeGiftAction": "enter the code",
   "giftCodeTitle": "enter the code from the back of the postcard",
   "giftCodeLabel": "code",

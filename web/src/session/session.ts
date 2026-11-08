@@ -38,7 +38,7 @@ export interface PublicSession {
   language: Language
 }
 
-interface SecretSession {
+export interface SecretSession {
   accessToken: string
   refreshToken: string
   accessExpiresAt: string
@@ -145,6 +145,17 @@ export class SessionStore {
       bundleId: null,
       handle: null,
     })
+  }
+
+  /**
+   * A refreshed token pair for the same signed-in visit. The generation stays,
+   * so operations already running keep their token source.
+   */
+  rotate(generation: number, next: SecretSession): void {
+    if (this.#view.generation !== generation || this.#secrets === null) throw new SessionError('STALE')
+    if (next.accessToken.length === 0 || next.refreshToken.length === 0) throw new SessionError('INVALID_ACCOUNT')
+    this.#secrets = { ...next }
+    this.#emit()
   }
 
   setLanguage(language: Language): void {

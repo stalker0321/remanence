@@ -37,14 +37,29 @@ export interface KeyCapabilities {
   sign(statement: Uint8Array): Promise<Uint8Array>
   /** ADR-020: only ever signs under the claim-intent domain. */
   signClaimIntent?(intent: Uint8Array): Promise<Uint8Array>
+  /** The same non-extractable keys, for keeping this device signed in. */
+  deviceKeys?(): DeviceKeys
   lock(): void
+}
+
+/**
+ * What stays on this device between visits. Both keys are non-extractable
+ * WebCrypto keys: the browser can use them, no script can read their bytes.
+ */
+export interface DeviceKeys {
+  accountId: string
+  bundleId: string
+  recipientKey: CryptoKey
+  signing: CryptoKey
+  signingKeyId: number
+  encryptionKeyId: number
 }
 
 const kem = new DhkemX25519HkdfSha256()
 
 /**
- * In-memory identity. Callers receive operations, not key bytes.
- * Reload requires a new unlock. lock() drops the closure keys.
+ * Opens the identity from the recovery record. Callers receive operations,
+ * not key bytes; the keys themselves are non-extractable.
  */
 export async function unlockAccount(
   reply: RecoveryReply,
@@ -66,10 +81,16 @@ export async function unlockAccount(
   let recipientKey: CryptoKey
   try { recipientKey = await kem.importKey('raw', raw.buffer, false) }
   finally { raw.fill(0) }
+  return deviceCapabilities({
+    accountId: opened.accountId, bundleId: opened.bundleId, recipientKey,
+    signing: opened.signing, signingKeyId: opened.signingKeyId, encryptionKeyId: opened.encryptionKeyId,
+  })
+}
+
+/** Operations over held keys; callers never receive key bytes. lock() ends them. */
+export function deviceCapabilities(held: DeviceKeys): KeyCapabilities {
   let alive = true
-  const signing = opened.signing
-  const signingKeyId = opened.signingKeyId
-  const encryptionKeyId = opened.encryptionKeyId
+  const { recipientKey, signing, signingKeyId, encryptionKeyId } = held
   const finish = <T extends Uint8Array>(value: T): T => {
     if (!alive) {
       value.fill(0)
@@ -78,8 +99,8 @@ export async function unlockAccount(
     return value
   }
   return {
-    accountId: opened.accountId,
-    bundleId: opened.bundleId,
+    accountId: held.accountId,
+    bundleId: held.bundleId,
     async openEnvelope(info, ciphertext) {
       if (!alive) throw new ProtocolError('LOCKED')
       return finish(await openHpke(recipientKey, encryptionKeyId, info, ciphertext))
@@ -97,6 +118,10 @@ export async function unlockAccount(
       const input = new Uint8Array(await crypto.subtle.sign('Ed25519', signing, arrayBuffer(concat([utf8('postmark/claim-intent/v2'), Uint8Array.of(0), intent]))))
       if (input.length !== 64) throw new ProtocolError('BAD_SIGNATURE')
       return finish(concat([new Uint8Array([1]), writeUint32(signingKeyId), input]))
+    },
+    deviceKeys() {
+      if (!alive) throw new ProtocolError('LOCKED')
+      return { ...held }
     },
     lock() {
       alive = false

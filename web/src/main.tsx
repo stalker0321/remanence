@@ -13,6 +13,8 @@ import { startShell } from './pwa/shell'
 import { loadDeploymentConfig, type DeploymentConfig } from './deployment/config'
 import { deploymentPorts } from './deployment/ports'
 import { verifyDeploymentWorker } from './deployment/worker'
+import { fetchTransport } from './auth/http'
+import { keepDeviceSession } from './session/device'
 import './design/tokens.css'
 
 const preferences: PreferencePort = {
@@ -58,6 +60,8 @@ async function start() {
     config = await loadDeploymentConfig(new URL(`${import.meta.env.BASE_URL}app-config.json`, location.origin), location.origin, window.isSecureContext)
     if ((navigator.serviceWorker?.controller ?? null) !== controller) config = null
   } catch { /* Offline/unverified/mismatched: full static UI, no API/provider selection. */ }
+  // Like the app: this device stays signed in until sign-out.
+  if (config && 'apiOrigin' in config) await keepDeviceSession(store, keys, fetchTransport(config.apiOrigin)).catch(() => undefined)
   reactRoot.render(<StrictMode><ConfiguredApplication config={config} controller={controller} /></StrictMode>)
 }
 void start()

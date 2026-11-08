@@ -8,6 +8,13 @@ import type { PublicSession, SessionStore } from '../session/session'
 export class MemoryKeys {
   #caps: KeyCapabilities | null = null
   #accountId: string | null = null
+  #listeners = new Set<() => void>()
+
+  /** Told when keys are taken or dropped, which the session snapshot alone can't show. */
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener)
+    return () => { this.#listeners.delete(listener) }
+  }
 
   hold(view: PublicSession, caps: KeyCapabilities): void {
     if (view.accountId === null || view.phase === 'signed-out' || view.phase === 'authenticated') {
@@ -17,6 +24,7 @@ export class MemoryKeys {
     this.drop()
     this.#caps = caps
     this.#accountId = view.accountId
+    for (const listener of this.#listeners) listener()
   }
 
   capabilities(view: PublicSession): KeyCapabilities | null {
@@ -30,6 +38,7 @@ export class MemoryKeys {
     this.#caps = null
     this.#accountId = null
     current?.lock()
+    if (current) for (const listener of this.#listeners) listener()
   }
 
   attach(session: SessionStore): () => void {

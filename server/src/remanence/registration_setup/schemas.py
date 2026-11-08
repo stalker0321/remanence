@@ -19,6 +19,16 @@ class EpochRequest(BaseModel):
     epoch: StrictInt = Field(gt=0, le=9223372036854775807)
 
 
+class CredentialOptionsRequest(EpochRequest):
+    # Only names the passkey in the password manager; FINAL still decides the handle.
+    handle: str | None = Field(default=None, max_length=32)
+
+    @field_validator("handle")
+    @classmethod
+    def normalized_handle(cls, value):
+        return None if value is None else normalize_handle(value)
+
+
 class SetupOptions(EpochRequest):
     credential_id: str = Field(min_length=1, max_length=1366)
 

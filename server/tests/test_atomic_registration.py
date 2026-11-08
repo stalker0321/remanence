@@ -491,3 +491,13 @@ def test_reserved_handle_reads_as_taken_and_keeps_the_grant(atomic):
     assert counts(atomic[1]) == before
     corrected = copy.deepcopy(body); corrected["handle"] = "available"; corrected["operation_id"] = str(uuid.uuid4())
     assert final(atomic, a, corrected).status_code == 201
+
+
+def test_passkey_is_named_by_the_chosen_handle(atomic):
+    a = reserve(atomic)
+    named = post(atomic, a, "credential/options", {"handle": "Vuzol.Node"})
+    assert named["options"]["user"]["name"] == named["options"]["user"]["displayName"] == "@vuzol.node"
+    unnamed = post(atomic, a, "credential/options")
+    # Older clients send no handle; the password manager then shows the Google email.
+    assert "@" in unnamed["options"]["user"]["name"] and not unnamed["options"]["user"]["name"].startswith("remanence-")
+    post(atomic, a, "credential/options", {"handle": "no spaces"}, 422)

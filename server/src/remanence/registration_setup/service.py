@@ -190,14 +190,16 @@ class AtomicRegistration:
         self.db.flush()
         return item
 
-    def credential_options(self, row):
+    def credential_options(self, row, handle=None):
         self._reserved(row)
         pending = self._credential_ids(row)
         if len(pending) >= 4:
             raise SetupFailure("SETUP_LIMIT_REACHED", 429)
         options = generate_registration_options(
             rp_id=self.settings.recovery_rp_id, rp_name="Remanence", user_id=row.account_id.bytes,
-            user_name=f"remanence-{row.account_id}",
+            # What the password manager lists: the chosen @handle, else the Google email.
+            user_name=f"@{handle}" if handle else row.email,
+            user_display_name=f"@{handle}" if handle else row.email,
             authenticator_selection=AuthenticatorSelectionCriteria(resident_key=ResidentKeyRequirement.REQUIRED,
                                                                    user_verification=UserVerificationRequirement.REQUIRED),
             exclude_credentials=[PublicKeyCredentialDescriptor(id=unb64(value)) for value in pending])

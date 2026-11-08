@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from remanence.api.rate_limit import registration_limit
 from remanence.api.dependencies import (AuthenticationRequiredError, get_db_session,
     get_access_bearer_token, get_authenticated_principal)
-from remanence.registration_setup.schemas import EpochRequest, SetupOptions, SetupVerify, FinalRequest
+from remanence.registration_setup.schemas import CredentialOptionsRequest, EpochRequest, SetupOptions, SetupVerify, FinalRequest
 from remanence.registration_setup.service import AtomicRegistration, SetupFailure
 
 
@@ -53,7 +53,7 @@ def execute(request, db, reservation_id, payload, action):
             secret = authorization[7:] if authorization.startswith("Bearer ") else ""
             row = engine.authorized(uuid.UUID(reservation_id), secret, payload.epoch if payload else None)
             if action == "status": result = dict(reservation=engine.view(row))
-            elif action == "credential_options": result = engine.credential_options(row)
+            elif action == "credential_options": result = engine.credential_options(row, payload.handle)
             elif action == "setup_options": result = engine.setup_options(row, payload.credential_id)
             elif action in ("credential_verify", "setup_verify", "finalize"):
                 result = getattr(engine, action)(row, payload)
@@ -80,7 +80,7 @@ def status(request: Request, reservation_id: str = ID, db: Session = Depends(get
 
 
 @router.post("/{reservation_id}/credential/options")
-def credential_options(payload: EpochRequest, request: Request, reservation_id: str = ID, db: Session = Depends(get_db_session)):
+def credential_options(payload: CredentialOptionsRequest, request: Request, reservation_id: str = ID, db: Session = Depends(get_db_session)):
     return execute(request, db, reservation_id, payload, "credential_options")
 
 

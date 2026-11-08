@@ -150,7 +150,6 @@ export function sendPreflight(visit: SendVisit, ports: SendPortsFull): SendPrefl
     return { ok: false, reason: 'recipient' }
   }
   if (visit.photos.length < 3 || visit.photos.length > 5) return { ok: false, reason: 'photos' }
-  if (visit.noteText.trim() === '') return { ok: false, reason: 'note' }
   if (visit.musicSelected) return { ok: false, reason: 'music' }
   if (visit.freeze.grammarId !== 'g5') return { ok: false, reason: 'freeze' }
   if (visit.still.bytes.length === 0) return { ok: false, reason: 'still' }

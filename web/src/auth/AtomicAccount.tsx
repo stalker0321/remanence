@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { MessageKey } from '../i18n/catalog'
-import { ROUTE_CHANGE, currentRoute, href, type RouteName } from '../router/route'
+import { ROUTE_CHANGE, currentRoute, href, navigate, type RouteName } from '../router/route'
 import type { SessionStore } from '../session/session'
 import { AtomicRegistration } from './atomicRegistration'
 import type { AtomicPort } from './atomicWire'
@@ -28,6 +28,14 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
   const input = useRef<HTMLInputElement>(null)
   const signedIn = view.phase !== 'signed-out'
   const unlocked = signedIn && view.phase !== 'authenticated'
+  // Coming here to sign in ends where the person was going, or at home;
+  // there is no separate "what next" stop. An already signed-in visit stays.
+  const cameToSignIn = useRef(view.phase === 'signed-out' || view.phase === 'authenticated')
+  useEffect(() => {
+    if (!cameToSignIn.current || !unlocked) return
+    cameToSignIn.current = false
+    navigate(returnTo ? href(returnTo) : href('home'), 'replace')
+  }, [unlocked, returnTo])
   const busy = state.busy || restoring
   const choosing = state.phase === 'handle' || state.phase === 'handle-conflict'
   const creating = state.phase === 'passkey' || state.phase === 'creating'
@@ -122,15 +130,11 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     {unsupported ? <p className="field-hint">{t('atomicResumeSavedHint')}</p> : null}
     {!signedIn && verifying && !busy && !unsupported ? <p className="field-hint">{t('atomicVerifyHint')}</p> : null}
     {busy && !phaseMessage ? <p role="status">{t('accountWorking')}</p> : null}
-    {signedIn && (unlocked || returnTo === 'history') ? <div className="account-next">
-      {returnTo ? <div className="actions"><a className="button primary" href={href(returnTo)}>{t(returnTo === 'create' ? 'returnMake' : returnTo === 'scan' ? 'returnOpen' : 'returnHistory')}<Icon name="arrow" /></a></div>
-        : <><h2>{t('accountNext')}</h2><div className="actions"><a className="button primary" href={href('scan')}>{t('scan')}<Icon name="arrow" /></a><a className="button" href={href('create')}>{t('make')}</a></div></>}
-    </div> : null}
     </div>
     <aside className="key-explanation"><h2>{t('accountKeysTitle')}</h2><p>{t('atomicPrivacy')}</p></aside>
     </div>
     <footer className="account-footer">
-      {signedIn ? <div className="actions">{unlocked ? <button onClick={() => store.lock()}>{t('lock')}</button> : null}<button className="quiet" onClick={() => { leave(); store.signOut() }}>{t('signOut')}</button></div> : null}
+      {signedIn ? <div className="actions"><button className="quiet" onClick={() => { leave(); store.signOut() }}>{t('signOut')}</button></div> : null}
       {!signedIn && state.phase !== 'idle' ? <details><summary>{t('atomicOptions')}</summary><p className="field-hint">{t('atomicLeaveHint')}</p><div className="actions">
         <button type="button" onClick={leave}>{t('atomicLater')}</button>
         {state.reservationState === 'RESERVED' && state.phase !== 'unknown' ? <button className="quiet" disabled={busy} onClick={() => { void controller.cancelReservation() }}>{t('cancelRegistration')}</button> : null}

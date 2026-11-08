@@ -281,6 +281,8 @@
   "noteLabel": "Create textarea label 'a few words'.",
   "noteTooLong": "Create hint shown when the note reaches its length limit.",
   "addPhotos": "Create file input label 'add photos'.",
+  "createPhotosTitle": "Create: heading of the photos part, matching the Android content step.",
+  "addMorePhotos": "Create: add photos when some are already chosen.",
   "removePhoto": "Create photo thumbnail button that removes the photo.",
   "photoEarlier": "Create photo thumbnail button that moves the photo earlier.",
   "photoLater": "Create photo thumbnail button that moves the photo later.",

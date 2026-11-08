@@ -476,3 +476,15 @@ button.google-button:not(:disabled):not([aria-disabled="true"]):hover { backgrou
 
 /* The sign-in card holds one action: let Google's button fill it. */
 .atomic-account .actions .google-button,.legacy-account .actions .google-button { width:100%; }
+
+/* Content step, phone-first like the app: photos as the main block, words below. */
+.content-workspace { display:flex; flex-direction:column; gap:1.2rem; max-width:44rem; }
+.photo-draft h2 { margin:0; font-size:1.35rem; }
+.photo-draft .field-hint { margin:0 !important; }
+.photo-draft .photo-grid { grid-template-columns:repeat(auto-fill,minmax(min(100%,120px),1fr)); }
+.photo-draft .photo-grid li { position:relative; }
+.photo-draft .photo-grid img { height:auto; aspect-ratio:1; object-fit:cover; border-radius:.5rem; }
+.photo-remove { position:absolute; top:.35rem; right:.35rem; min-height:0; width:2rem; height:2rem; padding:0; border-radius:50%; background:#fffdf8e6; border-color:transparent; }
+label.photo-pick { position:relative; width:100%; cursor:pointer; }
+label.photo-pick input[type="file"] { position:absolute; inset:0; opacity:0; width:100%; height:100%; margin:0; cursor:pointer; }
+.content-workspace .draft-section textarea { min-height:5.5rem; }

@@ -473,7 +473,7 @@ async function runChecks(h: Harness, files: File[], spare: File, status: HTMLEle
   }
   layoutFacts.push(layoutFact)
   assert('production tokens.css is applied (design token present)', layoutFact.tokenColumn === '70rem' && layoutFact.tokenLilac === '#dcd9ee', JSON.stringify(layoutFact))
-  assert('photo controls are constrained by production styles', layoutFact.thumbHeight !== null && layoutFact.thumbHeight > 0 && layoutFact.thumbHeight <= 7 * rootFont + 1, JSON.stringify(layoutFact))
+  assert('photo controls are constrained by production styles', layoutFact.thumbHeight !== null && layoutFact.thumbHeight > 0 && layoutFact.thumbHeight <= 9 * rootFont + 1, JSON.stringify(layoutFact))
   assert('no horizontal overflow at the intended viewport', layoutFact.scrollWidth <= layoutFact.innerWidth + 1, JSON.stringify(layoutFact))
   assert('connected composer fits the intended viewport width', layoutFact.composerWidth !== null && layoutFact.composerWidth <= layoutFact.innerWidth + 1, JSON.stringify(layoutFact))
   assert('critical composer controls are reachable in the viewport', layoutFact.freezeRight !== null && layoutFact.freezeRight > 0 && layoutFact.freezeRight <= layoutFact.innerWidth + 1, JSON.stringify(layoutFact))

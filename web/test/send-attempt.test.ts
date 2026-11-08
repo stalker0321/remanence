@@ -281,14 +281,15 @@ describe('sendPreflight', () => {
     expect(sendPreflight(visit, ports)).toEqual({ ok: true })
   })
 
-  it('refuses invalid captured freeze, music, note, photos, and unmount without consuming an attempt', async () => {
+  it('refuses invalid captured freeze, music, photos, and unmount without consuming an attempt; words are optional', async () => {
     const { visit, ports, current } = await buildVisit()
     // sendPreflight validates the CAPTURED visit; fences validate CURRENT
     // values. An invalid captured freeze (wrong grammar) is a local refusal.
     const badFreeze = { ...visit.freeze, grammarId: 'g4' } as unknown as CreatorFreeze
     expect(sendPreflight({ ...visit, freeze: badFreeze }, ports)).toEqual({ ok: false, reason: 'freeze' })
     expect(sendPreflight({ ...visit, musicSelected: true }, ports)).toEqual({ ok: false, reason: 'music' })
-    expect(sendPreflight({ ...visit, noteText: '   ' }, ports)).toEqual({ ok: false, reason: 'note' })
+    // As in the app, a postcard needs no words.
+    expect(sendPreflight({ ...visit, noteText: '' }, ports)).toEqual({ ok: true })
     expect(sendPreflight({ ...visit, photos: visit.photos.slice(0, 2) }, ports)).toEqual({ ok: false, reason: 'photos' })
     expect(sendPreflight({ ...visit, mounted: false }, ports)).toEqual({ ok: false, reason: 'mounted' })
     current.mounted = false

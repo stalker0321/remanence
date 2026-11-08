@@ -259,7 +259,6 @@ export function App({
       ) : null}
       {deploymentUnavailable || notice === 'errorRegion' || (route === 'account' && atomicRegistration) ? null : <p className="notice" role="alert">{t(notice)}</p>}
       </main>
-      {view.phase !== 'signed-out' && route !== 'account' && route !== 'settings' ? <p className="session-status" role="status"><Icon name="key" />{t(phaseKey(view.phase))}</p> : null}
       <footer className="site-footer"><span>remanence</span><p>{t('homePrivate')}</p></footer>
     </div>
     {presenting && held ? (
@@ -583,6 +582,8 @@ export function Scan({
   )
 }
 
+const WEB_SENDS_MUSIC = false
+
 /** Exported for connected browser checks; production renders it via App. */
 export function Create({
   t,
@@ -724,7 +725,6 @@ export function Create({
     if (frontFp.current.current() === null) return false
     if (selectedMusic !== null) return false
     if (photos.photos().length < 3 || photos.photos().length > PHOTO_COUNT_MAX) return false
-    if (!note.accepted()?.trim()) return false
     return true
   })()
   /** One synchronous owner: any in-visit draft/attempt invalidation aborts
@@ -1242,7 +1242,7 @@ export function Create({
     <section className={`card create-page${confirmed ? '' : ' recipient-picker'}`} data-workspace={confirmed ? createStep : undefined}>
       {!confirmed ? <StepTrail labels={['stepRecipient', 'stepCompose', 'stepPostcard']} current={0} t={t} /> : <nav className="workspace-nav" aria-label={t('createSteps')}>
         {(['content', 'composition', 'postcard'] as const).map((step, index) => <button key={step} type="button" aria-current={createStep === step ? 'step' : undefined}
-          disabled={sendPhase !== 'idle' || busy || (step === 'composition' && (accepted === null || !noteFits || !note.accepted()?.trim() || photoIntakePending || creatorImages === null)) || (step === 'postcard' && frozenRef.current === null)}
+          disabled={sendPhase !== 'idle' || busy || (step === 'composition' && (accepted === null || !noteFits || photoIntakePending || creatorImages === null)) || (step === 'postcard' && frozenRef.current === null)}
           onClick={() => showCreateStep(step)}><span aria-hidden="true">{index + 1}</span>{t(step === 'content' ? 'createContent' : step === 'composition' ? 'createComposition' : 'stepPostcard')}</button>)}
       </nav>}
       <div className="create-context">
@@ -1314,26 +1314,20 @@ export function Create({
       {confirmed ? (
         <>
           <div hidden={createStep !== 'content'} className="content-workspace">
-          <div className="draft-grid">
-          <section className="draft-section">
-          <label className="handle-form">
-            {t('noteLabel')}
-            <textarea
-              value={note.text()}
-              rows={4}
-              disabled={sendPhase === 'working'}
-              onChange={(event) => {
-                invalidateSend()
-                setNoteAtLimit(note.edit(event.target.value))
-                setStamp((value) => value + 1)
-              }}
-            />
-          </label>
-          <p className="field-hint">{noteAtLimit ? t('noteTooLong') : t('createNoteHint')}</p>
-          </section>
-          <div className="draft-section photo-draft" aria-busy={photoIntakePending}>
-            <label>
-              {t('addPhotos')}
+          {/* Photos come first, as in the app: they are the postcard; words are optional. */}
+          <section className="draft-section photo-draft" aria-busy={photoIntakePending}>
+            <h2>{t('createPhotosTitle')}</h2>
+            <p className="field-hint">{t('photoCount')} · {photos.photos().length} / {PHOTO_COUNT_MAX}</p>
+            {photos.photos().length > 0 ? <ul className="photo-grid">
+              {photos.photos().map((photo) => (
+                <li key={photo.id}>
+                  <img src={urls.current.get(photo.id)} alt="" />
+                  <button type="button" className="photo-remove" aria-label={t('removePhoto')} title={t('removePhoto')} onClick={() => { invalidateSend(); photos.remove(photo.id); rememberPhotos(); setStamp((value) => value + 1) }}><span aria-hidden="true">×</span></button>
+                </li>
+              ))}
+            </ul> : null}
+            {photos.photos().length < PHOTO_COUNT_MAX ? <label className={`button photo-pick${photos.photos().length < 3 ? ' primary' : ''}`}>
+              {t(photos.photos().length === 0 ? 'addPhotos' : 'addMorePhotos')}
               <input
                 type="file"
                 accept="image/jpeg,.jpg,.jpeg"
@@ -1348,23 +1342,24 @@ export function Create({
                   void addPhotos(list)
                 }}
               />
-            </label>
-            <ul>
-              {photos.photos().map((photo, index) => (
-                <li key={photo.id}>
-                  <img src={urls.current.get(photo.id)} alt="" />
-                  <div className="actions">
-                    <button type="button" aria-label={t('photoEarlier')} title={t('photoEarlier')} disabled={index === 0} onClick={() => { invalidateSend(); photos.move(photo.id, -1); setStamp((value) => value + 1) }}><span aria-hidden="true">←</span></button>
-                    <button type="button" aria-label={t('photoLater')} title={t('photoLater')} disabled={index === photos.photos().length - 1} onClick={() => { invalidateSend(); photos.move(photo.id, 1); setStamp((value) => value + 1) }}><span aria-hidden="true">→</span></button>
-                    <button type="button" aria-label={t('removePhoto')} title={t('removePhoto')} onClick={() => { invalidateSend(); photos.remove(photo.id); rememberPhotos(); setStamp((value) => value + 1) }}><span aria-hidden="true">×</span></button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            <p>{photos.photos().length} / {PHOTO_COUNT_MAX}</p>
-            {sendPhase === 'idle' ? <p>{t('photoCount')}</p> : null}
-          </div>
-          </div>
+            </label> : null}
+          </section>
+          <section className="draft-section">
+          <label className="handle-form">
+            {t('noteLabel')}
+            <textarea
+              value={note.text()}
+              rows={3}
+              disabled={sendPhase === 'working'}
+              onChange={(event) => {
+                invalidateSend()
+                setNoteAtLimit(note.edit(event.target.value))
+                setStamp((value) => value + 1)
+              }}
+            />
+          </label>
+          {noteAtLimit ? <p className="field-hint">{t('noteTooLong')}</p> : null}
+          </section>
           </div>
           <div hidden={createStep !== 'composition'} className="composition-workspace">
           {accepted !== null && noteFits ? (
@@ -1400,7 +1395,9 @@ export function Create({
           ) : null}
           <div className="workspace-next"><button type="button" className="quiet" onClick={() => showCreateStep('content')}>{t('createEditContent')}</button></div>
           </div>
-          <details className="music-draft" hidden={createStep !== 'content'}>
+          {/* The song picker returns once the site can send a song: until then picking one blocked Send for good. */}
+          {WEB_SENDS_MUSIC ? <>
+          <details className="music-draft" open hidden={createStep !== 'content'}>
             <summary>{t('createMusicTitle')}</summary>
             <label className="handle-form">
               {t('musicLabel')}
@@ -1440,7 +1437,8 @@ export function Create({
             </ul>
               {sendPhase === 'idle' ? <p>{t('musicNotSent')}</p> : null}
             </details>
-          <div hidden={createStep !== 'content'} className="workspace-next"><p className="field-hint">{t('createContentHint')}</p><button type="button" className="primary" disabled={accepted === null || !noteFits || !note.accepted()?.trim() || photoIntakePending || creatorImages === null || sendPhase !== 'idle'} onClick={() => showCreateStep('composition')}>{t('createChooseComposition')}<Icon name="arrow" /></button></div>
+          </> : null}
+          <div hidden={createStep !== 'content'} className="workspace-next"><p className="field-hint">{t('createContentHint')}</p><button type="button" className="primary" disabled={accepted === null || !noteFits || photoIntakePending || creatorImages === null || sendPhase !== 'idle'} onClick={() => showCreateStep('composition')}>{t('createChooseComposition')}<Icon name="arrow" /></button></div>
           <div hidden={createStep !== 'postcard'} className="postcard-workspace">
           <section className="front-section">
             <h2>{t('createFrontTitle')}</h2><p>{t('createFrontHint')}</p>

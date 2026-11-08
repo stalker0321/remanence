@@ -258,10 +258,6 @@ class CreateSmallViewportTest {
         // Land directly on CONTENT with three photos and an oversized note.
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         vm.onPhotosPicked(listOf("a", "b", "c"))
         vm.noteEditor.onChange("x".repeat(NoteEditorState.MAX_NOTE_BYTES + 1))
 
@@ -413,10 +409,6 @@ class CreateSmallViewportTest {
         // Land directly on CONTENT through the production gates.
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         vm.onPhotosPicked(listOf("a", "b", "c"))
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
 

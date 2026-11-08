@@ -270,10 +270,6 @@ class CreateComposeFlowTest {
     private fun driveToContent(vm: CreateViewModel, photos: Int = 3) {
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         vm.onPhotosPicked(List(photos) { "content://$it" })
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
     }
@@ -557,7 +553,7 @@ class CreateComposeFlowTest {
         driveToContent(vm)
         assertTrue(vm.goToCompose())
 
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         // Refusing before entering PUBLISHING leaves the COMPOSE step (never
@@ -656,48 +652,6 @@ class CreateComposeFlowTest {
 
         assertTrue(vm.cropCorrections.value.isEmpty())
         assertFalse(vm.closeCrop())
-    }
-
-    @Test
-    fun returningToPostcardRestartsCameraAndRetainsTheContent() {
-        val capturedCapsules = mutableListOf<String>()
-        val persistence = object : SealedFingerprintPersistence by NoPersistence() {
-            override suspend fun persist(
-                capsuleId: String,
-                origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
-                profileId: String,
-                plaintextBytes: ByteArray,
-            ): String {
-                if (capsuleId in capturedCapsules) {
-                    throw dev.hryshyn.remanence.core.data.fingerprints.DuplicateFingerprintException(capsuleId, origin)
-                }
-                capturedCapsules += capsuleId
-                return "fp-${capturedCapsules.size}"
-            }
-        }
-        val vm = newViewModel(persistence = persistence)
-        driveToContent(vm)
-        val originalCapsuleId = vm.capsuleId
-        vm.noteEditor.onChange("keep this note")
-        val track = hit("8fc55a01-ccd2-4b27-bcda-8d3a9aafc512")
-        vm.setMusicSelection(track)
-        val photos = vm.photoSelection.selectedIds.toList()
-        assertTrue(vm.backToFront())
-        assertNotEquals(originalCapsuleId, vm.capsuleId)
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
-        assertEquals(dev.hryshyn.remanence.capture.CaptureAttemptPhase.Binding, vm.frontAttempt.phase)
-        assertEquals(photos, vm.photoSelection.selectedIds)
-        assertEquals("keep this note", vm.noteEditor.text)
-        assertEquals(track, vm.musicSelection.value)
-        assertFalse(vm.goToCompose())
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("replacement postcard".toByteArray())
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertEquals(listOf(originalCapsuleId, vm.capsuleId), capturedCapsules)
-        assertEquals(photos, vm.photoSelection.selectedIds)
-        assertEquals("keep this note", vm.noteEditor.text)
-        assertTrue(vm.goToCompose())
     }
 
     @Test
@@ -802,7 +756,7 @@ class CreateComposeFlowTest {
         // (e.g. late artwork changing the measured band).
         vm.onCandidatePrepared(frozenId, false, vm.prepareInputs())
         assertNull(vm.frozenCollageSelection)
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
         assertTrue(vm.flowError.value!!.contains("frozen"))
     }

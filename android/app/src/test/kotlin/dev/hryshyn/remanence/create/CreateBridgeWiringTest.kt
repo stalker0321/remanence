@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.create
 
+import dev.hryshyn.remanence.ui.create.CreateFrontFixture
+
 import android.content.Context
 import androidx.exifinterface.media.ExifInterface
 import androidx.room.Room
@@ -263,10 +265,6 @@ class CreateBridgeWiringTest {
         vm.beginSession(1L, userUuid.toString())
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("w1", "w2", "w3"))
         if (freezeSelection) freezeCurrentV5(vm)
@@ -402,7 +400,7 @@ class CreateBridgeWiringTest {
     fun publishBindsFreezesAndLeavesOneLiveSession() = runBlocking {
         val vm = contentStage()
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(
@@ -419,7 +417,7 @@ class CreateBridgeWiringTest {
     fun photoEditAfterBeginRevokesTheBoundSession() = runBlocking {
         val vm = contentStage()
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
@@ -432,7 +430,7 @@ class CreateBridgeWiringTest {
     fun noteEditAfterBeginRevokesTheBoundSession() = runBlocking {
         val vm = contentStage()
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
@@ -445,7 +443,7 @@ class CreateBridgeWiringTest {
     fun ownerEpochChangeRevokesTheBoundSession() = runBlocking {
         val vm = contentStage()
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
@@ -458,7 +456,7 @@ class CreateBridgeWiringTest {
     fun surfaceExitRevokesTheBoundSession() = runBlocking {
         val vm = contentStage()
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
@@ -471,7 +469,7 @@ class CreateBridgeWiringTest {
     fun nullProviderFailsClosedWithoutBridge() = runBlocking {
         val vm = contentStage(bridgeProvider = null)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         // No legacy fallback: without a bridge the publication fails
@@ -492,7 +490,7 @@ class CreateBridgeWiringTest {
     fun missingFrozenSelectionRefusesBeforeBridgeOrPublisher() = runBlocking {
         val vm = contentStage(freezeSelection = false)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
@@ -513,7 +511,7 @@ class CreateBridgeWiringTest {
         })
         stale = true
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
@@ -527,7 +525,7 @@ class CreateBridgeWiringTest {
         val vm = contentStage()
         tamperFrozenCandidateId(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
@@ -543,7 +541,7 @@ class CreateBridgeWiringTest {
         }
         val vm = contentStage(persistence = persistence)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertEquals(listOf(UserId(userUuid)), bridge.requestedOwners)
 
         vm.beginSession(2L, userUuid.toString())
@@ -569,7 +567,7 @@ class CreateBridgeWiringTest {
             }
         })
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         // Bind slot 1 fails: fail closed, session revoked, no partial row.
@@ -580,7 +578,7 @@ class CreateBridgeWiringTest {
 
         sabotageBind = false
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
@@ -658,7 +656,7 @@ class CreateBridgeWiringTest {
     fun publishedCapsuleSealsV2ExpressionAdmittedByTheReceiver() = runBlocking {
         val vm = contentStage()
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
@@ -700,7 +698,7 @@ class CreateBridgeWiringTest {
         val chosenNoteRegion = requireNotNull(vm.frozenCollageSelection?.expression?.noteRegion)
 
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals("publishError=${vm.publishError.value}", CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
@@ -723,7 +721,7 @@ class CreateBridgeWiringTest {
         // The edit invalidates the old frozen collage. No new drawable proof
         // or explicit selection has been supplied by the host.
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
@@ -742,7 +740,7 @@ class CreateBridgeWiringTest {
         assertNull(vm.frozenCollageSelection)
 
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
@@ -771,7 +769,7 @@ class CreateBridgeWiringTest {
         )
         val vm = contentStage(bridgeProvider = { tamperBridge })
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
@@ -815,7 +813,7 @@ class CreateBridgeWiringTest {
         }
         val vm = contentStage(bridgeProvider = { tampering })
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
@@ -832,7 +830,7 @@ class CreateBridgeWiringTest {
     fun wiredPublishConsumesBindResultsWithoutLegacyStaging() = runBlocking {
         val vm = contentStage()
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(
@@ -858,7 +856,7 @@ class CreateBridgeWiringTest {
         val vm = contentStage()
         outboxDir.writeText("outbox root is unavailable")
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
@@ -873,7 +871,7 @@ class CreateBridgeWiringTest {
             senderIdentity()
         })
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)

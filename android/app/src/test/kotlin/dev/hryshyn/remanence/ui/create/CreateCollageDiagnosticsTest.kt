@@ -576,7 +576,7 @@ class CreateCollageDiagnosticsTest {
         // No recipient/front/session steps here: composition is refused and
         // publishing stays fail-closed off the COMPOSE screen.
         assertFalse(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertTrue(
             "publish must stay fail-closed off the COMPOSE screen",
             vm.uploadStatus.value is CreateViewModel.CreateUploadStatus.NotStarted,

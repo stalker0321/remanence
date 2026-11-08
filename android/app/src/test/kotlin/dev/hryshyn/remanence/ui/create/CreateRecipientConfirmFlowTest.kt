@@ -236,7 +236,7 @@ class CreateRecipientConfirmFlowTest {
         composeRule.onNodeWithTag("confirm_button").performClick()
         composeRule.runOnIdle {
             assertEquals(otherSnapshot, vm.confirmedRecipient.value)
-            assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+            assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         }
     }
 
@@ -301,7 +301,7 @@ class CreateRecipientConfirmFlowTest {
         assertSame(selfSnapshot, vm.pendingRecipient.value)
         assertNull(vm.confirmedRecipient.value)
         composeRule.onNodeWithTag("confirm_button").performClick()
-        composeRule.waitUntil(timeoutMillis = 10_000) { vm.step.value == CreateViewModel.Step.FRONT }
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.step.value == CreateViewModel.Step.CONTENT }
         assertSame(selfSnapshot, vm.confirmedRecipient.value)
     }
 
@@ -382,11 +382,11 @@ class CreateRecipientConfirmFlowTest {
         assertNull("no binding may exist before explicit confirmation", vm.confirmedRecipient.value)
 
         composeRule.onNodeWithTag("confirm_button").performClick()
-        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.FRONT }
+        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.CONTENT }
 
         // The SAME immutable snapshot instance moved into the session store;
         // the pending copy is gone with it.
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertSame(resolvedBeforeConfirm, vm.confirmedRecipient.value)
         assertNull(vm.pendingRecipient.value)
     }
@@ -489,13 +489,13 @@ class CreateRecipientConfirmFlowTest {
         val otherResolved = vm.pendingRecipient.value
         assertNotNull(otherResolved)
         composeRule.onNodeWithTag("confirm_button").performClick()
-        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.FRONT }
+        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.CONTENT }
 
         // Confirming another recipient binds THEIR snapshot - never silently
         // rewritten to self - so the publication will be addressed to that
         // distinct identity. M2-P07: the prior M1 self-only guard is gone;
         // cross-identity publication is the supported path.
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertSame(otherResolved, vm.confirmedRecipient.value)
 
         // Without captured sides nothing can be published: FIX-STATE-02
@@ -503,8 +503,8 @@ class CreateRecipientConfirmFlowTest {
         // Still at FRONT with no photos: composition is refused, and
         // publishing still requires the COMPOSE screen.
         assertFalse(vm.goToCompose())
-        vm.startPublishing()
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        CreateFrontFixture.attach(vm)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertTrue(vm.flowError.value!!.contains("publishing requires step COMPOSE"))
         runBlocking {
             assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(vm.capsuleId, "0198f0a0-0000-7000-8000-00000000ow01").isEmpty())

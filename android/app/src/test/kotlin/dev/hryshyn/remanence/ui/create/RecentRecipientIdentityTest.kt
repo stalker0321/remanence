@@ -151,7 +151,7 @@ class RecentRecipientIdentityTest {
         capture("recent-same-en")
         rule.onNodeWithTag("confirm_button").performClick()
         assertSame(fresh, vm.confirmedRecipient.value)
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
     }
 
     @Test fun sameHandleDifferentIdentityCannotReachPendingConfirmationOrFront() {
@@ -168,7 +168,7 @@ class RecentRecipientIdentityTest {
         assertEquals(RecipientLookupUiState.Failure.RECENT_IDENTITY,
             (vm.pickerVm.state.value as RecipientLookupUiState.Failed).reason)
         rule.onNodeWithTag("confirm_button").assertDoesNotExist()
-        vm.confirmRecipient(); vm.startPublishing()
+        vm.confirmRecipient(); CreateFrontFixture.attach(vm)
         assertNull(vm.confirmedRecipient.value)
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
     }

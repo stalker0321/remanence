@@ -148,7 +148,7 @@ fun CreateScreen(
     BackHandler(enabled = step == CreateViewModel.Step.RECIPIENT_CONFIRM) {
         viewModel.restartLookup()
     }
-    BackHandler(enabled = step == CreateViewModel.Step.FRONT) { confirmDiscard = true }
+    BackHandler(enabled = step == CreateViewModel.Step.FRONT) { viewModel.backFromFront() }
 
     // Motion ownership: the root owns the single boundary arrival
     // (Home <-> Create). Steps arrive via AstraStepArrival, which snaps on
@@ -160,7 +160,11 @@ fun CreateScreen(
     Column(modifier.fillMaxSize()) {
     HoldFlowHeader(
         onBack = {
-            if (step == CreateViewModel.Step.RECIPIENT_CONFIRM) viewModel.restartLookup() else exitRequested()
+            when (step) {
+                CreateViewModel.Step.RECIPIENT_CONFIRM -> viewModel.restartLookup()
+                CreateViewModel.Step.FRONT -> viewModel.backFromFront()
+                else -> exitRequested()
+            }
         },
         onClose = exitRequested,
     )
@@ -232,22 +236,6 @@ fun CreateScreen(
                     CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel, recentRecipientsContent)
                     CreateViewModel.Step.RECIPIENT_CONFIRM -> RecipientConfirmContent(viewModel)
                     CreateViewModel.Step.FRONT -> Column(Modifier.weight(1f).fillMaxWidth()) {
-                        // T186 M14a: pending-gated recipient return (a
-                        // cleared route can be re-frozen). Visible only on
-                        // the pending journey without a confirmed handle;
-                        // v1 layout and behavior are otherwise unchanged.
-                        val confirmedHandle by viewModel.confirmedRecipient.collectAsStateWithLifecycle()
-                        if (dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled() &&
-                            confirmedHandle == null
-                        ) {
-                            TextButton(
-                                onClick = viewModel::backToRecipient,
-                                modifier = Modifier.testTag("create_pending_change_recipient"),
-                            ) {
-                                Text(stringResource(R.string.pending_recipient_change))
-                            }
-                            Spacer(Modifier.height(8.dp))
-                        }
                         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                             CaptureAttemptSurface(
                             controller = viewModel.frontAttempt,
@@ -764,7 +752,8 @@ private fun ContentAndCompositionFlow(
             reviewing -> reviewing = false
             step == CreateViewModel.Step.COMPOSE && frozen != null -> viewModel.clearFrozenCollageSelection()
             step == CreateViewModel.Step.COMPOSE -> { viewModel.backToContent(); Unit }
-            else -> { awaitingComposition = false; viewModel.backToFront(); Unit }
+            // Content is the first step after the recipient: leaving asks first.
+            else -> { awaitingComposition = false; onExit() }
         }
     }
     BackHandler(onBack = back)
@@ -814,7 +803,7 @@ private fun ContentAndCompositionFlow(
                                         style = MaterialTheme.typography.bodyMedium, color = HoldColors.Muted,
                                         modifier = Modifier.padding(vertical = 16.dp))
                                     ForwardAction(stringResource(R.string.create_attach_capsule), "create_publish",
-                                        viewModel::startPublishing, enabled = viewModel.isFrozenCollageDrawable)
+                                        viewModel::attach, enabled = viewModel.isFrozenCollageDrawable)
                                     TextButton(onClick = { reviewing = false }, modifier = Modifier.fillMaxWidth()
                                         .testTag("create_review_back")) { Text(stringResource(R.string.create_back_to_expression)) }
                                 } else {

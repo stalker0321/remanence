@@ -173,22 +173,12 @@ class CreatePendingRouteStepTest {
 
     /** Deterministic step await (mirrors awaitTerminalPublish): the async
      * delivery path must land CONTENT before composition is attempted. */
-    private fun awaitStep(vm: CreateViewModel, step: CreateViewModel.Step) {
-        val deadline = System.currentTimeMillis() + 10_000
-        while (vm.step.value != step) {
-            if (System.currentTimeMillis() > deadline) {
-                error("step never reached $step; at ${vm.step.value}")
-            }
-            Thread.sleep(20)
-        }
-    }
-
     @Test
-    fun frozenPendingAdvancesLookupToFront() {
+    fun frozenPendingAdvancesLookupToContent() {
         val vm = viewModel()
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         vm.onPendingRouteFrozen(pendingIdentity())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertNull(vm.confirmedRecipient.value)
         assertEquals(pendingIdentity(), vm.pendingRoute.value)
     }
@@ -207,10 +197,10 @@ class CreatePendingRouteStepTest {
     fun frozenPendingOffStepFailsClosed() {
         val vm = viewModel()
         vm.onPendingRouteFrozen(pendingIdentity())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         // A second freeze outside RECIPIENT_LOOKUP must not move steps.
         vm.onPendingRouteFrozen(pendingIdentity())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertTrue(vm.flowError.value != null)
     }
 
@@ -235,53 +225,19 @@ class CreatePendingRouteStepTest {
         val vm = viewModel()
         val first = pendingIdentity()
         vm.onPendingRouteFrozen(first)
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertEquals(first, vm.pendingRoute.value)
         vm.onPendingRouteFrozen(pendingIdentityAs("other@example.test"))
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertEquals(first, vm.pendingRoute.value)
         assertTrue(vm.flowError.value != null)
-    }
-
-    /**
-     * T186 M12e-cap: backToFront regenerates the draft identity AND
-     * clears the frozen route — a rescan/back can never publish the
-     * old-UUID route; a new R1 freeze is required for the new capsule.
-     */
-    @Test
-    fun backToFrontClearsFrozenRouteForNewCapsule() {
-        val vm = viewModel()
-        vm.onPendingRouteFrozen(pendingIdentity())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
-        val oldCapsule = vm.capsuleId
-        bindReady(vm)
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg(
-            dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(6),
-        )
-        awaitStep(vm, CreateViewModel.Step.CONTENT)
-        assertTrue(vm.backToFront())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
-        assertTrue(vm.capsuleId != oldCapsule)
-        assertNull(vm.pendingRoute.value)
-        // Without a frozen route (and no confirmed handle) the
-        // boundary is unreachable for the old UUID.
-        assertNull(vm.confirmedRecipient.value)
     }
 
     @Test
     fun frozenPendingCarriesCompositionToCompose() {
         val vm = viewModel()
         vm.onPendingRouteFrozen(pendingIdentity())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
-        bindReady(vm)
-        assertTrue(vm.beginFrontCapture())
-        // Canonical SIFT bytes (not a dummy): the FRONT outcome path
-        // is the production delivery path, awaited deterministically.
-        vm.deliverFrontJpeg(
-            dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(6),
-        )
-        awaitStep(vm, CreateViewModel.Step.CONTENT)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.photoSelection.toggle("a")
         vm.photoSelection.toggle("b")
         vm.photoSelection.toggle("c")
@@ -301,16 +257,6 @@ class CreatePendingRouteStepTest {
         assertFalse(vm.goToCompose())
     }
 
-    private fun bindReady(vm: CreateViewModel) {
-        val attempt = vm.frontAttempt
-        if (attempt.permission == dev.hryshyn.remanence.capture.CapturePermissionStep.NotRequested ||
-            attempt.permission == dev.hryshyn.remanence.capture.CapturePermissionStep.DeniedRetryable
-        ) {
-            attempt.onPermissionResult(granted = true, canAskAgain = false)
-        }
-        attempt.onPreviewBound()
-    }
-
     /**
      * T186 M14a: explicit recipient return — FRONT goes back to
      * RECIPIENT_LOOKUP (v1 confirmed handles untouched) so a cleared
@@ -320,7 +266,7 @@ class CreatePendingRouteStepTest {
     fun backToRecipientReturnsForRefreeze() {
         val vm = viewModel()
         vm.onPendingRouteFrozen(pendingIdentity())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertTrue(vm.backToRecipient())
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertFalse(vm.backToRecipient())
@@ -335,10 +281,10 @@ class CreatePendingRouteStepTest {
     fun v1OffStepFreezeStoresNothing() {
         val vm = viewModel()
         vm.onPendingRouteFrozen(pendingIdentity())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertEquals(pendingIdentity(), vm.pendingRoute.value)
         vm.onPendingRouteFrozen(v1Identity())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertEquals(pendingIdentity(), vm.pendingRoute.value)
         assertTrue(vm.flowError.value != null)
     }

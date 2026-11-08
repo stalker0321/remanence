@@ -238,10 +238,6 @@ class CreateSessionOwnedStagingTest {
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("front".toByteArray())
         awaitStep(vm, CreateViewModel.Step.CONTENT)
         vm.onPhotosPicked(photoIds)
         // ADR-018: publish with no note (non-empty notes are typed unsupported).
@@ -290,7 +286,7 @@ class CreateSessionOwnedStagingTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
         identityGate.complete(senderIdentity(userUuid))
         // First bind parked before staging anything into G3.
@@ -329,7 +325,7 @@ class CreateSessionOwnedStagingTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
         // New session stages two G3 leases, then parks on its third.
         val bKey = switchedUserUuid.toString()

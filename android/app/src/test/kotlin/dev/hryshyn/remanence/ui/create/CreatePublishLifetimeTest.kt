@@ -269,10 +269,6 @@ class CreatePublishLifetimeTest {
         vm.beginSession(1L, userUuid.toString())
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         // ADR-018: publish with no note (non-empty notes are typed unsupported).
@@ -310,7 +306,7 @@ class CreatePublishLifetimeTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
@@ -327,7 +323,7 @@ class CreatePublishLifetimeTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
@@ -365,7 +361,7 @@ class CreatePublishLifetimeTest {
         )
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         val row = requireNotNull(outboxRow(vm.capsuleId))
         val blobs = database.outboxBlobDao().getAllByCapsuleIdAndOwner(vm.capsuleId, owner)
@@ -391,7 +387,7 @@ class CreatePublishLifetimeTest {
             calls++; throw IllegalStateException("controlled refusal")
         }, observation = observation)
         CollageFreezeFixture.freezeFirstCandidate(vm)
-        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        assertTrue(vm.goToCompose()); CreateFrontFixture.attach(vm); awaitTerminalPublish(vm)
         for (older in listOf(null, dev.hryshyn.remanence.core.data.db.OutboxCapsuleStatus(OutboxCapsuleState.PREPARING, null),
             observation.snapshot(vm.capsuleId, owner))) {
             observation.deliver(vm.capsuleId, owner, older)
@@ -432,7 +428,7 @@ class CreatePublishLifetimeTest {
                 throw IllegalStateException("ack refused after worker progress")
             }, observation = observation)
             CollageFreezeFixture.freezeFirstCandidate(vm)
-            assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+            assertTrue(vm.goToCompose()); CreateFrontFixture.attach(vm); awaitTerminalPublish(vm)
             val expected = when (state) {
                 OutboxCapsuleState.PUBLISHED -> CreateViewModel.CreateUploadStatus.Published
                 OutboxCapsuleState.RETRYABLE_FAILURE -> CreateViewModel.CreateUploadStatus.RetryableFailure("NETWORK")
@@ -453,7 +449,7 @@ class CreatePublishLifetimeTest {
         val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ -> calls++ },
             observation = observation)
         CollageFreezeFixture.freezeFirstCandidate(vm)
-        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        assertTrue(vm.goToCompose()); CreateFrontFixture.attach(vm); awaitTerminalPublish(vm)
         val capsule = vm.capsuleId
         assertEquals(1, dao.beginUploadForOwner(capsule, owner))
         assertEquals(1, dao.beginFinalizeForOwner(capsule, owner))
@@ -489,7 +485,7 @@ class CreatePublishLifetimeTest {
             if (calls > 1 && refuse) error("controlled explicit-finalize queue refusal")
         }, observation = observation)
         CollageFreezeFixture.freezeFirstCandidate(vm)
-        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        assertTrue(vm.goToCompose()); CreateFrontFixture.attach(vm); awaitTerminalPublish(vm)
         val capsule = vm.capsuleId
         dao.beginUploadForOwner(capsule, owner); dao.beginFinalizeForOwner(capsule, owner)
         dao.markFinalizeRetryableForOwner(capsule, owner, "SEND_LIMIT_REACHED")
@@ -516,7 +512,7 @@ class CreatePublishLifetimeTest {
         val vm = contentStage(CompletableDeferred(senderIdentity()), enqueueUpload = { _, _ -> calls++ },
             observation = observation)
         CollageFreezeFixture.freezeFirstCandidate(vm)
-        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        assertTrue(vm.goToCompose()); CreateFrontFixture.attach(vm); awaitTerminalPublish(vm)
         val capsule = vm.capsuleId
         dao.beginUploadForOwner(capsule, owner); dao.beginFinalizeForOwner(capsule, owner)
         dao.markFinalizeRetryableForOwner(capsule, owner, "SEND_ACCESS_UNAVAILABLE")
@@ -544,7 +540,7 @@ class CreatePublishLifetimeTest {
             if (refuse) throw IllegalStateException("controlled refusal")
         }, observation = observation)
         CollageFreezeFixture.freezeFirstCandidate(vm)
-        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        assertTrue(vm.goToCompose()); CreateFrontFixture.attach(vm); awaitTerminalPublish(vm)
         val row = requireNotNull(outboxRow(vm.capsuleId))
         val encrypted = observation.snapshot(vm.capsuleId, owner)
         observation.deliver(vm.capsuleId, owner, encrypted)
@@ -584,7 +580,7 @@ class CreatePublishLifetimeTest {
             assertTrue(vm.goToCompose())
             val rootJob = requireNotNull(vm.viewModelScope.coroutineContext[Job])
             val previousJobs = rootJob.children.toSet()
-            vm.startPublishing()
+            CreateFrontFixture.attach(vm)
             try { withTimeout(10_000) { enqueuing.await() } }
             catch (failure: kotlinx.coroutines.TimeoutCancellationException) {
                 throw AssertionError("enqueue gate not reached: step=${vm.step.value}, error=${vm.publishError.value}", failure)
@@ -621,7 +617,7 @@ class CreatePublishLifetimeTest {
             throw IllegalStateException("refused ACK")
         }, observation = observation)
         CollageFreezeFixture.freezeFirstCandidate(vm)
-        assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+        assertTrue(vm.goToCompose()); CreateFrontFixture.attach(vm); awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.CreateUploadStatus.RetryableFailure("QUEUE_FAILED"), vm.uploadStatus.value)
         vm.retryUpload()
         withTimeout(10_000) { vm.uploadRetrying.first { !it } }
@@ -640,7 +636,7 @@ class CreatePublishLifetimeTest {
                 throw IllegalStateException("refused ACK")
             }, observation = observation)
             CollageFreezeFixture.freezeFirstCandidate(vm)
-            assertTrue(vm.goToCompose()); vm.startPublishing(); awaitTerminalPublish(vm)
+            assertTrue(vm.goToCompose()); CreateFrontFixture.attach(vm); awaitTerminalPublish(vm)
             val expected = if (terminal) {
                 assertEquals(1, dao.markTerminalFailureForOwner(vm.capsuleId, owner, "RECIPIENT_KEY_REVOKED"))
                 CreateViewModel.CreateUploadStatus.TerminalFailure("RECIPIENT_KEY_REVOKED")
@@ -666,7 +662,7 @@ class CreatePublishLifetimeTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertTrue(enqueued.isEmpty())
@@ -683,7 +679,7 @@ class CreatePublishLifetimeTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
         // Parked at the single identity capture before any file was written.
         assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
@@ -722,7 +718,7 @@ class CreatePublishLifetimeTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
 
         // New epoch while parked at the identity boundary.
@@ -749,10 +745,10 @@ class CreatePublishLifetimeTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         // Second tap during PUBLISHING: refused visibly, no second job.
         assertFalse(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertNotNull(vm.flowError.value)
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
 
@@ -775,7 +771,7 @@ class CreatePublishLifetimeTest {
         // A replay from UPLOAD_PENDING is refused by the terminal step gate
         // (never a second job): composition is only reachable from CONTENT.
         assertFalse(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
         runBlockingNullable {
             val row = outboxRow(capsuleId)
@@ -792,7 +788,7 @@ class CreatePublishLifetimeTest {
         val capsuleId = vm.capsuleId
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         identityGate.complete(senderIdentity())
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
@@ -835,7 +831,7 @@ class CreatePublishLifetimeTest {
         )
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         val publishedId = CapsuleId.parseRest(vm.capsuleId)
         promoteToPublished(vm)
@@ -879,7 +875,7 @@ class CreatePublishLifetimeTest {
         )
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         promoteToPublished(vm)
 
@@ -903,7 +899,7 @@ class CreatePublishLifetimeTest {
         )
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         promoteToPublished(vm)
 
@@ -931,7 +927,7 @@ class CreatePublishLifetimeTest {
         val capsuleId = vm.capsuleId
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         identityGate.complete(senderIdentity())
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)

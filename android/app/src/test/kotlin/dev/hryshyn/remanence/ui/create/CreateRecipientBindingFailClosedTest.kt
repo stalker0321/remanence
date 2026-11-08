@@ -270,10 +270,6 @@ class CreateRecipientBindingFailClosedTest {
         vm.beginSession(1L, senderUserUuid.toString())
         vm.onResolved(snapshot)
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         // ADR-018: publish with no note (non-empty notes are typed unsupported).
@@ -336,7 +332,7 @@ class CreateRecipientBindingFailClosedTest {
         val capsuleId = vm.capsuleId
         // Off CONTENT after teardown: composition is refused too.
         assertFalse(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
 
         // Fail-closed: teardown left the flow off CONTENT with no recipient,
         // so no publish is launched and no outbox row or plaintext file lands.
@@ -382,7 +378,7 @@ class CreateRecipientBindingFailClosedTest {
         // resolution attempt.
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
@@ -413,7 +409,7 @@ class CreateRecipientBindingFailClosedTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         // The publish is parked at the single identity capture (before
         // any artifact is written). The directory is now mutated: a
         // re-lookup of the same handle resolves to a different user /
@@ -458,7 +454,7 @@ class CreateRecipientBindingFailClosedTest {
         assertNotNull(vm.confirmedRecipient.value)
 
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         // M2-P07 fail-closed: the malformed HPKE public keyset bubbles
@@ -503,7 +499,7 @@ class CreateRecipientBindingFailClosedTest {
         // confirmed recipient and the step table blocks CONTENT access.
         // Composition is refused off CONTENT as well.
         assertFalse(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertNotNull(vm.flowError.value)
         assertTrue(
             "the recovery message must explain the missing CONTENT prerequisites",

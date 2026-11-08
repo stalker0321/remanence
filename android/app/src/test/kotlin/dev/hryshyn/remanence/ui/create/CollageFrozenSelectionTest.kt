@@ -535,10 +535,6 @@ class CollageFrozenSelectionTest {
         vm.beginSession(1L, senderUserUuid.toString())
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(ids)
         val preview = vm.generatorPreview.value
@@ -552,7 +548,7 @@ class CollageFrozenSelectionTest {
         assertTrue(vm.freezeCollageSelection())
 
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         val deadline = System.currentTimeMillis() + 10_000
         while (vm.step.value == CreateViewModel.Step.PUBLISHING) {
             if (System.currentTimeMillis() > deadline) error("publishing never settled")

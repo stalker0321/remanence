@@ -320,17 +320,7 @@ class CreateUiHappyPathTest {
         // 2) Explicit confirmation of the resolved snapshot.
         capture("en-recipient-confirmation")
         composeRule.onNodeWithTag("confirm_button").performClick()
-        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.FRONT }
-
-        // 3) FRONT capture through the camera seam.
-        composeRule.runOnIdle {
-            vm.frontAttempt.onPermissionResolved(CapturePermissionStep.Granted)
-        }
-        readyCamera()
-        scroll("capture_shutter_front")
-        composeRule.onNodeWithTag("capture_shutter_front").performClick()
-        composeRule.runOnIdle { live.get()!!.deliverFrame("front-frame".toByteArray()) }
-        composeRule.waitForIdle()
+        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.CONTENT }
 
         // 4) Content: three photos via THE production sink + note input.
         scroll("create_pick_photos")
@@ -366,6 +356,18 @@ class CreateUiHappyPathTest {
         composeRule.onNodeWithTag("create_publish")
             .assertIsDisplayed()
             .performClick()
+
+        // 7) Attaching opens the camera last: the front, through the camera seam,
+        // attaches the composed postcard.
+        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.FRONT }
+        composeRule.runOnIdle {
+            vm.frontAttempt.onPermissionResolved(CapturePermissionStep.Granted)
+        }
+        readyCamera()
+        scroll("capture_shutter_front")
+        composeRule.onNodeWithTag("capture_shutter_front").performClick()
+        composeRule.runOnIdle { live.get()!!.deliverFrame("front-frame".toByteArray()) }
+        composeRule.waitForIdle()
 
         // Durable staging completes on Room's own executors; await terminal.
         val deadline = System.currentTimeMillis() + 10_000

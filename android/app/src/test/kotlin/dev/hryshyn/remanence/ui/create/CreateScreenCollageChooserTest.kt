@@ -351,10 +351,6 @@ class CreateScreenCollageChooserTest {
         vm.beginSession(1L, senderUserUuid.toString())
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(ids)
     }
@@ -616,7 +612,6 @@ class CreateScreenCollageChooserTest {
             "photos" to { vm.onPhotosPicked(listOf("u3", "u2", "u1")) },
             "recipient" to {
                 assertTrue(vm.backToContent())
-                assertTrue(vm.backToFront())
                 assertTrue(vm.backToRecipient())
                 vm.restartLookup()
                 val next = selfSnapshot().copy(userId = UserId(UUID.fromString("be111111-2222-4333-8444-555555555555")),

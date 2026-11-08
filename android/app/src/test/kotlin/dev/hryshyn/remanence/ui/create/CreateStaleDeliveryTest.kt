@@ -130,7 +130,11 @@ class CreateStaleDeliveryTest {
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir), retryStore),
             profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
-            openPhotoSource = { error("unused") },
+            openPhotoSource = { id ->
+                dev.hryshyn.remanence.create.PhotoSource {
+                    java.io.ByteArrayInputStream(dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id))
+                }
+            },
             frontProcessor = processor,
             cpuDispatcher = cpuDispatcher,
             ioDispatcher = cpuDispatcher,
@@ -140,9 +144,14 @@ class CreateStaleDeliveryTest {
         )
         vm.beginSession(1L)
 
-        // Walk to FRONT and begin a capture whose pipeline is parked in the queue.
+        // Compose and attach (the camera comes last), then begin a capture
+        // whose pipeline is parked in the queue.
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
+        repeat(3) { vm.photoSelection.toggle("content://stale/$it") }
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose())
+        vm.attach()
         vm.frontAttempt.onPermissionResult(true, false)
         vm.frontAttempt.onPreviewBound()
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)

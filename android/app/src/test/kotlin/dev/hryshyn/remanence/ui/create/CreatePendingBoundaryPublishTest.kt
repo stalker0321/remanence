@@ -264,11 +264,6 @@ class CreatePendingBoundaryPublishTest {
     private fun authorToCompose(vm: CreateViewModel) {
         vm.beginSession(1L, userUuid.toString())
         vm.onPendingRouteFrozen(frozenPending())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         CollageFreezeFixture.freezeFirstCandidate(vm)
@@ -303,7 +298,7 @@ class CreatePendingBoundaryPublishTest {
         val capsule = vm.capsuleId
         val root = requireNotNull(vm.viewModelScope.coroutineContext[Job])
         val previous = root.children.toSet()
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         val launched = root.children.filter { it !in previous }.toList()
         awaitTerminalPublish(vm)
         withTimeout(10_000) { launched.forEach { it.join() } }
@@ -315,7 +310,7 @@ class CreatePendingBoundaryPublishTest {
         compose.onNodeWithTag("create_publication_recovery").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("create_retry_upload").assertDoesNotExist()
         compose.onNodeWithTag("create_terminal_home").performScrollTo().assertIsDisplayed()
-        vm.startPublishing(); vm.retryUpload()
+        CreateFrontFixture.attach(vm); vm.retryUpload()
         assertEquals(capsule, vm.capsuleId)
         assertEquals(1, finalizations); assertEquals(listOf(capsule), drafts)
         assertEquals(CreateViewModel.CreateUploadStatus.PublicationIssue(expected, false), vm.uploadStatus.value)
@@ -324,7 +319,7 @@ class CreatePendingBoundaryPublishTest {
         vm.beginSession(2L, "9d111111-2222-4333-8444-555555555555")
         assertEquals(CreateViewModel.CreateUploadStatus.NotStarted, vm.uploadStatus.value)
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertEquals(1, finalizations)
     }
 
@@ -335,7 +330,7 @@ class CreatePendingBoundaryPublishTest {
         val vm = viewModel(gate, drafts)
         authorToCompose(vm)
         val capsule = vm.capsuleId
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
         // The SAME session capsule id at R3 that R1 froze for (via the
@@ -352,7 +347,7 @@ class CreatePendingBoundaryPublishTest {
         val drafts = mutableListOf<String>()
         val vm = viewModel(gate, drafts)
         authorToCompose(vm)
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         // Entry lease unavailable: synchronous fail-closed, the publish
         // job never starts and no draft ever leaves.
@@ -367,7 +362,7 @@ class CreatePendingBoundaryPublishTest {
         val drafts = mutableListOf<String>()
         val vm = viewModel(gate, drafts)
         authorToCompose(vm)
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         // Lease owner is not the session owner: fail closed at entry.
         assertTrue(drafts.isEmpty())
@@ -392,7 +387,7 @@ class CreatePendingBoundaryPublishTest {
             },
         )
         authorToCompose(vm)
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         // A blob went out before the replacement, but the post-await
         // fence fails the publication: no code, no PUBLISHED step.

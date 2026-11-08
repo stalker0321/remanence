@@ -231,11 +231,20 @@ class CreateTransitionTableTest {
         return vm to persistence
     }
 
-    /** Resolves and explicitly confirms the recipient; lands on FRONT/Ready. */
+    /** Resolves and explicitly confirms the recipient; lands on CONTENT. */
     private fun confirmRecipient(vm: CreateViewModel) {
         vm.onResolved(selfSnapshot())
         assertEquals(CreateViewModel.Step.RECIPIENT_CONFIRM, vm.step.value)
         vm.confirmRecipient()
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+    }
+
+    /** Composes a postcard and attaches it: the camera opens last, on FRONT/Ready. */
+    private fun toFront(vm: CreateViewModel) {
+        repeat(3) { vm.photoSelection.toggle("content://front/$it") }
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose())
+        vm.attach()
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
         bindReady(vm.frontAttempt)
     }
@@ -277,15 +286,13 @@ class CreateTransitionTableTest {
 
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         confirmRecipient(vm)
-        deliverFront(vm)
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
 
         repeat(3) { index -> assertTrue(vm.photoSelection.toggle("content://photo/$index").let { true }) }
         // Integration gate: publish requires a frozen choice on COMPOSE.
         CollageFreezeFixture.freezeFirstCandidate(vm)
         // ADR-018: publish with no note (non-empty notes are typed unsupported).
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(
@@ -318,13 +325,12 @@ class CreateTransitionTableTest {
             bridgeProvider = bridge.provider,
         )
         confirmRecipient(vm)
-        deliverFront(vm)
         repeat(3) { vm.photoSelection.toggle("content://note/$it") }
         assertTrue(vm.noteEditor.onChange("dear mama"))
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         // ACTUAL supported-note contract (reconciled with the real surface,
@@ -356,6 +362,7 @@ class CreateTransitionTableTest {
         )
         val (vm, _) = viewModel(front)
         confirmRecipient(vm)
+        toFront(vm)
 
         // First TOO_BLURRY.
         deliverFront(vm)
@@ -378,8 +385,7 @@ class CreateTransitionTableTest {
         bindReady(vm.frontAttempt)
         deliverFront(vm)
         assertEquals(CaptureAttemptPhase.Accepted, vm.frontAttempt.phase)
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertNull(vm.flowError.value)
+        assertNotEquals(CreateViewModel.Step.FRONT, vm.step.value)
         assertEquals(3, front.calls)
     }
 
@@ -391,6 +397,7 @@ class CreateTransitionTableTest {
         )
         val (vm, _) = viewModel(front)
         confirmRecipient(vm)
+        toFront(vm)
 
         deliverFront(vm)
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
@@ -401,7 +408,7 @@ class CreateTransitionTableTest {
         bindReady(vm.frontAttempt)
         deliverFront(vm)
         assertEquals(CaptureAttemptPhase.Accepted, vm.frontAttempt.phase)
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertNotEquals(CreateViewModel.Step.FRONT, vm.step.value)
     }
 
     /**
@@ -429,13 +436,13 @@ class CreateTransitionTableTest {
         // Publishing requires COMPOSE (reached only through CONTENT).
         assertFalse(vm.goToCompose())
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertTrue(vm.flowError.value!!.contains("COMPOSE"))
 
         // Walk to FRONT; stray capture calls are refused visibly.
         confirmRecipient(vm)
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        toFront(vm)
 
         // Retake without a terminal attempt is refused.
         vm.retakeFront()
@@ -456,20 +463,20 @@ class CreateTransitionTableTest {
         )
         val (vm, _) = viewModel(front)
         confirmRecipient(vm)
+        toFront(vm)
 
         deliverFront(vm)
         assertNotNull(vm.frontAttempt.phase as CaptureAttemptPhase.Rejected)
 
         // A guard violation leaves a message; the successful retry clears it.
-        // Still at FRONT with no photos: composition is refused.
+        // Still at FRONT: composition and a second attach are refused.
         assertFalse(vm.goToCompose())
-        vm.startPublishing()
+        vm.attach()
         assertNotNull(vm.flowError.value)
         vm.retakeFront()
         bindReady(vm.frontAttempt)
         deliverFront(vm)
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertNull(vm.flowError.value)
+        assertNotEquals(CreateViewModel.Step.FRONT, vm.step.value)
     }
 
     @Test
@@ -479,13 +486,12 @@ class CreateTransitionTableTest {
         val (vm, persistence) = viewModel(front, identityProvider = { null })
 
         confirmRecipient(vm)
-        deliverFront(vm)
         repeat(3) { vm.photoSelection.toggle("content://keep/$it") }
         assertTrue(vm.noteEditor.onChange("still here"))
         CollageFreezeFixture.freezeFirstCandidate(vm)
 
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)

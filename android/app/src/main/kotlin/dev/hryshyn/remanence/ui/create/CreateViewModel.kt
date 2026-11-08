@@ -282,7 +282,7 @@ class CreateViewModel(
         // composition/publish guards still enforce owner, 3..5 photos,
         // note, drawable, handle-readiness and the frozen route itself.
         if (identity is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending) {
-            _step.value = Step.FRONT
+            _step.value = Step.CONTENT
         }
     }
 
@@ -1684,7 +1684,8 @@ class CreateViewModel(
             return
         }
         clearGuardError()
-        _step.value = Step.FRONT
+        // The postcard itself is photographed last, right before it is attached.
+        _step.value = Step.CONTENT
     }
 
     fun restartLookup() {
@@ -1767,7 +1768,9 @@ class CreateViewModel(
                 if (_step.value != Step.FRONT) return
                 frontFingerprintId = outcome.fingerprintId
                 clearGuardError()
-                _step.value = Step.CONTENT
+                // "use this postcard" is the last step: attach what was composed.
+                _step.value = Step.COMPOSE
+                startPublishing()
             }
             // Rejected/Failed/Superseded stay on FRONT; reasons and failure
             // messages live on the authoritative controller.
@@ -1897,10 +1900,6 @@ class CreateViewModel(
      */
     fun goToCompose(): Boolean {
         if (!requireStep(Step.CONTENT, "composition")) return false
-        if (frontFingerprintId == null) {
-            failGuard("front must be captured before composition")
-            return false
-        }
         if (!photoSelection.canProceed) {
             failGuard("3..5 photos required")
             return false
@@ -1952,42 +1951,32 @@ class CreateViewModel(
      * step moves). Silent no-op elsewhere.
      */
     fun backToRecipient(): Boolean {
-        if (_step.value != Step.FRONT) return false
+        // CONTENT is the step right after the recipient now; FRONT kept for safety.
+        if (_step.value != Step.CONTENT && _step.value != Step.FRONT) return false
         _step.value = Step.RECIPIENT_LOOKUP
         return true
     }
 
-    fun backToFront(): Boolean {
-        if (_step.value != Step.CONTENT) return false
-        createSessionGeneration += 1
-        deliveryGeneration += 1
-        cancelDeliveryAndRetry()
-        // FRONT baselines are immutable per capsule. A different postcard
-        // starts a fresh draft identity, keeping its content and recipient;
-        // never overwrite/delete the old baseline (an earlier publication
-        // may still own it even after its UI job detached).
-        cancelPublishingLocked()
-        dropGeneratorBound { bridge, context, sessionId ->
-            bridge.cancel(context, sessionId)
+    /**
+     * The final "attach" on the composed postcard. The front is photographed
+     * here, last, so a postcard can be put together before the card is at hand.
+     */
+    fun attach() {
+        if (frontFingerprintId != null) { startPublishing(); return }
+        if (!requireStep(Step.COMPOSE, "attach")) return
+        if (!isFrozenCollageDrawable) {
+            failGuard("frozen candidate is not drawable")
+            return
         }
-        clearFrozenCollageSelection()
-        outboxObservationJob?.cancel()
-        outboxObservationJob = null
-        _capsuleId = UUID.randomUUID().toString()
-        // T186 M12e-cap: the fresh draft identity invalidates the frozen
-        // pending route (R1 bound route.capsule_id to the old id) — a
-        // rescan/back can never publish the old-UUID route. The sender
-        // must freeze a new R1 route for the new capsule; no fallback,
-        // no fake identity. The confirmed handle recipient survives.
-        sessionStore.clearPendingRoute()
-        collageChoices.beginDraft(_capsuleId)
-        _publishError.value = null
-        _uploadStatus.value = CreateUploadStatus.NotStarted
-        observeCurrentOutbox(sessionOwner, _capsuleId, createSessionGeneration)
-        frontFingerprintId = null
-        frontAttempt.restartCapture()
         clearGuardError()
+        frontAttempt.restartCapture()
         _step.value = Step.FRONT
+    }
+
+    /** Back from the camera returns to the composed postcard; nothing is lost. */
+    fun backFromFront(): Boolean {
+        if (_step.value != Step.FRONT) return false
+        _step.value = Step.COMPOSE
         return true
     }
 

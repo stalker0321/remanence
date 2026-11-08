@@ -178,29 +178,28 @@ class CreateGoldenTransitionTableTest {
         when (step) {
             CreateViewModel.Step.RECIPIENT_LOOKUP -> Unit
             CreateViewModel.Step.RECIPIENT_CONFIRM -> vm.onResolved(selfSnapshot())
-            CreateViewModel.Step.FRONT -> {
-                vm.onResolved(selfSnapshot())
-                vm.confirmRecipient()
-                bind(vm.frontAttempt)
-            }
             CreateViewModel.Step.CONTENT -> {
                 vm.onResolved(selfSnapshot())
                 vm.confirmRecipient()
-                bind(vm.frontAttempt)
-                assertTrue(vm.beginFrontCapture())
-                vm.deliverFrontJpeg("f".toByteArray())
                 // Content readiness belongs to reaching CONTENT legally.
                 repeat(3) { vm.photoSelection.toggle("content://$it") }
             }
             CreateViewModel.Step.COMPOSE -> {
                 vm.onResolved(selfSnapshot())
                 vm.confirmRecipient()
-                bind(vm.frontAttempt)
-                assertTrue(vm.beginFrontCapture())
-                vm.deliverFrontJpeg("f".toByteArray())
                 vm.onPhotosPicked(listOf("content://0", "content://1", "content://2"))
                 CollageFreezeFixture.freezeFirstCandidate(vm)
                 assertTrue(vm.goToCompose())
+            }
+            // The camera is the last step: reached by attaching a composed postcard.
+            CreateViewModel.Step.FRONT -> {
+                vm.onResolved(selfSnapshot())
+                vm.confirmRecipient()
+                vm.onPhotosPicked(listOf("content://0", "content://1", "content://2"))
+                CollageFreezeFixture.freezeFirstCandidate(vm)
+                assertTrue(vm.goToCompose())
+                vm.attach()
+                bind(vm.frontAttempt)
             }
             else -> error("state $step has no synchronous path")
         }
@@ -234,7 +233,7 @@ class CreateGoldenTransitionTableTest {
         Row(RECIPIENT_LOOKUP, "publish", Outcome.UNCHANGED_VISIBLE_ERROR),
         // RECIPIENT_CONFIRM
         Row(RECIPIENT_CONFIRM, "resolve", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(RECIPIENT_CONFIRM, "confirm", Outcome.TRANSITION_TO_TARGET, FRONT),
+        Row(RECIPIENT_CONFIRM, "confirm", Outcome.TRANSITION_TO_TARGET, CONTENT),
         Row(RECIPIENT_CONFIRM, "restartLookup", Outcome.TRANSITION_TO_TARGET, RECIPIENT_LOOKUP),
         Row(RECIPIENT_CONFIRM, "publish", Outcome.UNCHANGED_VISIBLE_ERROR),
         // FRONT
@@ -250,7 +249,7 @@ class CreateGoldenTransitionTableTest {
         Row(CONTENT, "confirm", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(CONTENT, "resolve", Outcome.UNCHANGED_VISIBLE_ERROR),
         // COMPOSE
-        Row(COMPOSE, "publish", Outcome.TRANSITION_TO_TARGET, PUBLISHING),
+        Row(COMPOSE, "publish", Outcome.TRANSITION_TO_TARGET, FRONT),
         Row(COMPOSE, "back", Outcome.TRANSITION_TO_TARGET, CONTENT),
         Row(COMPOSE, "next", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(COMPOSE, "beginFront", Outcome.UNCHANGED_VISIBLE_ERROR),
@@ -274,7 +273,7 @@ class CreateGoldenTransitionTableTest {
                 "beginFront" -> vm.beginFrontCapture()
                 "next" -> vm.goToCompose()
                 "back" -> vm.backToContent()
-                "publish" -> vm.startPublishing()
+                "publish" -> vm.attach()
                 else -> error("unknown event ${row.event}")
             }
 

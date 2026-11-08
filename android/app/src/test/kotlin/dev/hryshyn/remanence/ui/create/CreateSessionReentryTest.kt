@@ -146,7 +146,7 @@ class CreateSessionReentryTest {
     fun reentryStartsANewSessionWithANewCapsuleIdAndEmptyState() = runTest {
         val vm = viewModel()
         val firstCapsuleId = progressThroughFlow(vm)
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
 
         // Exit happened; the next entry bumps the epoch.
         vm.beginSession(epoch = 2L)
@@ -178,7 +178,7 @@ class CreateSessionReentryTest {
         vm.beginSession(epoch = 1L)
 
         assertEquals(capsuleId, vm.capsuleId)
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertTrue(vm.photoSelection.canProceed)
     }
 }

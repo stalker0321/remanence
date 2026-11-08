@@ -271,10 +271,6 @@ class CreateContentPublishRecoveryTest {
         // Walk the production table to CONTENT.
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         awaitStep(vm, CreateViewModel.Step.CONTENT)
         return Triple(vm, persistence, composeRule)
     }
@@ -475,7 +471,7 @@ class CreateContentPublishRecoveryTest {
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitStep(vm, CreateViewModel.Step.UPLOAD_PENDING)
         val dao = database.outboxCapsuleDao()
         val staged = requireNotNull(dao.getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString()))
@@ -517,7 +513,7 @@ class CreateContentPublishRecoveryTest {
         composeRule.runOnIdle {
             CollageFreezeFixture.freezeFirstCandidate(vm)
             assertTrue(vm.goToCompose())
-            vm.startPublishing()
+            CreateFrontFixture.attach(vm)
         }
 
         composeRule.waitForIdle()
@@ -532,7 +528,7 @@ class CreateContentPublishRecoveryTest {
         composeRule.onNodeWithTag("create_publishing").assertIsDisplayed()
 
         // A second start during PUBLISHING is refused visibly (no duplicates).
-        composeRule.runOnIdle { vm.startPublishing() }
+        composeRule.runOnIdle { CreateFrontFixture.attach(vm) }
         composeRule.runOnIdle { assertNotNull(vm.flowError.value) }
 
         // The gated identity fails: recovery returns to CONTENT with inputs.
@@ -567,7 +563,7 @@ class CreateContentPublishRecoveryTest {
 
         ioDispatcher.armed = true
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         val deadline = System.currentTimeMillis() + 10_000
         while (persistence.decryptedBuffers.isEmpty() && System.currentTimeMillis() < deadline) {
             Thread.sleep(5)
@@ -606,7 +602,7 @@ class CreateContentPublishRecoveryTest {
         CollageFreezeFixture.freezeFirstCandidate(vm)
         // ADR-018: publish with no note (non-empty notes are typed unsupported).
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitStep(vm, CreateViewModel.Step.UPLOAD_PENDING)
         promoteToPublished(vm)
 

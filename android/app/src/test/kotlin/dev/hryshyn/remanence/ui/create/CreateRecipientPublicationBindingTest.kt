@@ -223,10 +223,6 @@ class CreateRecipientPublicationBindingTest {
         vm.beginSession(1L, senderUserUuid.toString())
         vm.onResolved(snapshot)
         vm.confirmRecipient()
-        vm.frontAttempt.onPermissionResult(true, false)
-        vm.frontAttempt.onPreviewBound()
-        assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         // ADR-018: publish with no note (non-empty notes are typed unsupported).
@@ -258,7 +254,7 @@ class CreateRecipientPublicationBindingTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(
@@ -293,7 +289,7 @@ class CreateRecipientPublicationBindingTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
@@ -384,7 +380,7 @@ class CreateRecipientPublicationBindingTest {
 
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        CreateFrontFixture.attach(vm)
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)

@@ -62,6 +62,26 @@ class PendingClaimRepositoryTest {
     }
 
     @Test
+    fun optionsCarriesTheCardGiftBinding() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(200)
+                    .setHeader("Content-Type", "application/json")
+                    .body(
+                        """{"challenge_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","expires_at":1798765432,"hpke_challenge_b64":"aHBr","claim_challenge_b64":"Y2hhbA==","claim_binding_b64":"YmluZA=="}""",
+                    )
+                    .build(),
+            )
+            val result = assertIs<ClaimOptionsResult.Options>(
+                repository(server).options("0198f0a0-0000-7000-8000-00000000d401", "token"),
+            )
+            // Lost here, a card gift could never be sealed to its recipient.
+            assertEquals("YmluZA==", result.claimBindingB64)
+        }
+    }
+
+    @Test
     fun optionsWithoutVerifiedProofIsTerminal() = runTest {
         withServer { server ->
             server.enqueue(

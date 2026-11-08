@@ -393,7 +393,7 @@ class PendingProofViewModel(
      * so it stays off the main thread. The server never learns which card this was.
      */
     private suspend fun openCardGifts(): ProofState {
-        val secret = cardSecret ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+        val secret = cardSecret ?: return generic("g15")
         if (cardGifts.isEmpty()) return ProofState.Failed(PendingProofMessage.NOT_FOUND)
         _state.value = ProofState.CheckingCode
         for (gift in cardGifts) {
@@ -408,14 +408,14 @@ class PendingProofViewModel(
             val statement = PendingPublishVerifier.verifyStructure(sBytes)
             val senderKeyBytes = senderKeyProvider(
                 uuidRest(statement.senderUserId), uuidRest(statement.senderKeyBundleId),
-            ) ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            ) ?: return generic("g16")
             PendingPublishVerifier.verifyPublish(senderKeyBytes, sBytes, senderSig)
             // What the sender signed must commit to exactly what the code opened.
             val keyCommitment = dev.hryshyn.remanence.core.crypto.PendingPublishCrypto.keyCommitment(
                 gift.capsuleId, gift.deliveryTargetId, opened.capsuleAeadKeyset,
             )
             if (!keyCommitment.contentEquals(statement.keyCommitment.toByteArray())) {
-                return ProofState.Failed(PendingProofMessage.GENERIC)
+                return generic("g17")
             }
             proof = ContinueResult.Proof(
                 "", gift.deliveryId, gift.capsuleId, gift.deliveryTargetId, "sms",
@@ -427,9 +427,9 @@ class PendingProofViewModel(
             cardOpened = opened
             val ready = verifiedState(gift.deliveryId, gift.proofId)
             if (ready !is ProofState.IntentReady) return ready
-            val intent = builtIntent ?: return ProofState.Failed(PendingProofMessage.GENERIC)
-            val intentSig = builtIntentSig ?: return ProofState.Failed(PendingProofMessage.GENERIC)
-            val opId = builtOpId ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            val intent = builtIntent ?: return generic("g18")
+            val intentSig = builtIntentSig ?: return generic("g19")
+            val opId = builtOpId ?: return generic("g20")
             _state.value = ProofState.Claiming
             return submitClaimFlow(proof!!, intent, intentSig, opId)
         }
@@ -440,8 +440,26 @@ class PendingProofViewModel(
         block()
     } catch (cancelled: CancellationException) {
         throw cancelled
-    } catch (_: Exception) {
-        ProofState.Failed(PendingProofMessage.GENERIC)
+    } catch (e: Exception) {
+        generic("g1", e)
+    }
+
+    /**
+     * Every dead end of the claim logs where it stopped, so a tester's
+     * "that didn't work" can be traced. Stage and exception type only:
+     * never codes, numbers, keys or tokens.
+     */
+    private fun generic(stage: String, error: Throwable? = null): ProofState.Failed {
+        runCatching {
+            android.util.Log.w("RemanenceGift", "claim stopped at $stage" +
+                (error?.let { ": ${it.javaClass.simpleName}: ${it.message?.take(120)}" } ?: ""))
+        }
+        return ProofState.Failed(PendingProofMessage.GENERIC)
+    }
+
+    private fun refused(reason: dev.hryshyn.remanence.core.data.network.ClaimFailure): ProofState.Failed {
+        runCatching { android.util.Log.w("RemanenceGift", "server refused: $reason") }
+        return ProofState.Failed(mapClaimFailure(reason))
     }
 
     private fun mapPhoneFailure(reason: dev.hryshyn.remanence.core.data.network.PhoneProofFailure): PendingProofMessage =
@@ -483,8 +501,8 @@ class PendingProofViewModel(
                 continueFlow(reference)
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                ProofState.Failed(PendingProofMessage.GENERIC)
+            } catch (e: Exception) {
+                generic("g2", e)
             }
         }
     }
@@ -538,7 +556,8 @@ class PendingProofViewModel(
             continuePort.continueFrom(reference, creds.token)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            runCatching { android.util.Log.w("RemanenceGift", "call n1 failed: ${e.javaClass.simpleName}") }
             return ProofState.Failed(PendingProofMessage.NETWORK)
         }
         if (!credsLive(creds)) return failedSessionChanged()
@@ -553,13 +572,13 @@ class PendingProofViewModel(
                     Base64.getDecoder().decode(result.publishStatementB64)
                 } catch (_: IllegalArgumentException) {
                     null
-                } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+                } ?: return generic("g21")
                 val statement = try {
                     PendingPublishVerifier.verifyStructure(sBytes)
-                } catch (_: GeneralSecurityException) {
-                    return ProofState.Failed(PendingProofMessage.GENERIC)
-                } catch (_: Exception) {
-                    return ProofState.Failed(PendingProofMessage.GENERIC)
+                } catch (e: GeneralSecurityException) {
+                    return generic("g3", e)
+                } catch (e: Exception) {
+                    return generic("g4", e)
                 }
                 val senderKeyBytes = try {
                     senderKeyProvider(
@@ -568,18 +587,18 @@ class PendingProofViewModel(
                     )
                 } catch (_: Exception) {
                     null
-                } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+                } ?: return generic("g22")
                 val senderSig = try {
                     Base64.getDecoder().decode(result.publishSignature69B64)
                 } catch (_: IllegalArgumentException) {
                     null
-                } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+                } ?: return generic("g23")
                 try {
                     PendingPublishVerifier.verifyPublish(senderKeyBytes, sBytes, senderSig)
-                } catch (_: GeneralSecurityException) {
-                    return ProofState.Failed(PendingProofMessage.GENERIC)
-                } catch (_: Exception) {
-                    return ProofState.Failed(PendingProofMessage.GENERIC)
+                } catch (e: GeneralSecurityException) {
+                    return generic("g5", e)
+                } catch (e: Exception) {
+                    return generic("g6", e)
                 }
                 proof = result
                 statementBytes = sBytes
@@ -664,8 +683,8 @@ class PendingProofViewModel(
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                ProofState.Failed(PendingProofMessage.GENERIC)
+            } catch (e: Exception) {
+                generic("g7", e)
             }
         }
     }
@@ -712,8 +731,8 @@ class PendingProofViewModel(
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                ProofState.Failed(PendingProofMessage.GENERIC)
+            } catch (e: Exception) {
+                generic("g8", e)
             }
         }
     }
@@ -740,8 +759,8 @@ class PendingProofViewModel(
                 submitClaimFlow(current, intent, intentSig, opId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                ProofState.Failed(PendingProofMessage.GENERIC)
+            } catch (e: Exception) {
+                generic("g9", e)
             }
         }
     }
@@ -769,8 +788,8 @@ class PendingProofViewModel(
         var envelopeForClaim: String? = null
         var proofForClaim: String? = null
         cardOpened?.let { opened ->
-            val binding = cardBindingB64 ?: return ProofState.Failed(PendingProofMessage.GENERIC)
-            val sBytes = statementBytes ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            val binding = cardBindingB64 ?: return generic("g24")
+            val sBytes = statementBytes ?: return generic("g25")
             val own = hpkeKeyProvider() ?: return failedSessionChanged()
             envelopeForClaim = Base64.getEncoder().encodeToString(
                 dev.hryshyn.remanence.core.crypto.PendingCardSeal.sealEnvelopeToSelf(
@@ -789,13 +808,14 @@ class PendingProofViewModel(
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            runCatching { android.util.Log.w("RemanenceGift", "call n2 failed: ${e.javaClass.simpleName}") }
             return ProofState.Failed(PendingProofMessage.NETWORK)
         }
         if (!credsLive(creds)) return failedSessionChanged()
         if (submitted !is dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed) {
             val failure = submitted as dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Failure
-            return ProofState.Failed(mapClaimFailure(failure.reason))
+            return refused(failure.reason)
         }
         // Trusted acceptance of the server response. The SAME
         // out-of-band selected pin the sender uses for S is the only
@@ -805,9 +825,9 @@ class PendingProofViewModel(
         // Null/malformed pin ⇒ typed `PartiallyAccepted` (never
         // production `Accepted`, never admission).
         val sBytes = statementBytes
-            ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            ?: return generic("g26")
         val senderKeyBytes = senderKeyBytesStored
-            ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            ?: return generic("g27")
         val hpke = try {
             hpkeKeyProvider()
         } catch (_: Exception) {
@@ -817,7 +837,7 @@ class PendingProofViewModel(
             ownBundleKeyProvider()
         } catch (_: Exception) {
             null
-        } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+        } ?: return generic("g28")
         val selectedPin = try {
             servicePinProvider()
         } catch (_: Exception) {
@@ -844,7 +864,7 @@ class PendingProofViewModel(
             val senderVerify = com.google.crypto.tink.TinkProtoKeysetFormat
                 .parseKeysetWithoutSecret(senderKeyBytes)
             val senderSig = senderSigStored
-                ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+                ?: return generic("g29")
             // Caller-owned secret copies from accept() are dropped here
             // (no grant/persist on this path — Partial never yields a
             // grant; opening depends on future sync/scan admission).
@@ -888,14 +908,14 @@ class PendingProofViewModel(
                         // negative as the ingest gate.
                         val verified = try {
                             verifiedRowIds(sBytes, binding)
-                        } catch (_: Exception) {
-                            return ProofState.Failed(PendingProofMessage.GENERIC)
+                        } catch (e: Exception) {
+                            return generic("g10", e)
                         }
                         if (verified.capsuleId != current.capsuleId ||
                             verified.deliveryTargetId != current.deliveryTargetId ||
                             verified.claimId != submitted.claimId
                         ) {
-                            return ProofState.Failed(PendingProofMessage.GENERIC)
+                            return generic("g30")
                         }
                         // Reception-time FRONT staging (best-effort): the
                         // kind-1 ciphertext rides the row so scan
@@ -940,10 +960,10 @@ class PendingProofViewModel(
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: GeneralSecurityException) {
-            ProofState.Failed(PendingProofMessage.GENERIC)
-        } catch (_: Exception) {
-            ProofState.Failed(PendingProofMessage.GENERIC)
+        } catch (e: GeneralSecurityException) {
+            generic("g11", e)
+        } catch (e: Exception) {
+            generic("g12", e)
         }
     }
 
@@ -1125,13 +1145,14 @@ class PendingProofViewModel(
             optionsPort.options(deliveryId, creds.token)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            runCatching { android.util.Log.w("RemanenceGift", "call n3 failed: ${e.javaClass.simpleName}") }
             return ProofState.Failed(PendingProofMessage.NETWORK)
         }
         if (!credsLive(creds)) return failedSessionChanged()
         if (options !is ClaimOptionsResult.Options) {
             val failure = options as ClaimOptionsResult.Failure
-            return ProofState.Failed(mapClaimFailure(failure.reason))
+            return refused(failure.reason)
         }
         val hpke = try {
             hpkeKeyProvider()
@@ -1142,13 +1163,13 @@ class PendingProofViewModel(
             Base64.getDecoder().decode(options.claimChallengeB64)
         } catch (_: IllegalArgumentException) {
             null
-        } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+        } ?: return generic("g31")
         cardBindingB64 = options.claimBindingB64
         val sealed = try {
             Base64.getDecoder().decode(options.hpkeChallengeB64)
         } catch (_: IllegalArgumentException) {
             null
-        } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+        } ?: return generic("g32")
         // The challenge was issued for this very bearer, so it names the
         // session. The id remembered at sign-in can be gone after a process
         // restart or belong to an earlier session after a token replacement;
@@ -1175,7 +1196,7 @@ class PendingProofViewModel(
                 hpke,
             )
             // Build + sign the intent now (real crypto); the SUBMIT waits.
-            val sBytes = statementBytes ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            val sBytes = statementBytes ?: return generic("g33")
             val h = java.security.MessageDigest.getInstance("SHA-256").digest(sBytes)
             val signing = try {
                 signingKeyProvider()
@@ -1233,10 +1254,10 @@ class PendingProofViewModel(
             builtNonce = nonce
             builtChallengeId = options.challengeId
             ProofState.IntentReady(deliveryId, Base64.getEncoder().encodeToString(nonce))
-        } catch (_: GeneralSecurityException) {
-            ProofState.Failed(PendingProofMessage.GENERIC)
-        } catch (_: Exception) {
-            ProofState.Failed(PendingProofMessage.GENERIC)
+        } catch (e: GeneralSecurityException) {
+            generic("g13", e)
+        } catch (e: Exception) {
+            generic("g14", e)
         }
     }
 

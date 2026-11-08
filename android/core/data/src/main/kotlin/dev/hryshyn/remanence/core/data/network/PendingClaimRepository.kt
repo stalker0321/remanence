@@ -227,7 +227,9 @@ class PendingClaimRepository internal constructor(
         return try {
             require(dto.challengeId.isNotBlank() && dto.hpkeChallengeB64.isNotBlank() &&
                 dto.claimChallengeB64.isNotBlank() && dto.expiresAt >= 0)
-            ClaimOptionsResult.Options(dto.challengeId, dto.expiresAt, dto.hpkeChallengeB64, dto.claimChallengeB64)
+            // ADR-020: a card gift also carries the signed binding the client seals to.
+            ClaimOptionsResult.Options(dto.challengeId, dto.expiresAt, dto.hpkeChallengeB64, dto.claimChallengeB64,
+                dto.claimBindingB64?.takeIf { it.isNotBlank() })
         } catch (_: IllegalArgumentException) {
             ClaimOptionsResult.Failure(
                 ClaimFailure.INVALID_RESPONSE,

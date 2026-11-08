@@ -35,4 +35,8 @@
     <string name="create_audit_capture_timeout">the camera took too long. take the photo again</string>
     <string name="create_audit_crop_grid">crop grid</string>
     <string name="create_audit_handle_rule">3–30 characters: a–z, 0–9, _ or .</string>
+    <string name="create_discard_title">throw away this postcard?</string>
+    <string name="create_discard_body">the recipient, the photos and the words you chose here will be lost.</string>
+    <string name="create_discard_confirm">throw away</string>
+    <string name="create_discard_keep">keep going</string>
 </resources>

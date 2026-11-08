@@ -125,7 +125,11 @@ internal class AtomicRegistrationController(private val env: AtomicEnvironment) 
             reconcileCredential(current)
             if (current.credential == null) {
                 check(!current.creationUncertain && current.creation == null)
-                val options = post(current, AtomicAction.CREDENTIAL_OPTIONS, epoch(current))
+                // The handle only names the passkey in the password manager.
+                val options = post(current, AtomicAction.CREDENTIAL_OPTIONS, buildJsonObject {
+                    put("epoch", current.setup!!.reservation.epoch)
+                    if (state.value.handle.isNotEmpty()) put("handle", state.value.handle)
+                })
                 val publicOptions = options.getValue("options").jsonObject
                 val id = UUID.fromString(current.setup!!.reservation.accountId)
                 val expected = Crypto.encode(ByteBuffer.allocate(16).putLong(id.mostSignificantBits).putLong(id.leastSignificantBits).array())

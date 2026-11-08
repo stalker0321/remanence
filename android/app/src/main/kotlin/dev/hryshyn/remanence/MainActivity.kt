@@ -566,8 +566,8 @@ private fun RootSurface(
                 }
                 if (BuildConfig.REMANENCE_PLAY_BETA && authenticatedOwner != null)
                     dev.hryshyn.remanence.ui.settings.BetaTermsGate(container.apiStack.safetyRepository,
-                        authenticatedOwner.toString(), { createViewModel.endSession(); rootViewModel.returnToHome() }, content = create,
-                        telemetryContent = { dev.hryshyn.remanence.ui.settings.TelemetryPreferences(container.telemetry) })
+                        // Optional feedback choices live in Settings; consent asks one thing.
+                        authenticatedOwner.toString(), { createViewModel.endSession(); rootViewModel.returnToHome() }, content = create)
                 else create()
                 }
             }

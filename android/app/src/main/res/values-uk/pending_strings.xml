@@ -78,7 +78,7 @@
     <string name="pending_sender_recovery">спочатку відновіть доступ, потім надішліть з кодом.</string>
     <string name="pending_sender_service">надсилання з кодом не налаштоване в цій збірці.</string>
     <string name="pending_sender_generic">не вийшло. спробуйте ще раз.</string>
-    <string name="pending_card_entry">на звороті листівки є код?</string>
+    <string name="pending_card_entry">на звороті є код</string>
     <string name="pending_card_code_title">введіть код зі зворотного боку листівки</string>
     <string name="pending_card_code_label">код</string>
     <string name="pending_card_code_invalid">це не схоже на код. у ньому дев’ять символів.</string>
@@ -98,4 +98,19 @@
     <string name="pending_card_write_title">напишіть це на звороті листівки</string>
     <string name="pending_card_write_body">саме так. без цього листівку ніхто не відкриє. код завжди можна знайти в історії.</string>
     <string name="pending_sender_contacts">вибрати з контактів</string>
+    <string name="pending_card_step">крок %1$d з 3</string>
+    <string name="pending_card_code_body">дев’ять літер і цифр, як написано на листівці.</string>
+    <string name="pending_card_done_action">сфотографувати лицьовий бік</string>
+    <string name="pending_card_failed_title">не вийшло</string>
+    <string name="pending_sender_mode_handle">за ніком</string>
+    <string name="pending_sender_mode_phone">за номером</string>
+    <string name="pending_sender_phone_body">для того, кого тут ще немає. листівку відкриють із цим номером.</string>
+    <string name="pending_sender_next">далі</string>
+    <string name="pending_sender_confirm_title">надіслати на цей номер?</string>
+    <string name="pending_sender_confirm_body">на звороті листівки буде код, а відкрити її можна буде з цим номером. перевірте ще раз.</string>
+    <string name="pending_sender_confirm_send">так, на цей номер</string>
+    <string name="pending_sender_confirm_change">змінити</string>
+    <string name="pending_card_copy">скопіювати код</string>
+    <string name="pending_card_copied">скопійовано</string>
+    <string name="pending_recipient_body">за ніком або за номером телефону, якщо людини тут ще немає</string>
 </resources>

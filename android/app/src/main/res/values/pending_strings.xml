@@ -83,7 +83,7 @@
     <string name="pending_sender_recovery">restore access first, then send with a code.</string>
     <string name="pending_sender_service">code sending isn’t configured in this build.</string>
     <string name="pending_sender_generic">that didn’t work. try again.</string>
-    <string name="pending_card_entry">got a code on the back of the postcard?</string>
+    <string name="pending_card_entry">there’s a code on the back</string>
     <string name="pending_card_code_title">enter the code from the back of the postcard</string>
     <string name="pending_card_code_label">code</string>
     <string name="pending_card_code_invalid">that doesn’t look like the code. it has nine symbols.</string>
@@ -103,4 +103,19 @@
     <string name="pending_card_write_title">write this on the back of the postcard</string>
     <string name="pending_card_write_body">exactly like this. without it the postcard opens for no one. you can find it again in history.</string>
     <string name="pending_sender_contacts">choose from contacts</string>
+    <string name="pending_card_step">step %1$d of 3</string>
+    <string name="pending_card_code_body">nine letters and numbers, just as they’re written on the card.</string>
+    <string name="pending_card_done_action">photograph the front</string>
+    <string name="pending_card_failed_title">that didn’t work</string>
+    <string name="pending_sender_mode_handle">username</string>
+    <string name="pending_sender_mode_phone">phone number</string>
+    <string name="pending_sender_phone_body">for someone who isn’t here yet. they’ll open the postcard with this number.</string>
+    <string name="pending_sender_next">next</string>
+    <string name="pending_sender_confirm_title">send to this number?</string>
+    <string name="pending_sender_confirm_body">they’ll get the postcard with a code on the back and open it with this number. check it once more.</string>
+    <string name="pending_sender_confirm_send">yes, send it here</string>
+    <string name="pending_sender_confirm_change">change</string>
+    <string name="pending_card_copy">copy the code</string>
+    <string name="pending_card_copied">copied</string>
+    <string name="pending_recipient_body">by username, or by phone number if they’re not here yet</string>
 </resources>

@@ -146,9 +146,14 @@ internal fun BetaTermsPage(agreed: Boolean, busy: Boolean, available: Boolean, f
       }) {
         AccessHeading(stringResource(R.string.beta_terms_title), stringResource(R.string.beta_terms_summary))
         Spacer(Modifier.height(8.dp))
-        SettingsGroup {
-            SettingsActionRow(stringResource(R.string.beta_terms), onClick = onTerms, modifier = Modifier.testTag("beta_terms_link"))
-            SettingsActionRow(stringResource(R.string.beta_privacy_policy), onClick = onPrivacy, modifier = Modifier.testTag("beta_privacy_link"))
+        // Two quiet links, not a settings list: this page asks one thing.
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
+            HoldTextButton(onClick = onTerms, modifier = Modifier.testTag("beta_terms_link")) {
+                Text(stringResource(R.string.beta_terms), textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)
+            }
+            HoldTextButton(onClick = onPrivacy, modifier = Modifier.testTag("beta_privacy_link")) {
+                Text(stringResource(R.string.beta_privacy_policy), textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)
+            }
         }
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("beta_terms_agreement")
             .semantics(mergeDescendants = true) {}

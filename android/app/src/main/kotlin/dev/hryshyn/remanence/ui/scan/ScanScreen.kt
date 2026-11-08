@@ -127,6 +127,17 @@ fun ScanScreen(
     val openingPostcard by viewModel.openingPostcard.collectAsStateWithLifecycle()
     val scanTimings by viewModel.scanTimings.collectAsStateWithLifecycle()
 
+    // A card with a code gets its own page in place of the camera; closing it
+    // returns to this same capture surface.
+    val cardProofVm = newProofVm
+    if (showPendingCode && cardProofVm != null && matchState is ScanMatchUiState.AwaitingCapture) {
+        dev.hryshyn.remanence.pending.PendingCardEntrySheet(
+            newProofVm = cardProofVm,
+            onClose = { showPendingCode = false },
+            modifier = modifier,
+        )
+        return
+    }
     BoxWithConstraints(modifier.fillMaxSize()) {
     val previewBudget = (maxHeight - 160.dp).coerceAtLeast(64.dp)
     Column(
@@ -167,15 +178,9 @@ fun ScanScreen(
                 // flag is ON. Sheet returns to this same capture surface.
                 // A stored same-owner intent offers resume (rotation /
                 // process-death survival); PRF readiness stays gated.
-                val cardProofVm = newProofVm
-                if (cardProofVm != null) {
+                if (newProofVm != null) {
+                    Spacer(Modifier.height(12.dp))
                     dev.hryshyn.remanence.pending.PendingCardEntryButton(onOpen = { showPendingCode = true })
-                    if (showPendingCode) {
-                        dev.hryshyn.remanence.pending.PendingCardEntrySheet(
-                            newProofVm = cardProofVm,
-                            onClose = { showPendingCode = false },
-                        )
-                    }
                 }
                 }
             }

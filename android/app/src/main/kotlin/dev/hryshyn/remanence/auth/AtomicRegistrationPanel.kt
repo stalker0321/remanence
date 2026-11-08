@@ -163,6 +163,12 @@ internal fun AtomicRegistrationContent(view: AtomicView, handle: String, onHandl
                     HoldButton(enabled = enabled, onClick = onResolve, modifier = Modifier.fillMaxWidth().testTag("atomic_check_creation")) {
                         Text(stringResource(R.string.atomic_registration_check))
                     }
+                    // When the password manager never confirms, checking can't
+                    // change anything; going back through Google picks it up again.
+                    HoldTextButton(enabled = enabled, onClick = onLeave,
+                        modifier = Modifier.fillMaxWidth().testTag("atomic_creation_start_over")) {
+                        Text(stringResource(R.string.atomic_registration_restart))
+                    }
                 }
                 AtomicPhase.UNKNOWN -> {
                     HoldButton(enabled = enabled, onClick = onResolve, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.atomic_registration_check)) }

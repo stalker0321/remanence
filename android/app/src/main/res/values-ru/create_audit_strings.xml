@@ -35,4 +35,8 @@
     <string name="create_audit_crop_grid">сетка кадра</string>
     <string name="create_audit_handle_rule">3–30 символов: a–z, 0–9, _ или .</string>
     <string name="create_audit_recent_identity">не получилось подтвердить этого человека. проверьте ник и найдите заново</string>
+    <string name="create_discard_title">выбросить эту открытку?</string>
+    <string name="create_discard_body">получатель, фото и слова, которые вы здесь выбрали, пропадут.</string>
+    <string name="create_discard_confirm">выбросить</string>
+    <string name="create_discard_keep">продолжить</string>
 </resources>

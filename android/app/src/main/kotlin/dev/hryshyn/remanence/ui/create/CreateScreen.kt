@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.border
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -99,6 +101,30 @@ fun CreateScreen(
     recentRecipientsContent: @Composable () -> Unit = {},
 ) {
     val step by viewModel.step.collectAsStateWithLifecycle()
+    // Once a postcard has a recipient and a picture, leaving asks first:
+    // one stray Back used to drop the whole draft.
+    var confirmDiscard by remember { mutableStateOf(false) }
+    val drafting = step == CreateViewModel.Step.FRONT || step == CreateViewModel.Step.CONTENT ||
+        step == CreateViewModel.Step.COMPOSE
+    val exitRequested: () -> Unit = { if (drafting) confirmDiscard = true else onExit() }
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text(stringResource(R.string.create_discard_title)) },
+            text = { Text(stringResource(R.string.create_discard_body)) },
+            confirmButton = {
+                TextButton(onClick = { confirmDiscard = false; onExit() },
+                    modifier = Modifier.testTag("create_discard_confirm")) {
+                    Text(stringResource(R.string.create_discard_confirm), color = HoldColors.Destructive)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDiscard = false }, modifier = Modifier.testTag("create_discard_keep")) {
+                    Text(stringResource(R.string.create_discard_keep))
+                }
+            },
+        )
+    }
     val uploadStatus by viewModel.uploadStatus.collectAsStateWithLifecycle()
     val publishError by viewModel.publishError.collectAsStateWithLifecycle()
     val flowError by viewModel.flowError.collectAsStateWithLifecycle()
@@ -115,13 +141,14 @@ fun CreateScreen(
     }
 
     if (step == CreateViewModel.Step.CONTENT || step == CreateViewModel.Step.COMPOSE) {
-        ContentAndCompositionFlow(viewModel, onExit, modifier)
+        ContentAndCompositionFlow(viewModel, exitRequested, modifier)
         return
     }
 
     BackHandler(enabled = step == CreateViewModel.Step.RECIPIENT_CONFIRM) {
         viewModel.restartLookup()
     }
+    BackHandler(enabled = step == CreateViewModel.Step.FRONT) { confirmDiscard = true }
 
     // Motion ownership: the root owns the single boundary arrival
     // (Home <-> Create). Steps arrive via AstraStepArrival, which snaps on
@@ -133,9 +160,9 @@ fun CreateScreen(
     Column(modifier.fillMaxSize()) {
     HoldFlowHeader(
         onBack = {
-            if (step == CreateViewModel.Step.RECIPIENT_CONFIRM) viewModel.restartLookup() else onExit()
+            if (step == CreateViewModel.Step.RECIPIENT_CONFIRM) viewModel.restartLookup() else exitRequested()
         },
-        onClose = onExit,
+        onClose = exitRequested,
     )
     BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
         val introductory = step == CreateViewModel.Step.RECIPIENT_LOOKUP ||
@@ -193,7 +220,8 @@ fun CreateScreen(
                 Spacer(Modifier.height(16.dp))
                 if (introductory) {
                     Text(stringResource(when (step) {
-                        CreateViewModel.Step.RECIPIENT_LOOKUP -> R.string.hold_recipient_body
+                        CreateViewModel.Step.RECIPIENT_LOOKUP -> if (dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled())
+                            R.string.pending_recipient_body else R.string.hold_recipient_body
                         CreateViewModel.Step.RECIPIENT_CONFIRM -> R.string.hold_confirm_body
                         else -> R.string.create_capture_body
                     }), style = if (step == CreateViewModel.Step.FRONT) MaterialTheme.typography.bodySmall
@@ -303,29 +331,8 @@ fun CreateScreen(
                         // section below is inert for pending gifts.
                         val pendingCode by viewModel.pendingPublication.collectAsStateWithLifecycle()
                         if (pendingCode != null) {
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                stringResource(R.string.pending_card_write_title),
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                // remanence.to/c opens straight on the code entry.
-                                android.net.Uri.parse(dev.hryshyn.remanence.BuildConfig.API_BASE_URL).host.orEmpty() + "/c",
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.testTag("create_pending_site"),
-                            )
-                            Text(
-                                pendingCode!!.locatorCode,
-                                style = MaterialTheme.typography.headlineMedium,
-                                modifier = Modifier.testTag("create_pending_code"),
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                stringResource(R.string.pending_card_write_body),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = HoldColors.Muted,
-                            )
+                            Spacer(Modifier.height(20.dp))
+                            PostcardBackCode(pendingCode!!.locatorCode)
                         }
                         Spacer(Modifier.height(28.dp))
                         ForwardAction(stringResource(R.string.create_audit_return_home), "create_published_home", onExit)
@@ -413,8 +420,18 @@ private fun RecipientLookupContent(viewModel: CreateViewModel, recentRecipientsC
     val state by viewModel.pickerVm.state.collectAsStateWithLifecycle()
     val selfAccount by viewModel.selfRecipientAccount.collectAsStateWithLifecycle()
     val selfRejected by viewModel.selfRecipientLookupRejected.collectAsStateWithLifecycle()
+    val phoneGifts = dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()
+    var byPhone by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+          // ADR-020: a number is an equal way to address someone, not a footnote.
+          if (phoneGifts) {
+            RecipientModeSwitch(byPhone) { byPhone = it }
+            Spacer(Modifier.height(16.dp))
+          }
+          if (phoneGifts && byPhone) {
+            PhoneRecipient(viewModel)
+          } else {
             OutlinedTextField(
                 value = handle, onValueChange = viewModel::onHandleChange,
                 label = { Text(stringResource(R.string.hold_recipient_handle), style = MaterialTheme.typography.bodySmall) },
@@ -456,46 +473,50 @@ private fun RecipientLookupContent(viewModel: CreateViewModel, recentRecipientsC
                 is RecipientLookupUiState.Failed -> Text(stringResource(createLookupFailureCopy(current.reason)), color = MaterialTheme.colorScheme.error)
                 else -> Unit
             }
-        }
-        Spacer(Modifier.height(16.dp))
-        // T186 M12: secondary pending sender entry (isolated EMAIL/PHONE
-        // → R1 freeze → R3/R4/R5 → handwritten code). Renders nothing
-        // unless the pending build flag is ON; the handle flow above is
-        // untouched. Content binds the authored retained originals.
-        if (dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) {
-            var showSender by remember { mutableStateOf(false) }
-            Spacer(Modifier.height(8.dp))
-            dev.hryshyn.remanence.pending.PendingSenderEntryButton(
-                onOpenSender = { showSender = true },
-            )
-            if (showSender) {
-                val senderScope = rememberCoroutineScope()
-                val context = LocalContext.current
-                val senderVm = remember(senderScope) {
-                    val app = context.applicationContext as RemanenceApplication
-                    app.container.newPendingSenderViewModel(
-                        senderScope,
-                        // A card gift always publishes at the Create boundary, with its
-                        // recognition manifest, never from this sheet.
-                        contentPort = dev.hryshyn.remanence.pending.PendingSenderContentPort { null },
-                        onFrozenRoute = viewModel::onPendingRouteFrozen,
-                        // T186 M12e-gap2: the SAME session capsule id the
-                        // boundary publishes under (route.capsule_id ==
-                        // R3 capsule_id, server-enforced).
-                        capsuleIdProvider = { viewModel.capsuleId },
-                        // T186 M12e-boundary: a directory-proven frozen v1
-                        // route enters the EXISTING confirm→publish path
-                        // (zero escrow); the sheet never publishes v1.
-                        onResolvedHandle = viewModel::onResolved,
-                    )
-                }
-                dev.hryshyn.remanence.pending.PendingSenderSheet(
-                    viewModel = senderVm,
-                    onClose = { showSender = false },
-                )
-            }
+          }
         }
     }
+}
+
+/** Two equal ways to address someone, styled like the app's tabs. */
+@Composable
+private fun RecipientModeSwitch(byPhone: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().testTag("create_recipient_mode"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(false to R.string.pending_sender_mode_handle, true to R.string.pending_sender_mode_phone).forEach { (phone, label) ->
+            val selected = phone == byPhone
+            Text(stringResource(label),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (selected) HoldColors.Ink else HoldColors.Muted,
+                modifier = Modifier
+                    .background(if (selected) HoldColors.Lilac else Color.Transparent, RoundedCornerShape(16.dp))
+                    .selectable(selected = selected, role = androidx.compose.ui.semantics.Role.Tab, onClick = { onChange(phone) })
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .testTag(if (phone) "create_mode_phone" else "create_mode_handle"))
+        }
+    }
+}
+
+@Composable
+private fun PhoneRecipient(viewModel: CreateViewModel) {
+    // ADR-020 sender: number → route freeze; the card gift itself publishes
+    // at the Create boundary with its recognition manifest.
+    val senderScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val senderVm = remember(senderScope) {
+        val app = context.applicationContext as RemanenceApplication
+        app.container.newPendingSenderViewModel(
+            senderScope,
+            contentPort = dev.hryshyn.remanence.pending.PendingSenderContentPort { null },
+            onFrozenRoute = viewModel::onPendingRouteFrozen,
+            // The SAME session capsule id the boundary publishes under
+            // (route.capsule_id == R3 capsule_id, server-enforced).
+            capsuleIdProvider = { viewModel.capsuleId },
+            // A number that already belongs to someone here enters the
+            // ordinary confirm → publish path; the phone form never publishes it.
+            onResolvedHandle = viewModel::onResolved,
+        )
+    }
+    dev.hryshyn.remanence.pending.PendingSenderSheet(viewModel = senderVm, onClose = {})
 }
 
 @Composable
@@ -825,6 +846,36 @@ private fun ContentAndCompositionFlow(
                 },
             )
         }
+    }
+}
+
+/** What goes on the back of the card, drawn like the back of a card. */
+@Composable
+private fun PostcardBackCode(code: String) {
+    val clipboard = LocalContext.current.getSystemService(android.content.ClipboardManager::class.java)
+    var copied by remember(code) { mutableStateOf(false) }
+    val mono = remember { androidx.compose.ui.text.font.FontFamily(androidx.compose.ui.text.font.Font(R.font.nimbus_mono_ps_regular)) }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(stringResource(R.string.pending_card_write_title), style = MaterialTheme.typography.titleMedium)
+        Column(
+            Modifier.fillMaxWidth()
+                .background(HoldColors.Sand, RoundedCornerShape(14.dp))
+                .padding(horizontal = 20.dp, vertical = 22.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            // remanence.to/c opens straight on the code entry.
+            Text(android.net.Uri.parse(dev.hryshyn.remanence.BuildConfig.API_BASE_URL).host.orEmpty() + "/c",
+                style = MaterialTheme.typography.titleMedium, color = HoldColors.Ink,
+                modifier = Modifier.testTag("create_pending_site"))
+            Text(code, style = MaterialTheme.typography.headlineLarge.copy(fontFamily = mono, letterSpacing = 2.sp),
+                color = HoldColors.Ink, modifier = Modifier.testTag("create_pending_code"))
+        }
+        dev.hryshyn.remanence.ui.hold.HoldTextButton(onClick = {
+            clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("remanence", code)); copied = true
+        }, modifier = Modifier.testTag("create_pending_copy")) {
+            Text(stringResource(if (copied) R.string.pending_card_copied else R.string.pending_card_copy))
+        }
+        Text(stringResource(R.string.pending_card_write_body), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
     }
 }
 

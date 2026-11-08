@@ -20,6 +20,7 @@ from remanence.api.auth_schemas import (
     RegistrationUserResponse,
 )
 from remanence.api.dependencies import get_access_bearer_token, get_db_session
+from remanence.users.handles import HandleReserved
 from remanence.api.problems import problem_response
 from remanence.auth.login import LoginService, LoginStatus
 from remanence.auth.logout import LogoutService
@@ -212,6 +213,8 @@ def register(
         return problem_response(request, code)
     except PublicKeyBundleValidationError:
         return problem_response(request, "KEY_BUNDLE_INVALID")
+    except HandleReserved:
+        return problem_response(request, "HANDLE_UNAVAILABLE")
     except ValueError:
         return problem_response(request, "VALIDATION_FAILED")
     return RegistrationResponse(

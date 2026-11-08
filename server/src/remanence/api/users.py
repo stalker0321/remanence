@@ -15,6 +15,7 @@ from remanence.api.auth_schemas import (
 from remanence.api.dependencies import AuthenticatedPrincipal, get_authenticated_principal, get_db_session
 from remanence.api.problems import problem_response
 from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
+from remanence.users.handles import RESERVED
 from remanence.users.models import User
 
 router = APIRouter()
@@ -29,6 +30,8 @@ def change_handle(
 ) -> HandleChangeResponse | JSONResponse:
     if request.app.state.settings.recovery_enabled:
         return problem_response(request, "HANDLE_IMMUTABLE")
+    if payload.handle in RESERVED:
+        return problem_response(request, "HANDLE_UNAVAILABLE")
     try:
         user = session.scalar(
             select(User).where(User.id == principal.user_id).with_for_update()

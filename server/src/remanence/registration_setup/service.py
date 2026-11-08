@@ -17,6 +17,7 @@ from remanence.api.recovery import b64, unb64, manifest, PRF_INPUT
 from remanence.auth.google_models import GoogleIdentity
 from remanence.auth.passwords import PasswordService
 from remanence.auth.registration import RegistrationService
+from remanence.users.handles import HandleReserved
 from remanence.recovery.models import RecoveryCredential, RecoveryRecord
 from remanence.registration_setup.models import RegistrationPolicy, RegistrationReservation as Reservation, RegistrationCredential as Credential, RegistrationChallenge as Challenge
 from remanence.users.key_models import UserKeyBundle
@@ -343,6 +344,10 @@ class AtomicRegistration:
                 self.db.flush()
                 raise SetupFailure("HANDLE_TAKEN", 409, persist=True) from None
             raise SetupFailure("REGISTRATION_CONFLICT", 409, persist=True) from None
+        except HandleReserved:
+            grant.consumed_at = None
+            self.db.flush()
+            raise SetupFailure("HANDLE_TAKEN", 409, persist=True) from None
         except (ValueError, tink.TinkError):
             raise SetupFailure("SETUP_REJECTED", persist=True) from None
         return 201, dict(status="ACTIVE", outcome=self.outcome(row), login=login)

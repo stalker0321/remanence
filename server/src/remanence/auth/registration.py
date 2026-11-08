@@ -11,7 +11,7 @@ from remanence.auth.passwords import PasswordService
 from remanence.auth.session_repository import AuthSessionRepository
 from remanence.auth.session_rotation import ACCESS_TTL, REFRESH_TTL
 from remanence.auth.tokens import generate_access_token, generate_refresh_token, hash_opaque_token
-from remanence.users.handles import normalize_handle
+from remanence.users.handles import ensure_claimable, normalize_handle
 from remanence.users.key_bundle_validation import validate_public_key_bundle
 from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 from remanence.users.models import User
@@ -55,6 +55,7 @@ class RegistrationService:
             raise ValueError("invalid timestamp")
         if normalize_handle(handle_normalized) != handle_normalized:
             raise ValueError("invalid handle")
+        ensure_claimable(handle_normalized)
         if not email_normalized or len(email_normalized) > 320:
             raise ValueError("invalid email")
         if email_normalized != email_normalized.strip(" \t\n\r\f\v").casefold():

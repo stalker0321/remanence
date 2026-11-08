@@ -76,3 +76,15 @@ def test_none_input_raises_naturally_without_value_leak() -> None:
     with pytest.raises((TypeError, AttributeError)) as excinfo:
         normalize_handle(None)  # type: ignore[arg-type]
     assert not isinstance(excinfo.value, ValueError)
+
+
+def test_app_paths_are_reserved_handles() -> None:
+    from remanence.users.handles import RESERVED, HandleReserved, ensure_claimable
+
+    # Every one-segment page of remanence.to that a handle could spell.
+    for word in ("scan", "create", "account", "settings", "history", "gift", "review", "legal"):
+        assert normalize_handle(word) == word and word in RESERVED
+        with pytest.raises(HandleReserved):
+            ensure_claimable(word)
+    assert all(normalize_handle(word) == word for word in RESERVED)
+    ensure_claimable("vodkolyan")

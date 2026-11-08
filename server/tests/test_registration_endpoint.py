@@ -216,3 +216,13 @@ def test_test_app_without_factory_health_ok_register_503() -> None:
     assert response.headers["content-type"].startswith("application/problem+json")
     body = response.json()
     assert body == problem_payload("INTERNAL_UNAVAILABLE", response.headers["x-request-id"])
+
+def test_reserved_handle_409_like_a_taken_one(client_factory) -> None:
+    client, factory = client_factory
+    payload = _valid_payload()
+    payload["handle"] = "Review"
+    response = client.post("/v1/auth/register", json=payload)
+    assert response.status_code == 409
+    assert response.json() == problem_payload("HANDLE_UNAVAILABLE", response.headers["x-request-id"])
+    with factory() as session:
+        assert session.scalars(select(User)).all() == []

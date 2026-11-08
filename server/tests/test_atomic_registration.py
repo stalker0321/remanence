@@ -481,3 +481,13 @@ def test_concurrent_shared_bundle_and_credential_fail_closed(atomic):
         codes = [x.result(timeout=8).status_code for x in outcomes]
     assert sorted(codes) == [201, 409]
     assert counts(atomic[1]) == [1] * 7
+
+
+def test_reserved_handle_reads_as_taken_and_keeps_the_grant(atomic):
+    before = counts(atomic[1])
+    a, body, _ = candidate(atomic, handle="scan")
+    reply = final(atomic, a, body)
+    assert reply.status_code == 409 and reply.json()["reason"] == "HANDLE_TAKEN"
+    assert counts(atomic[1]) == before
+    corrected = copy.deepcopy(body); corrected["handle"] = "available"; corrected["operation_id"] = str(uuid.uuid4())
+    assert final(atomic, a, corrected).status_code == 201

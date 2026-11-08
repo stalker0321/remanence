@@ -24,7 +24,7 @@ from remanence.auth.session_repository import AuthSessionRepository
 from remanence.auth.session_rotation import ACCESS_TTL, REFRESH_TTL
 from remanence.auth.tokens import generate_access_token, generate_refresh_token, hash_opaque_token
 from remanence.users.models import User
-from remanence.users.handles import normalize_handle
+from remanence.users.handles import HandleReserved, normalize_handle
 from remanence.registration_setup.service import AtomicRegistration, SetupFailure, required_policy, lock_subject
 
 
@@ -229,7 +229,7 @@ def register(payload: GoogleRegistration, request: Request, db: Session = Depend
             session_id=result.session_id, access_token=result.access_token, refresh_token=result.refresh_token,
             access_expires_at=result.access_expires_at, refresh_expires_at=result.refresh_expires_at).model_dump(mode="json")}
         db.commit(); return out
-    except IntegrityError:
+    except (IntegrityError, HandleReserved):
         # Atomic rollback retains the registration ticket for handle correction.
         db.rollback(); return fail("REGISTRATION_CONFLICT", 409)
     except Exception:

@@ -6,6 +6,7 @@ import { captureFrozenRenderedPlan } from '../src/collage/frozenRenderedPlan'
 import { buildFrozenExpression } from '../src/collage/frozenExpression'
 import { prepare, type TextMeasurer } from '../src/collage/prepare'
 import { styleById } from '../src/collage/styles'
+import type { ArtworkRef } from '../src/collage/model'
 import { freezeSelection } from '../src/create/creatorFreeze'
 
 /**
@@ -49,7 +50,16 @@ function photos(aspects: number[]) {
 
 const TRACK = { trackId: '0198f0a0-1111-7000-8000-000000000001', title: 'Moon', artistDisplay: 'Ada' }
 
-async function sealAndOpen(view: CreatorCandidateView, source: ReturnType<typeof photos>, note: string | null, withTrack: boolean) {
+const COVER: ArtworkRef = {
+  provider: 'coverartarchive',
+  url: 'https://archive.org/download/mbid-956fbc58-362d-43b8-b880-3779e0508559/mbid-956fbc58-362d-43b8-b880-3779e0508559-34025419985_thumb500.jpg',
+  sha256: new Uint8Array(32).fill(7),
+  mimeType: 'image/jpeg',
+  width: 500,
+  height: 500,
+}
+
+async function sealAndOpen(view: CreatorCandidateView, source: ReturnType<typeof photos>, note: string | null, withTrack: boolean, cover: ArtworkRef | null = null) {
   const style = styleById(view.styleId)!
   const scene = creatorScene({
     view,
@@ -59,9 +69,10 @@ async function sealAndOpen(view: CreatorCandidateView, source: ReturnType<typeof
     photos: new Map(source.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
     track: withTrack ? TRACK : null,
     measurer,
+    cover,
   })
   const noteLayout = sceneNoteLayout(scene, measurer)?.layout ?? null
-  const renderedPlan = captureFrozenRenderedPlan({ scene, noteLayout, branchId: view.branch, styleId: view.styleId, styleVersion: style.version })
+  const renderedPlan = captureFrozenRenderedPlan({ scene, noteLayout, branchId: view.branch, styleId: view.styleId, styleVersion: style.version, cover })
   const frozen = freezeSelection({
     branchId: view.branch,
     styleId: view.styleId,
@@ -106,6 +117,8 @@ async function sealAndOpen(view: CreatorCandidateView, source: ReturnType<typeof
     parsed.track,
     new Map(source.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
     measurer,
+    // The recipient's checked cover: the sealed size once the bytes matched.
+    expression.musicRegion?.artwork ? { width: expression.musicRegion.artwork.width, height: expression.musicRegion.artwork.height } : null,
   )
   return { scene, opened, expression }
 }
@@ -175,6 +188,29 @@ describe('creator choices: the Android pool on the site', () => {
       if (withTrack) expect(views.every((view) => view.music !== null)).toBe(true)
     })
   }
+
+  it('seals a checked cover in the bands that hold one, and the recipient paints it', async () => {
+    const source = photos([1, 1, 1])
+    const views = creatorChoices({
+      preview: { id: 'c', sender: SENDER, photos: source, note: null, music: { artwork: true } },
+      measurer,
+      track: TRACK,
+      seed: 'cover',
+      cover: COVER,
+    })
+    expect(views.some((view) => view.grammarId === 'g20')).toBe(true)
+    let covered = 0
+    for (const view of views) {
+      const { scene, opened, expression } = await sealAndOpen(view, source, null, true, COVER)
+      expect(opened.kind, `${view.grammarId}/${view.styleId}/${view.branch}: ${opened.kind === 'rejected' ? opened.reason : ''}`).toBe('ready')
+      if (scene.artwork === null) continue
+      covered++
+      expect(expression.musicRegion?.artwork?.url).toBe(COVER.url)
+      expect(expression.input.music?.artworkId ?? null).toBeNull()
+      if (opened.kind === 'ready') expect(opened.scene.artwork).not.toBeNull()
+    }
+    expect(covered).toBeGreaterThan(0)
+  })
 
   it('song layouts exist: the site can now send a song', () => {
     const views = creatorChoices({

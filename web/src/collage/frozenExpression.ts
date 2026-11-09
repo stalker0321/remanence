@@ -1,5 +1,6 @@
 import type { CreatorFreeze } from '../create/creatorFreeze'
 import { ProtocolError } from '../protocol/errors'
+import { hexToBytes } from '../protocol/bytes'
 import { CollageError } from './errors'
 import { encodeExpression } from './codec'
 import { FONT_VERSION } from './fonts'
@@ -69,7 +70,7 @@ export type FrozenExpressionResult = FrozenExpressionOk | FrozenExpressionRefuse
 
 const INT64_MAX = (2n ** 63n) - 1n
 const SEALABLE_GRAMMARS = new Set(ACTIVE_GRAMMAR_IDS.map((id) => `g${id}`))
-/** Bands drawn around a cover; without one the plan picks their text twins. */
+/** Bands that cannot be drawn without a cover. */
 const COVER_ONLY_MODES = new Set(['thumbnail', 'tile-art', 'sleeve'])
 /** Max value `CanonicalWriter.int` accepts (signed int32). */
 const INT32_MAX = 0x7fffffff
@@ -237,8 +238,9 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
     if (frozenMusic.title !== frozen.track.title || frozenMusic.artist !== frozen.track.artistDisplay) {
       return refuse('music-mismatch', 'painted song words differ from the chosen song')
     }
-    // The site holds no cover, so a band that needs one cannot be sealed.
-    if (!(MUSIC_MODES_V4 as readonly string[]).includes(frozenMusic.mode) || COVER_ONLY_MODES.has(frozenMusic.mode)) {
+    // A band that needs a cover is sealed only with the checked cover it was painted with.
+    if (!(MUSIC_MODES_V4 as readonly string[]).includes(frozenMusic.mode)
+      || (COVER_ONLY_MODES.has(frozenMusic.mode) && frozenMusic.artwork === null)) {
       return refuse('unsupported', `song band mode ${frozenMusic.mode}`)
     }
     if (!intRect(frozenMusic.region)) return refuse('fraction', 'song band region is not integral')
@@ -250,7 +252,15 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
     ) {
       return refuse('music-mismatch', 'painted song face differs from the style')
     }
-    musicRegion = { ...copyRect(frozenMusic.region), mode: frozenMusic.mode, type, artwork: null }
+    const painted = frozenMusic.artwork
+    musicRegion = {
+      ...copyRect(frozenMusic.region),
+      mode: frozenMusic.mode,
+      type,
+      artwork: painted === null
+        ? null
+        : { provider: painted.provider, url: painted.url, sha256: hexToBytes(painted.sha256Hex), mimeType: painted.mimeType, width: painted.width, height: painted.height },
+    }
   }
 
   if (frozen.renderedPlan.provenance.length === 0) return refuse('unsupported', 'provenance is empty')

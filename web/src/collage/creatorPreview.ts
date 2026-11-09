@@ -24,7 +24,7 @@ import {
   type PlanInput,
   type PlanMeasure,
 } from './planGrammars'
-import { markLine } from './model'
+import { markLine, MUSIC_COVER_MODES_V4, type ArtworkRef } from './model'
 import { mountRect } from './mount'
 import { layoutCreatorNote, wrapNoteLines, type CreatorNoteFace, type CreatorNoteLayout } from './creatorNote'
 import { opaqueColor, roleTextType, styleById, styleIds, type CollageStyle } from './styles'
@@ -408,6 +408,8 @@ export interface CreatorSceneInput {
   track?: TrackWords | null
   /** Measures the song words against the band; required with `track`. */
   measurer?: TextMeasurer
+  /** The song's checked cover, painted in the bands that hold one. */
+  cover?: ArtworkRef | null
 }
 
 /**
@@ -455,10 +457,12 @@ export function creatorScene(input: CreatorSceneInput): Scene {
   let artwork: Scene['artwork'] = null
   if (track !== null && input.view.music !== null) {
     if (!input.measurer) fail('creator song needs a measurer')
-    // Without a held cover the band is drawn as text, the same as the
-    // recipient will see it when the cover cannot be checked.
-    const region = { ...input.view.music.region, mode: input.view.music.mode, type: roleTextType(style!.music), artwork: null }
-    const layers = musicLayers(region, grammarId, style!, true, false, track, input.measurer!)
+    // A band that holds a cover seals the checked cover; without one the band
+    // is drawn as text, as the recipient sees it when a cover cannot be checked.
+    const cover = input.cover ?? null
+    const holdsCover = cover !== null && (MUSIC_COVER_MODES_V4 as readonly string[]).includes(input.view.music.mode)
+    const region = { ...input.view.music.region, mode: input.view.music.mode, type: roleTextType(style!.music), artwork: holdsCover ? cover : null }
+    const layers = musicLayers(region, grammarId, style!, true, holdsCover, track, input.measurer!)
     if (typeof layers === 'string') fail(layers)
     music = (layers as Exclude<typeof layers, string>).music
     artwork = (layers as Exclude<typeof layers, string>).artwork
@@ -526,6 +530,8 @@ export interface ChoicesInput {
   track: TrackWords | null
   /** Seeds the order of the offered layouts; one draft keeps one order. */
   seed: string
+  /** The chosen song's checked cover; null leaves every band as text. */
+  cover?: ArtworkRef | null
   /** Only these styles (tests); every bundled style otherwise. */
   styleIds?: readonly string[]
   /**
@@ -695,6 +701,7 @@ function tryView(
       photos: new Map(input.preview.photos.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
       track: input.track,
       measurer: input.measurer,
+      cover: input.cover ?? null,
     })
     const note = sceneNoteLayout(scene, input.measurer)
     if (note !== null && note.layout.overflow) return null

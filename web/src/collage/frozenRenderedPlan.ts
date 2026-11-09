@@ -1,6 +1,7 @@
 import { CollageError } from './errors'
 import type { CreatorNoteLayout } from './creatorNote'
-import type { PhotoShape, Rect } from './model'
+import type { ArtworkRef, PhotoShape, Rect } from './model'
+import { bytesToHex } from '../protocol/bytes'
 import type { Scene } from './prepare'
 import { FONT_VERSION } from './fonts'
 import { PALETTE_VERSION } from './styles'
@@ -83,6 +84,17 @@ export interface FrozenRenderedMusic {
   readonly line: number
   readonly title: string
   readonly artist: string
+  /** The checked cover painted in the band, or null when it is text only. */
+  readonly artwork: FrozenRenderedArtwork | null
+}
+
+export interface FrozenRenderedArtwork {
+  readonly provider: string
+  readonly url: string
+  readonly sha256Hex: string
+  readonly mimeType: string
+  readonly width: number
+  readonly height: number
 }
 
 export interface FrozenRenderedDecor {
@@ -125,6 +137,8 @@ export interface FrozenRenderedCaptureInput {
   branchId: string
   styleId: string
   styleVersion: string
+  /** The cover the scene was painted with; required exactly when the scene paints one. */
+  cover?: ArtworkRef | null
 }
 
 function rect(value: Rect): FrozenRenderedRect {
@@ -156,8 +170,9 @@ export function captureFrozenRenderedPlan(input: FrozenRenderedCaptureInput): Fr
   if (!/^g\d+$/.test(scene.grammarId)) throw new CollageError('REJECTED')
   if (input.branchId.trim() === '' || input.styleId.trim() === '') throw new CollageError('REJECTED')
   if (scene.note !== null && input.noteLayout === null) throw new CollageError('REJECTED')
-  // The creator never holds a cover yet: a painted cover would be a band the sealed sheet cannot repeat.
-  if (scene.artwork !== null) throw new CollageError('REJECTED')
+  // A painted cover must be the checked cover the sheet will seal, and only in a band.
+  const cover = input.cover ?? null
+  if (scene.artwork !== null && (cover === null || scene.music === null)) throw new CollageError('REJECTED')
   const slots: FrozenRenderedSlot[] = scene.photos.map((photo, index) => ({
     contentId: photo.contentId,
     ordinal: index,
@@ -197,6 +212,9 @@ export function captureFrozenRenderedPlan(input: FrozenRenderedCaptureInput): Fr
           line: scene.music.line,
           title: scene.music.title,
           artist: scene.music.artist,
+          artwork: scene.artwork === null || cover === null
+            ? null
+            : { provider: cover.provider, url: cover.url, sha256Hex: bytesToHex(cover.sha256), mimeType: cover.mimeType, width: cover.width, height: cover.height },
         }
   const provenance: FrozenRenderedProvenance[] = scene.provenance.map((mark) => ({
     kind: mark.kind,

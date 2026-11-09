@@ -8,6 +8,7 @@ import { ProtocolError } from '../protocol/errors'
 import { uuidToBytes } from '../protocol/uuid'
 import type { ScanGrant } from '../scan/grant'
 import type { SessionStore } from '../session/session'
+import type { ArtworkRef } from './model'
 import type { IncomingCapsule } from '../sync/incoming'
 import { CollageError } from './errors'
 import { jpegSize } from './jpeg'
@@ -30,6 +31,9 @@ export interface HeldArtwork {
   height: number
 }
 
+/** Downloads a sealed cover once its descriptor is known; null keeps the song as text. */
+export type ArtworkSource = (ref: ArtworkRef, signal?: AbortSignal) => Promise<HeldArtwork | null>
+
 export interface OpenedPostcard {
   scene: Scene
   photos: Map<string, Uint8Array>
@@ -51,7 +55,7 @@ export async function openGrantedPostcard(
   content: SealedBlob,
   photos: readonly SealedPhoto[],
   measurer: TextMeasurer,
-  artwork: HeldArtwork | null = null,
+  artwork: HeldArtwork | ArtworkSource | null = null,
   signal?: AbortSignal,
 ): Promise<OpenedPostcard> {
   const view = session.getSnapshot()
@@ -144,7 +148,11 @@ export async function openGrantedPostcard(
       fresh()
       photoPlain.set(authored.contentId, plain)
     }
-    const cover = await coverFor(manifest, artwork)
+    const held = typeof artwork === 'function' && manifest.expression.musicRegion?.artwork
+      ? await artwork(manifest.expression.musicRegion.artwork, signal)
+      : typeof artwork === 'function' ? null : artwork
+    fresh()
+    const cover = await coverFor(manifest, held)
     fresh()
     const prepared = await prepare(
       manifest.expression,
@@ -158,7 +166,7 @@ export async function openGrantedPostcard(
     if (prepared.kind !== 'ready') throw new CollageError('REJECTED')
     const kept = new Map<string, Uint8Array>()
     for (const [id, bytes] of photoPlain) kept.set(id, bytes.slice())
-    return { scene: prepared.scene, photos: kept, artwork: cover && artwork ? artwork.bytes.slice() : null, letter: manifest.letter }
+    return { scene: prepared.scene, photos: kept, artwork: cover && held ? held.bytes.slice() : null, letter: manifest.letter }
   } catch (error) {
     if (error instanceof CollageError || error instanceof ProtocolError) throw error
     throw new CollageError('INTEGRITY')

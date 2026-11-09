@@ -82,9 +82,11 @@ const transport: ApiTransport & ByteTransport = {
     ] })
     if (path === '/v1/me/send-access') return ok({ policy_version: 1, mode: 'enforce', lifetime: false, free: { self: { limit: 2, used: 1, remaining: 1 }, other: { limit: 2, used: 0, remaining: 2 } }, can_publish: { self: true, other: true } })
     if (path === '/music/v1/search') return ok({ results: [
-      { id: '0198f0a0-1111-7000-8000-000000000001', title: 'Под небом голубым', artists: ['Аквариум'], version: null, release: 'Равноденствие', year: 1987, durationMs: 214_000, artworkAvailable: true, recordingMbid: null },
+      { id: '0198f0a0-1111-7000-8000-000000000001', title: 'Под небом голубым', artists: ['Аквариум'], version: null, release: 'Равноденствие', year: 1987, durationMs: 214_000, artworkAvailable: false, recordingMbid: null },
+      // A real recording, so the preview finds its cover on MusicBrainz and the Cover Art Archive.
+      { id: '0198f0a0-1111-7000-8000-000000000003', title: 'Bohemian Rhapsody', artists: ['Queen'], version: null, release: 'A Night at the Opera', year: 1975, durationMs: 354_000, artworkAvailable: true, recordingMbid: 'b1a9c0e9-d987-4042-ae91-78d6a3267d69' },
       { id: '0198f0a0-1111-7000-8000-000000000002', title: 'Here Comes the Sun', artists: ['The Beatles'], version: '2019 mix', release: 'Abbey Road', year: 1969, durationMs: 185_000, artworkAvailable: true, recordingMbid: null },
-    ], total: 2, offset: 0 })
+    ], total: 3, offset: 0 })
     const handle = /^\/v1\/directory\/handles\/(.+)$/.exec(path)?.[1]
     if (handle) {
       const id = people[handle]

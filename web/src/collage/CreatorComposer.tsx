@@ -12,6 +12,8 @@ import { paintCreatorNote, type CreatorNoteFace, type CreatorNoteLayout } from '
 import { bundledFaces } from './fonts'
 import { analyzePhotos } from './analysis/photoAnalyzer'
 import type { CollageAnalysis } from './analysis/cropSolver'
+import type { ArtworkRef } from './model'
+import { bytesToHex } from '../protocol/bytes'
 import { paintScene, type PaintImage } from './paint'
 import type { TextMeasurer } from './prepare'
 import { styleById } from './styles'
@@ -39,8 +41,10 @@ export interface CreatorComposerRecipient {
 export interface CreatorComposerProps {
   photos: CreatorComposerPhoto[]
   note: string | null
-  /** The chosen song, painted as a text band and sealed with the layout. */
+  /** The chosen song, painted in its band and sealed with the layout. */
   track: TrackSnapshot | null
+  /** The song's checked cover and its decoded image; null keeps the band as text. */
+  cover?: { ref: ArtworkRef; image: CanvasImageSource } | null
   /** Offer only this style (tests); every bundled style otherwise. */
   styleId?: string
   /** Find faces and objects before offering layouts (production); off keeps the centred crop. */
@@ -258,11 +262,14 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const analysisReady = props.analyze !== true || analysed?.key === photosKey
   const analyses = props.analyze === true && analysed?.key === photosKey ? analysed.analyses : null
 
+  const cover = props.track === null ? null : props.cover ?? null
+  const coverKey = cover === null ? null : bytesToHex(cover.ref.sha256)
+
   const inputKey = useMemo(() => {
     const photosKey = JSON.stringify(props.photos.map((photo) => [photo.contentId, photo.width, photo.height, photo.contentHash]))
     const transformsKey = JSON.stringify(transforms)
-    return JSON.stringify([photosKey, props.note, transformsKey, onlyStyle, senderHandle, props.track])
-  }, [props.photos, props.note, transforms, onlyStyle, senderHandle, props.track])
+    return JSON.stringify([photosKey, props.note, transformsKey, onlyStyle, senderHandle, props.track, coverKey])
+  }, [props.photos, props.note, transforms, onlyStyle, senderHandle, props.track, coverKey])
 
   // Fonts gate: the ONLY async step. Required bundled faces load first;
   // its own epoch, never shared with paint (paint is synchronous after
@@ -314,20 +321,21 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
             contentHash: photo.contentHash,
           })),
           note: props.note && props.note.trim() !== '' ? props.note : null,
-          music: props.track === null ? null : { artwork: false },
+          music: props.track === null ? null : { artwork: cover !== null },
         },
         transforms: new Map(Object.entries(transforms)),
         measurer: props.measurer,
         track: props.track === null ? null : { title: props.track.title, artistDisplay: props.track.artistDisplay },
         seed,
         analyses,
+        cover: cover?.ref ?? null,
         ...(onlyStyle === undefined ? {} : { styleIds: [onlyStyle] }),
       })
       return { views: completed }
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
     }
-  }, [tornDown, fontsReady, analysisReady, analyses, inputKey, props.measurer, props.photos, props.note, props.track, transforms, senderHandle, seed, onlyStyle])
+  }, [tornDown, fontsReady, analysisReady, analyses, cover, inputKey, props.measurer, props.photos, props.note, props.track, transforms, senderHandle, seed, onlyStyle])
 
   const views = planned !== null && 'views' in planned ? planned.views : null
   const planError = fontsError ?? (planned !== null && 'error' in planned ? planned.error : null)
@@ -356,8 +364,9 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
           ? null
           : [props.recipient.userId, props.recipient.keyBundleId, props.recipient.directoryVersion],
       track: props.track,
+      cover: coverKey,
     })
-  }, [props.measurer, view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.track])
+  }, [props.measurer, view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.track, coverKey])
 
   const currentFreeze: FreezeCurrent | null = useMemo(() => {
     if (view === null) return null
@@ -473,6 +482,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         photos: new Map(props.photos.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
         track: props.track === null ? null : { title: props.track.title, artistDisplay: props.track.artistDisplay },
         measurer: props.measurer,
+        cover: cover?.ref ?? null,
       })
       // One shared wrapped layout drives BOTH the region (via the same
       // wrap in `plannerFromTextMeasurer`) and the painted rows. The base
@@ -496,7 +506,10 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       } else {
         setNoteFits(true)
       }
-      const painted = paintScene(context, { ...scene, note: null }, images, null)
+      const coverImage = scene.artwork !== null && cover !== null
+        ? { source: cover.image, width: cover.ref.width, height: cover.ref.height }
+        : null
+      const painted = paintScene(context, { ...scene, note: null }, images, coverImage)
       if (painted && scene.note !== null && noteLayout !== null && noteFace !== null) {
         paintCreatorNote(context, noteLayout, noteFace, scene.note.region, scene.note.color)
       }
@@ -512,6 +525,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
             branchId: view.branch,
             styleId,
             styleVersion: style.version,
+            cover: cover?.ref ?? null,
           })
           renderedRef.current = { key: signature, plan }
           setReadySig(signature)
@@ -531,7 +545,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       renderedRef.current = null
       setReadySig(null)
     }
-  }, [view, props.photos, props.note, props.track, props.measurer, styleId, tornDown, senderHandle, signature])
+  }, [view, props.photos, props.note, props.track, props.measurer, styleId, tornDown, senderHandle, signature, cover])
 
   // Unmount: release the parent snapshot. Paint is synchronous, so no
   // async fence is needed here; the fonts gate owns its own epoch.

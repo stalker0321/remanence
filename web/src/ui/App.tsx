@@ -36,6 +36,8 @@ import { fetchPendingIncoming } from '../sync/pendingIncoming'
 import { buildRecognitionIndex, type RecognitionIndex } from '../scan/recognitionIndex'
 import { canvasTextMeasurer } from '../collage/measure'
 import { CreatorComposer, type CreatorComposerPhoto } from '../collage/CreatorComposer'
+import { resolveCover } from '../collage/cover'
+import type { ArtworkRef } from '../collage/model'
 import type { CreatorFreeze } from '../create/creatorFreeze'
 import { CreatorImageBridge, browserImageDecode, type CreatorImageDecode } from '../create/creatorImages'
 import { FrontHold, type FrontStill } from '../create/front'
@@ -678,6 +680,27 @@ export function Create({
   const selectedMusic = confirmed ? music.selected() : null
   // One stable snapshot per picked song, so the composer replans only when the song changes.
   const selectedTrack = useMemo(() => (selectedMusic === null ? null : trackSnapshotOf(selectedMusic)), [selectedMusic])
+  // The picked song's cover, found on this device like on Android (MusicBrainz, Cover Art Archive).
+  const [cover, setCover] = useState<{ trackId: string; ref: ArtworkRef; image: ImageBitmap } | null>(null)
+  const coverTrackId = selectedMusic !== null && selectedMusic.artworkAvailable && selectedMusic.recordingMbid !== null ? selectedMusic.id : null
+  const coverMbid = coverTrackId === null ? null : selectedMusic?.recordingMbid ?? null
+  useEffect(() => {
+    if (coverTrackId === null || coverMbid === null) return
+    const abort = new AbortController()
+    void (async () => {
+      const held = await resolveCover(coverMbid, abort.signal)
+      if (held === null || abort.signal.aborted) return
+      try {
+        const image = await createImageBitmap(new Blob([arrayBuffer(held.bytes)], { type: held.ref.mimeType }))
+        if (abort.signal.aborted) image.close()
+        else setCover({ trackId: coverTrackId, ref: held.ref, image })
+      } catch {
+        /* an undecodable cover leaves the song as text */
+      }
+    })()
+    return () => abort.abort()
+  }, [coverTrackId, coverMbid])
+  const selectedCover = cover !== null && cover.trackId === selectedTrack?.trackId ? cover : null
   const bound = confirmed ? `${confirmed.userId}:${confirmed.keyBundleId}:${confirmed.directoryVersion}` : ''
   useEffect(() => {
     if (pending !== null && confirmed === null) recipientHeading.current?.focus()
@@ -1405,6 +1428,7 @@ export function Create({
                   photos={creatorImages}
                   note={note.accepted()}
                   track={selectedTrack}
+                  cover={selectedCover}
                   recipient={composerRecipient}
                   ownerId={view.accountId ?? ''}
                   session={store}
@@ -1447,7 +1471,7 @@ export function Create({
             {selectedMusic ? (
               <div>
                 <p>{musicLine(selectedMusic)}</p>
-                <p className="field-hint">{t('musicTextOnly')}</p>
+                {selectedCover === null ? <p className="field-hint">{t('musicTextOnly')}</p> : null}
                 <button type="button" onClick={() => { invalidateSend(); music.remove(); setStamp((value) => value + 1) }}>{t('musicRemove')}</button>
               </div>
             ) : null}

@@ -3,6 +3,7 @@ import type { ApiTransport } from '../auth/http'
 import { CollageError } from '../collage/errors'
 import { showGrantedPostcard, type PresentationMemory } from '../collage/memory'
 import { openGrantedPostcard, type OpenedPostcard, type SealedPhoto } from '../collage/open'
+import { fetchSealedCover } from '../collage/cover'
 import type { TextMeasurer } from '../collage/prepare'
 import { arrayBuffer, bytesToHex } from '../protocol/bytes'
 import { b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
@@ -88,7 +89,7 @@ export async function receivePostcard(
     opened = await openGrantedPostcard(session, keys, grant, item, {
       blobId: content.blobId,
       ciphertext: contentBytes,
-    }, sealedPhotos, measurer, null, signal)
+    }, sealedPhotos, measurer, fetchSealedCover, signal)
     currentToken()
     onAdmission?.()
     currentToken()

@@ -10,10 +10,11 @@ export const BRAND_TEXT = 'Remanence'
 export const SENDER_PREFIX = 'From '
 export const TEXT_FAMILIES = ['StudySans', 'StudySerif', 'StudyMono', 'Narrow', 'Gothic'] as const
 export const MUSIC_MODES_V3 = ['text', 'thumbnail'] as const
-export const MUSIC_MODES_V4 = ['text', 'thumbnail', 'inline', 'tile-art', 'tile-text', 'sleeve', 'sleeve-empty', 'spine', 'pulse'] as const
-export const MUSIC_COVER_MODES_V4 = ['thumbnail', 'inline', 'tile-art', 'sleeve', 'pulse'] as const
+// `plate`, `caption` and `card` are the 9 November 2026 song bands (songBand.ts).
+export const MUSIC_MODES_V4 = ['text', 'thumbnail', 'inline', 'tile-art', 'tile-text', 'sleeve', 'sleeve-empty', 'spine', 'pulse', 'plate', 'caption', 'card'] as const
+export const MUSIC_COVER_MODES_V4 = ['thumbnail', 'inline', 'tile-art', 'sleeve', 'pulse', 'plate', 'caption'] as const
 export const MUSIC_ARTWORK_REQUIRED_MODES_V4 = ['thumbnail', 'tile-art', 'sleeve'] as const
-export const MUSIC_TEXT_ONLY_MODES_V4 = ['text', 'tile-text', 'sleeve-empty', 'spine'] as const
+export const MUSIC_TEXT_ONLY_MODES_V4 = ['text', 'tile-text', 'sleeve-empty', 'spine', 'card'] as const
 export const MUSIC_BARE_TEXT_OK_MODES_V4 = ['inline', 'pulse'] as const
 export const ARTWORK_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
 export const ARTWORK_PROVIDERS = ['catalog-sample', 'coverartarchive'] as const

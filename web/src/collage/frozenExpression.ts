@@ -18,7 +18,6 @@ import {
   validateResolved,
 } from './model'
 import { sourceRect } from './prepare'
-import { musicTypes } from './creatorPreview'
 import { PALETTE_VERSION, roleTextType, styleById, styleDigest, type CollageStyle } from './styles'
 
 /**
@@ -245,10 +244,10 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
       return refuse('unsupported', `song band mode ${frozenMusic.mode}`)
     }
     if (!intRect(frozenMusic.region)) return refuse('fraction', 'song band region is not integral')
-    // The style's music role at the size it was painted in: the style's own or a step down to 14.
-    const type = musicTypes(style).find((candidate) => candidate.size === frozenMusic.size)
+    // Android seals the style's music role, the same type the band was painted in.
+    const type = roleTextType(style.music)
     if (
-      !type || type.family !== frozenMusic.family || type.weight !== frozenMusic.weight
+      type.family !== frozenMusic.family || type.size !== frozenMusic.size || type.weight !== frozenMusic.weight
       || type.italic !== frozenMusic.italic || type.line !== frozenMusic.line
     ) {
       return refuse('music-mismatch', 'painted song face differs from the style')

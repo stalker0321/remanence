@@ -26,6 +26,7 @@ import {
 } from './model'
 import { equalBytes, opaqueColor, PALETTE_VERSION, styleById, styleDigest, type CollageStyle } from './styles'
 import { layoutCreatorNote, type CreatorNoteLayout } from './creatorNote'
+import { isSongBandMode, songBandLayout, type RunWidth, type SongBandLayout, type SongBandMode } from './songBand'
 
 export interface SourcePhoto {
   width: number
@@ -73,6 +74,8 @@ export interface SceneMusic {
   vertical: boolean
   copyRegion: Rect
   playRegion: Rect | null
+  /** The 9 November 2026 band (plate, caption, card); null for the frozen modes. */
+  band?: SongBandLayout | null
 }
 
 export interface SceneArtwork {
@@ -398,6 +401,7 @@ export function musicLayers(
   measurer: TextMeasurer,
 ): { music: SceneMusic | null; artwork: SceneArtwork | null } | string {
   const type = musicRegion.type
+  if (isV4 && isSongBandMode(musicRegion.mode)) return songBandLayers(musicRegion, style, verified, track, measurer)
   const transparent = isV4 && isTransparentMusicBand(grammarId, style.id)
   const background = opaqueColor(transparent ? style.palette.paper : style.palette.sound)
   const color = opaqueColor(transparent ? style.palette.ink : style.palette.soundInk)
@@ -453,6 +457,55 @@ export function musicLayers(
     music: musicLayer(track, text, musicRegion, type, background, color, transparent, musicRegion.mode, false, placement.copy, placement.play),
     artwork: null,
   }
+}
+
+/** The new song band: the shared layout, a caption that does not fit drawn as a plate. */
+function songBandLayers(
+  musicRegion: MusicRegion,
+  style: CollageStyle,
+  verified: boolean,
+  track: TrackWords,
+  measurer: TextMeasurer,
+): { music: SceneMusic | null; artwork: SceneArtwork | null } | string {
+  const mode = musicRegion.mode as SongBandMode
+  const width = runWidth(measurer)
+  const cover = verified && musicRegion.artwork !== null
+  const band = songBandLayout(musicRegion, mode, musicRegion.type, track, width, cover)
+    ?? (mode === 'caption' ? songBandLayout(musicRegion, 'plate', musicRegion.type, track, width, cover) : null)
+  if (band === null) return 'music does not fit its sealed region'
+  const filled = band.filled
+  const music: SceneMusic = {
+    ...musicLayer(
+      track,
+      `${track.title}\n${track.artistDisplay}`,
+      musicRegion,
+      musicRegion.type,
+      opaqueColor(filled ? style.palette.sound : style.palette.paper),
+      opaqueColor(filled ? style.palette.soundInk : style.palette.ink),
+      !filled,
+      band.mode,
+      band.mode === 'card',
+      musicRegion,
+      band.play,
+    ),
+    band,
+  }
+  return { music, artwork: band.cover === null ? null : { region: band.cover, background: opaqueColor(style.palette.sound) } }
+}
+
+/** One unwrapped run's width through the recipient's measurer. */
+export function runWidth(measurer: TextMeasurer): RunWidth {
+  return (text, face) => measurer.measure({
+    text,
+    family: face.family,
+    size: face.size,
+    weight: face.weight,
+    italic: face.italic,
+    line: face.line,
+    maxWidth: Number.POSITIVE_INFINITY,
+    maxHeight: Number.POSITIVE_INFINITY,
+    softWrap: false,
+  }).width
 }
 
 function textLayer(text: string, region: Rect, type: { family: string; size: number; weight: number; italic: boolean; line: number }, color: number): SceneText {

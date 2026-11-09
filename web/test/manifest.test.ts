@@ -256,9 +256,10 @@ describe('content manifest encoder', () => {
     expect(await refusalReason(fractional, CAPSULE, CANDIDATE, blobs)).toBe('fraction')
   })
 
-  it('seals a chosen song as a text band the recipient can open', async () => {
+  it('seals a chosen song as a 64 px band the recipient can open', async () => {
     const expression = await expressionFor('Probe note text.', 3, TRACK)
-    expect(expression.musicRegion).toMatchObject({ x: 16, width: 328, height: 48, mode: 'text', artwork: null })
+    // A short title and artist fit one line, so the plate is sealed as a caption.
+    expect(expression.musicRegion).toMatchObject({ x: 16, width: 328, height: 64, mode: 'caption', artwork: null })
     expect(expression.input.music).toEqual({ trackId: TRACK.trackId, artworkId: null })
     const blobs = blobsFor(expression)
     const encoded = await encodeContentManifest({ expression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobs, track: TRACK })
@@ -269,7 +270,8 @@ describe('content manifest encoder', () => {
     const sources = new Map(expression.input.photos.map((photo) => [photo.contentId, { width: photo.widthPx, height: photo.heightPx }]))
     const scene = await prepare(parsed.expression, parsed.note, parsed.track, sources, measurer)
     if (scene.kind !== 'ready') throw new Error(`prepare refused: ${scene.reason}`)
-    expect(scene.scene.music).toMatchObject({ title: TRACK.title, artist: TRACK.artistDisplay, mode: 'text' })
+    expect(scene.scene.music).toMatchObject({ title: TRACK.title, artist: TRACK.artistDisplay, mode: 'caption' })
+    expect(scene.scene.music?.band?.runs.map((run) => run.text)).toEqual([TRACK.title, TRACK.artistDisplay])
     // The song band lifts the photo field: the last row ends 8 px above it.
     const bottom = Math.max(...expression.placements.map((placement) => placement.y + placement.height))
     expect(bottom).toBeLessThanOrEqual(expression.musicRegion!.y - 8)

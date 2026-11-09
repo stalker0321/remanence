@@ -9,7 +9,8 @@ import {
   type CropWindowInts,
 } from './crop'
 import type { PhotoShape, Rect } from './model'
-import { markColor, markFits, musicLayers, sceneDecor, sourceRect, type TextMeasurer, type TrackWords } from './prepare'
+import { markColor, markFits, musicLayers, runWidth, sceneDecor, sourceRect, type TextMeasurer, type TrackWords } from './prepare'
+import { songBandLayout } from './songBand'
 import {
   ACTIVE_GRAMMAR_IDS,
   applicability,
@@ -461,15 +462,14 @@ export function creatorScene(input: CreatorSceneInput): Scene {
     // is drawn as text, as the recipient sees it when a cover cannot be checked.
     const cover = input.cover ?? null
     const holdsCover = cover !== null && (MUSIC_COVER_MODES_V4 as readonly string[]).includes(input.view.music.mode)
-    // The song words take the style's music type at the largest size, down to
-    // 14, that fits the band, like the marks do. The size is sealed in the
-    // band's type, so any recipient draws exactly this.
-    let layers: ReturnType<typeof musicLayers> = 'music does not fit its sealed region'
-    for (const type of musicTypes(style!)) {
-      const region = { ...input.view.music.region, mode: input.view.music.mode, type, artwork: holdsCover ? cover : null }
-      layers = musicLayers(region, grammarId, style!, true, holdsCover, track, input.measurer!)
-      if (typeof layers !== 'string') break
-    }
+    const type = roleTextType(style!.music)
+    // A plate becomes a one-line caption when the whole line fits (owner, 9 November 2026).
+    const mode = input.view.music.mode === 'plate'
+      && songBandLayout(input.view.music.region, 'caption', type, track, runWidth(input.measurer!), holdsCover) !== null
+      ? 'caption'
+      : input.view.music.mode
+    const region = { ...input.view.music.region, mode, type, artwork: holdsCover ? cover : null }
+    const layers = musicLayers(region, grammarId, style!, true, holdsCover, track, input.measurer!)
     if (typeof layers === 'string') fail(layers)
     music = (layers as Exclude<typeof layers, string>).music
     artwork = (layers as Exclude<typeof layers, string>).artwork
@@ -503,18 +503,6 @@ export function creatorScene(input: CreatorSceneInput): Scene {
     })),
     decor: input.view.decor.map((plane) => sceneDecor(plane.kind, { ...plane.region }, grammarId, style!)),
   }
-}
-
-/** Smallest size the song words step down to. */
-export const MUSIC_MIN_SIZE = 14
-
-/** The style's music type, then each smaller size down to 14, line = ceil(size * 1.12). */
-export function musicTypes(style: CollageStyle): Array<ReturnType<typeof roleTextType>> {
-  const out: Array<ReturnType<typeof roleTextType>> = []
-  for (let size = style.music.size; size >= Math.min(style.music.size, MUSIC_MIN_SIZE); size--) {
-    out.push(roleTextType({ ...style.music, size }))
-  }
-  return out
 }
 
 /** The painted note's wrapped rows, measured the way the recipient measures them. */

@@ -18,6 +18,17 @@ import { CollageError } from './errors'
 export const CANVAS_WIDTH = 360
 export const CANVAS_HEIGHT = 640
 
+/**
+ * Song band rules (owner, 9 November 2026): every horizontal band is a 64 px
+ * plate that fits two lines in the style's own type, and the layout 6 spine
+ * is 56 px wide and carries the title along its length. Bands that are tiles
+ * (11, 24's column), the pulse (24) and the sleeve (20) keep their frozen form.
+ */
+export const BAND = 64
+export const SPINE = 56
+/** Layout 6 hinge: band, sender line and the gap to the lower photos. */
+const HINGE = 4 + BAND + 2 + 18 + 4
+
 export const ACTIVE_GRAMMAR_IDS = [5, 6, 11, 12, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27] as const
 
 export interface GrammarDef {
@@ -303,20 +314,20 @@ function rect(x: number, y: number, width: number, height: number): PlanRect {
 
 function basePlans(d: Input, g: GrammarDef, n: NoteState): Draft[] {
   switch (g.id) {
-    case 5: return baseEditorial(d, g, n)
+    case 5: return baseEditorial(d, n)
     case 6: return baseMusicTransition(d, n)
     case 11: return baseInterlock(d, n)
-    case 12: return baseStrips(d, g, n)
+    case 12: return baseStrips(d, n)
     case 17: return baseMass(d, n)
-    case 18: return baseMount(d, g, n)
+    case 18: return baseMount(d, n)
     case 21: return baseLetterOpening(d, n)
     default: return []
   }
 }
 
-function baseEditorial(d: Input, g: GrammarDef, n: NoteState): Draft[] {
+function baseEditorial(d: Input, n: NoteState): Draft[] {
   const p = d.photos
-  const r0 = closing(d, g, n, 603, 16, 328, 48)
+  const r0 = closing(d, n, 603, 16, 328)
   const prov = [
     brand(rect(12, 4, 340, 75), 64, 'StudySerif'),
     sender(rect(16, 613, 328, 23), 20, 'StudySerif', 'horizontal', true, 400, 'right'),
@@ -353,12 +364,12 @@ function baseMusicTransition(d: Input, n: NoteState): Draft[] {
     for (const frac of [0.52, 0.43, 0.60, 0.28]) {
       for (const power of [0, 1]) {
         for (const stacked of [false, true]) {
-          const h1 = (end - 82) * frac
-          const h2 = end - 82 - h1
-          const music: PlanMusic = { rect: rect(32, h1 + 4, 328, 54), mode: d.music?.artwork === true ? 'thumbnail' : 'text' }
+          const h1 = (end - HINGE) * frac
+          const h2 = end - HINGE - h1
+          const music: PlanMusic = { rect: rect(32, h1 + 4, 328, BAND), mode: 'plate' }
           const prov = [
             brand(rect(3, 8, 24, 612), 22, 'Narrow', 'vertical-up', 700),
-            sender(rect(42, h1 + 60, 304, 18), 14, 'StudySans'),
+            sender(rect(42, h1 + 4 + BAND + 2, 304, 18), 14, 'StudySans'),
           ]
           const a = p.slice(0, split)
           const b = p.slice(split)
@@ -366,7 +377,7 @@ function baseMusicTransition(d: Input, n: NoteState): Draft[] {
             `hinge-${split}+${N - split}-${num(frac)}-${power !== 0 ? 'ratio' : 'equal'}-${stacked ? 'stacked' : 'paired'}`,
             [
               ...bands(a, partRecipe(a.length, stacked), rect(32, 0, 328, h1), { gap: 4, power, zooms: [1.04, 1] }),
-              ...bands(b, partRecipe(b.length, stacked), rect(32, h1 + 82, 328, h2), { gap: 4, power, zooms: [1.04, 1] }),
+              ...bands(b, partRecipe(b.length, stacked), rect(32, h1 + HINGE, 328, h2), { gap: 4, power, zooms: [1.04, 1] }),
             ],
             note, music, prov, [],
           ))
@@ -410,10 +421,10 @@ function baseInterlock(d: Input, n: NoteState): Draft[] {
   return out
 }
 
-function baseStrips(d: Input, g: GrammarDef, n: NoteState): Draft[] {
+function baseStrips(d: Input, n: NoteState): Draft[] {
   const p = d.photos
   const N = p.length
-  const r0 = closing(d, g, n, 602, 28, 322, 44)
+  const r0 = closing(d, n, 602, 28, 322)
   const r = rect(28, 0, 332, r0.end)
   const prov = [
     brand(rect(2, 8, 23, 570), 18, 'StudyMono', 'vertical-down'),
@@ -438,7 +449,7 @@ function baseStrips(d: Input, g: GrammarDef, n: NoteState): Draft[] {
 function baseMass(d: Input, n: NoteState): Draft[] {
   const p = d.photos
   const N = p.length
-  const r0 = closing(d, grammarDef(17), n, 532, 16, 328, 44)
+  const r0 = closing(d, n, 532, 16, 328)
   const prov = [
     sender(rect(10, 543, 340, 19), 15, 'StudySans', 'horizontal', false, 400, 'right'),
     brand(rect(6, 565, 350, 75), 72, 'Narrow', 'horizontal', 700),
@@ -460,9 +471,9 @@ function baseMass(d: Input, n: NoteState): Draft[] {
   return out
 }
 
-function baseMount(d: Input, g: GrammarDef, n: NoteState): Draft[] {
+function baseMount(d: Input, n: NoteState): Draft[] {
   const p = d.photos
-  const r0 = closing(d, g, n, 587, 44, 290, 48)
+  const r0 = closing(d, n, 587, 44, 290)
   const r = rect(34, 14, 316, r0.end - 14)
   const prov = [
     brand(rect(10, 23, 22, 555), 19, 'StudySans', 'vertical-up'),
@@ -492,7 +503,7 @@ function baseMount(d: Input, g: GrammarDef, n: NoteState): Draft[] {
 function baseLetterOpening(d: Input, n: NoteState): Draft[] {
   const p = d.photos
   const N = p.length
-  const end = d.music !== null ? 574 : 637
+  const end = d.music !== null ? 634 - BAND - 10 : 637
   const out: Draft[] = []
   for (const openingH of [205, 166, 245]) {
     for (const power of [0, 1]) {
@@ -502,7 +513,7 @@ function baseLetterOpening(d: Input, n: NoteState): Draft[] {
         sender(rect(12, openingH + 16, 151, 33), 25, 'StudySerif', 'horizontal', true),
         brand(rect(12, end - 28, 145, 24), 22, 'StudySerif'),
       ]
-      const music: PlanMusic | null = d.music !== null ? { rect: rect(12, 584, 336, 50), mode: 'text' } : null
+      const music: PlanMusic | null = d.music !== null ? { rect: rect(12, 634 - BAND, 336, BAND), mode: 'plate' } : null
       out.push(plan(
         `letter-opening-${num(openingH)}-${num(power)}`,
         [
@@ -527,9 +538,9 @@ function addMusicTransitionSpines(d: Input, measure: PlanMeasure, out: Draft[]):
   for (const frac of [0.52, 0.43]) {
     const leftCount = Math.ceil(N / 2)
     const rightCount = N - leftCount
-    const music: PlanMusic = { rect: rect(156, 0, 48, bottom - 24), mode: 'spine' }
-    const a = bands(p.slice(0, leftCount), ones(leftCount), rect(0, 0, 153, bottom - 24), { gap: 5, zooms: [1.08, 1] })
-    const b = bands(p.slice(leftCount), ones(rightCount), rect(207, 0, 153, bottom - 24), { gap: 5, zooms: [1.08, 1] })
+    const music: PlanMusic = { rect: rect(152, 0, SPINE, bottom - 24), mode: 'card' }
+    const a = bands(p.slice(0, leftCount), ones(leftCount), rect(0, 0, 149, bottom - 24), { gap: 5, zooms: [1.08, 1] })
+    const b = bands(p.slice(leftCount), ones(rightCount), rect(211, 0, 149, bottom - 24), { gap: 5, zooms: [1.08, 1] })
     out.push(plan(
       `sound-spine-${leftCount}/${rightCount}-${num(frac)}`,
       [...a, ...b], note, music,
@@ -576,9 +587,9 @@ function plansLetterMargin(d: Input, g: GrammarDef, n: NoteState, measure: PlanM
     for (const topH of [240, 290, 340]) {
       const sy = topH + 14
       const ny = sy + 36
-      const music: PlanMusic | null = d.music !== null ? { rect: rect(18, 586, 324, 47), mode: 'inline' } : null
+      const music: PlanMusic | null = d.music !== null ? { rect: rect(18, 633 - BAND, 324, BAND), mode: 'plate' } : null
       const note: PlanNote = { ...full, rect: rect(full.rect.x, ny, full.rect.width, full.rect.height) }
-      const end = music !== null ? 580 : 611
+      const end = music !== null ? 627 - BAND : 611
       if (note.rect.y + note.rect.height <= end) {
         const rec = N === 3 ? [1, 2] : N === 4 ? [2, 2] : [2, 3]
         out.push(plan(
@@ -587,7 +598,7 @@ function plansLetterMargin(d: Input, g: GrammarDef, n: NoteState, measure: PlanM
           note, music,
           [
             sender(rect(18, sy, 324, 31), 27, 'StudySerif', 'horizontal', true),
-            brand(rect(18, music !== null ? 562 : 617, 324, 20), 18, 'StudySerif', 'horizontal', 400, 'right'),
+            brand(rect(18, music !== null ? 609 - BAND : 617, 324, 20), 18, 'StudySerif', 'horizontal', 400, 'right'),
           ],
           [],
         ))
@@ -596,8 +607,10 @@ function plansLetterMargin(d: Input, g: GrammarDef, n: NoteState, measure: PlanM
   }
   if (d.note !== null && N <= 4) {
     const text = noteAt(d, 10, 51, 140, 26, 'StudySerif', 3, measure)
-    if (text !== null && text.rect.height >= 360 && text.rect.height <= 492) {
-      const end = d.music !== null ? 574 : 611
+    // With a song the brand sits above the taller band, so the letter column is shorter.
+    const tallest = d.music !== null ? 492 - (BAND - 49) : 492
+    if (text !== null && text.rect.height >= 360 && text.rect.height <= tallest) {
+      const end = d.music !== null ? 632 - BAND - 9 : 611
       const tiles = bands(p, p.map(() => 1), rect(162, 0, 198, end), {
         gap: 7,
         weights: p.map((photo) => Math.min(1.6, photo.height / photo.width)),
@@ -607,10 +620,10 @@ function plansLetterMargin(d: Input, g: GrammarDef, n: NoteState, measure: PlanM
         'letter-full-height-counterpoint',
         tiles,
         { ...text, rect: rect(10, 51, 140, text.rect.height) },
-        d.music !== null ? sound(d, rect(10, 583, 340, 49), 'inline') : null,
+        d.music !== null ? sound(d, rect(10, 632 - BAND, 340, BAND), 'plate') : null,
         [
           sender(rect(10, 10, 143, 29), 24, 'StudySerif', 'horizontal', true),
-          brand(rect(10, 550, 141, 23), 21, 'StudySerif'),
+          brand(rect(10, d.music !== null ? 550 - (BAND - 49) : 550, 141, 23), 21, 'StudySerif'),
         ],
         [],
       ))
@@ -633,8 +646,8 @@ function addFirstLight(d: Input, measure: PlanMeasure, out: Draft[]): void {
     for (const rhythm of rhythms) {
       const note = noteAt(d, 18, heroH + 47, 324, 27, 'StudySerif', 3, measure)
       const ny = note !== null ? note.rect.y + note.rect.height + 13 : heroH + 48
-      const music = sound(d, rect(12, 563, 336, 47), 'inline')
-      const ph = (music !== null ? 555 : 606) - ny
+      const music = sound(d, rect(12, 610 - BAND, 336, BAND), 'plate')
+      const ph = (music !== null ? 602 - BAND : 606) - ny
       const hero = tile(p[0]!, rect(0, 0, 360, heroH), 'rect', [1.07, 1], 'human-anchor')
       out.push(plan(
         `human-hinge-${num(heroH)}-${rhythm.join('+')}`,
@@ -658,7 +671,7 @@ function addOpenWindows(d: Input, measure: PlanMeasure, out: Draft[]): void {
       const note = noteAt(d, 14, 0, 332, 24, 'StudySans', 3, measure)
       const bottom = note !== null ? 603 - note.rect.height : 603
       if (note !== null) note.rect.y = bottom
-      const music = sound(d, rect(12, bottom - 64, 336, 49), 'inline')
+      const music = sound(d, rect(12, bottom - 15 - BAND, 336, BAND), 'plate')
       const end = music !== null ? music.rect.y - 10 : bottom - 12
       const y = heroH + 39
       const h = end - y
@@ -765,7 +778,7 @@ function addOffsetPrints(d: Input, measure: PlanMeasure, out: Draft[]): void {
     const note = noteAt(d, 17, 0, 326, 26, 'StudySerif', 3, measure)
     const end = note !== null ? 599 - note.rect.height : 599
     if (note !== null) note.rect.y = end
-    const music = sound(d, rect(12, end - 61, 336, 48), 'inline')
+    const music = sound(d, rect(12, end - 13 - BAND, 336, BAND), 'plate')
     const photoEnd = music !== null ? music.rect.y - 35 : end - 35
     const gap = 9
     const total = h * 3 + gap * 2
@@ -786,7 +799,7 @@ function addOffsetPrints(d: Input, measure: PlanMeasure, out: Draft[]): void {
   const note = noteAt(d, 17, 0, 326, 26, 'StudySerif', 3, measure)
   const end = note !== null ? 599 - note.rect.height : 599
   if (note !== null) note.rect.y = end
-  const music = sound(d, rect(12, end - 61, 336, 48), 'inline')
+  const music = sound(d, rect(12, end - 13 - BAND, 336, BAND), 'plate')
   const photoEnd = music !== null ? music.rect.y - 35 : end - 35
   for (const topH of [222, 260]) {
     const tiles = [
@@ -812,7 +825,7 @@ function addRibbon(d: Input, measure: PlanMeasure, out: Draft[]): void {
   const note = noteAt(d, 18, 0, 324, 26, 'StudySerif', 3, measure)
   const bottom = note !== null ? 594 - note.rect.height : 594
   if (note !== null) note.rect.y = bottom
-  const music = sound(d, rect(14, bottom - 55, 332, 47), 'inline')
+  const music = sound(d, rect(14, bottom - 8 - BAND, 332, BAND), 'plate')
   const end = music !== null ? music.rect.y - 8 : bottom - 8
   for (const rhythm of [1, 1.35]) {
     const heights = p.map((_, i) => (i === 1 ? rhythm : 1))
@@ -873,7 +886,7 @@ function addMonument(d: Input, measure: PlanMeasure, out: Draft[]): void {
     const note = noteAt(d, 14, 0, 332, 25, 'StudySerif', 3, measure)
     const bottom = note !== null ? 598 - note.rect.height : 598
     if (note !== null) note.rect.y = bottom
-    const music = sound(d, rect(10, bottom - 61, 340, 49), 'inline')
+    const music = sound(d, rect(10, bottom - 12 - BAND, 340, BAND), 'plate')
     const end = music !== null ? music.rect.y - 30 : bottom - 30
     const hero = tile(p[0]!, rect(0, 0, 355 - sideW, end), 'rect', [1.08, 1], 'vertical-anchor')
     const replies = bands(p.slice(1), ones(N - 1), rect(360 - sideW, 0, sideW, end), { gap: 6, zooms: [1.04, 1] })
@@ -921,12 +934,10 @@ function sound(d: Input, r: PlanRect, mode: string): PlanMusic | null {
   return { rect: r, mode: music.artwork ? mode : mode === 'sleeve' ? 'sleeve-empty' : mode }
 }
 
-function closing(d: Input, g: GrammarDef, n: NoteState, end: number, x: number, w: number, mh: number): { note: PlanNote | null; music: PlanMusic | null; end: number } {
+function closing(d: Input, n: NoteState, end: number, x: number, w: number): { note: PlanNote | null; music: PlanMusic | null; end: number } {
   const note = n.height > 0 ? noteOf(rect(x, end - n.height, n.width, n.height), n) : null
   let top = note !== null ? note.rect.y - 10 : end
-  const music: PlanMusic | null = d.music !== null
-    ? { rect: rect(x, top - mh, w, mh), mode: d.music.artwork && g.artwork !== 'ignored' ? 'thumbnail' : 'text' }
-    : null
+  const music: PlanMusic | null = d.music !== null ? { rect: rect(x, top - BAND, w, BAND), mode: 'plate' } : null
   if (music !== null) top = music.rect.y - 8
   return { note, music, end: top }
 }

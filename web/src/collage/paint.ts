@@ -1,3 +1,4 @@
+import type { SongBandLayout } from './songBand'
 import { bandLayout, placeCover, roundRadii } from './geometry'
 import { paintCreatorNote } from './creatorNote'
 import type { PhotoShape, Rect } from './model'
@@ -34,7 +35,7 @@ export function drawList(scene: Scene, images: ReadonlyMap<string, DrawableSourc
   if (scene.artwork) ops.push({ kind: 'music-artwork' })
   if (scene.music) {
     ops.push({ kind: 'music-text' })
-    if (scene.artwork === null && scene.music.playRegion) ops.push({ kind: 'music-play' })
+    if (scene.artwork === null && scene.music.playRegion && !scene.music.band) ops.push({ kind: 'music-play' })
   }
   scene.provenance.forEach((_, index) => ops.push({ kind: 'provenance', index }))
   return ops
@@ -114,7 +115,8 @@ export function paintScene(
     } else if (op.kind === 'music-artwork' && scene.artwork) {
       paintCover(context, scene, artwork)
     } else if (op.kind === 'music-text' && scene.music) {
-      if (scene.music.vertical) paintSpine(context, scene)
+      if (scene.music.band) paintSongBand(context, scene.music, scene.music.band)
+      else if (scene.music.vertical) paintSpine(context, scene)
       else writeText(context, scene.music.text, scene.music.copyRegion, scene.music, scene.music.color, true)
     } else if (op.kind === 'music-play' && scene.music?.playRegion) {
       paintPlay(context, scene.music.playRegion, scene.music)
@@ -153,6 +155,10 @@ function paintCover(context: CanvasRenderingContext2D, scene: Scene, artwork: Pa
   }
   if (!track) {
     contain(context, artwork, region)
+    return
+  }
+  if (track.band) {
+    if (track.band.cover) cover(context, artwork, track.band.cover)
     return
   }
   const placement = placeCover(region, scene.grammarId, track.mode)
@@ -206,6 +212,54 @@ function paintSpine(context: CanvasRenderingContext2D, scene: Scene): void {
     context.font = fontOf(artistFace)
     context.fillText(track.artist, 0, artistFace.size)
   })
+}
+
+/** The 9 November 2026 song band: runs, divider and play control from the shared layout. */
+function paintSongBand(context: CanvasRenderingContext2D, track: NonNullable<Scene['music']>, band: SongBandLayout): void {
+  context.fillStyle = css(track.color)
+  if (band.divider) context.fillRect(band.divider.x, band.divider.y, band.divider.width, band.divider.height)
+  for (const run of band.runs) {
+    context.font = fontOf(run.face)
+    context.fillStyle = css(track.color)
+    if (run.vertical) {
+      // Reads bottom to top: the line box spans x .. x + line, the run ends at y.
+      rotated(context, run.x, run.y, () => {
+        context.rotate(-Math.PI / 2)
+        context.fillText(run.text, 0, run.face.size)
+      }, false)
+    } else {
+      context.fillText(run.text, run.x, run.y + run.face.size)
+    }
+  }
+  const play = band.play
+  const cx = play.x + play.width / 2
+  const cy = play.y + play.height / 2
+  const radius = Math.min(play.width, play.height) / 2
+  const triangle = (size: number, color: number) => {
+    context.beginPath()
+    context.fillStyle = css(color)
+    context.moveTo(cx - size * 0.36, cy - size * 0.5)
+    context.lineTo(cx + size * 0.5, cy)
+    context.lineTo(cx - size * 0.36, cy + size * 0.5)
+    context.closePath()
+    context.fill()
+  }
+  if (band.playStyle === 'glyph') {
+    triangle(Math.min(play.width, play.height), track.color)
+  } else if (band.playStyle === 'ring') {
+    context.beginPath()
+    context.strokeStyle = css(track.color)
+    context.lineWidth = 2
+    context.arc(cx, cy, radius - 1, 0, Math.PI * 2)
+    context.stroke()
+    triangle(radius * 0.7, track.color)
+  } else {
+    context.beginPath()
+    context.fillStyle = css(track.color)
+    context.arc(cx, cy, radius, 0, Math.PI * 2)
+    context.fill()
+    triangle(radius * 0.7, track.background)
+  }
 }
 
 function paintMark(context: CanvasRenderingContext2D, mark: Scene['provenance'][number]): void {

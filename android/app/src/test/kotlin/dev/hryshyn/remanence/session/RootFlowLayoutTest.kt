@@ -1,5 +1,6 @@
 package dev.hryshyn.remanence.session
 
+import dev.hryshyn.remanence.ui.create.CreateFrontFixture
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
@@ -33,7 +34,6 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -56,6 +56,7 @@ import dev.hryshyn.remanence.core.recognition.RecognitionProfile
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w320dp-h480dp")
 class RootFlowLayoutTest {
 
@@ -139,14 +140,22 @@ class RootFlowLayoutTest {
         accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
             File(context().filesDir, "root-flow-staging"),
         ),
-        openPhotoSource = { error("unused") },
+        generatorBridgeProvider = dev.hryshyn.remanence.create.MemoryGeneratorBridge().provider,
+        generatorPreviewLoader = dev.hryshyn.remanence.ui.create.CollageFreezeFixture.previewLoader {
+            dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(it)
+        },
+        openPhotoSource = { id ->
+            dev.hryshyn.remanence.create.PhotoSource {
+                java.io.ByteArrayInputStream(dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id))
+            }
+        },
         frontProcessor = RejectingProcessor(),
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
         senderRetryKeysetWrapper = testWrapper,
         senderRetryKekAlias = testAlias,
         enqueueUpload = { _, _ -> },
-    ).also { it.beginSession(1L) }
+    ).also { it.beginSession(1L, "11111111-2222-4333-8444-555555555555") }
 
     private fun context(): Context = ApplicationProvider.getApplicationContext()
 
@@ -156,6 +165,7 @@ class RootFlowLayoutTest {
         // Straight to FRONT through legal recipient events.
         vm.onResolved(SelfSnapshots.self())
         vm.confirmRecipient()
+        CreateFrontFixture.reachCamera(vm)
 
         val live = AtomicReference<FakeStillCameraAdapter?>(null)
         var exited = false
@@ -228,10 +238,12 @@ class RootFlowLayoutTest {
         composeRule.onNodeWithTag("quality_reason_TOO_BLURRY").assertIsDisplayed()
 
         // Header STILL displayed after the rejection - it owns its own space,
-        // and its action actually exits the flow.
+        // and its close asks before dropping the draft, then exits the flow.
         composeRule.onNodeWithTag("flow_exit_create")
             .assertIsDisplayed()
             .performClick()
+        composeRule.runOnIdle { assertTrue("close must ask first", !exited) }
+        composeRule.onNodeWithTag("create_discard_confirm").performClick()
         composeRule.runOnIdle { assertTrue("exit must fire", exited) }
 
     }

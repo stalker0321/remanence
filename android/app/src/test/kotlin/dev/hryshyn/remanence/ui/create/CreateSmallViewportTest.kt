@@ -58,6 +58,7 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35])
 class CreateSmallViewportTest {
 
@@ -151,7 +152,15 @@ class CreateSmallViewportTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
                 File(context().filesDir, "small-vp-staging"),
             ),
-            openPhotoSource = { error("unused") },
+            generatorBridgeProvider = dev.hryshyn.remanence.create.MemoryGeneratorBridge().provider,
+        generatorPreviewLoader = dev.hryshyn.remanence.ui.create.CollageFreezeFixture.previewLoader {
+            dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(it)
+        },
+        openPhotoSource = { id ->
+            dev.hryshyn.remanence.create.PhotoSource {
+                java.io.ByteArrayInputStream(dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id))
+            }
+        },
             frontProcessor = RejectingThenAccepting(),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
@@ -159,11 +168,12 @@ class CreateSmallViewportTest {
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
         )
-        vm.beginSession(1L)
+        vm.beginSession(1L, "11111111-2222-4333-8444-555555555555")
 
         // Reach the FRONT capture step through legal recipient events first.
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
+        CreateFrontFixture.reachCamera(vm)
 
         val live = AtomicReference<FakeStillCameraAdapter?>(null)
         composeRule.setContent {
@@ -240,7 +250,15 @@ class CreateSmallViewportTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
                 File(context().filesDir, "small-vp-staging"),
             ),
-            openPhotoSource = { error("unused") },
+            generatorBridgeProvider = dev.hryshyn.remanence.create.MemoryGeneratorBridge().provider,
+        generatorPreviewLoader = dev.hryshyn.remanence.ui.create.CollageFreezeFixture.previewLoader {
+            dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(it)
+        },
+        openPhotoSource = { id ->
+            dev.hryshyn.remanence.create.PhotoSource {
+                java.io.ByteArrayInputStream(dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id))
+            }
+        },
             frontProcessor = StillProcessor {
                 ProcessedStill.Accepted(
                     "postcard-sift-rootsift-v1",
@@ -253,7 +271,7 @@ class CreateSmallViewportTest {
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
         )
-        vm.beginSession(1L)
+        vm.beginSession(1L, "11111111-2222-4333-8444-555555555555")
 
         // Land directly on CONTENT with three photos and an oversized note.
         vm.onResolved(selfSnapshot())
@@ -296,7 +314,15 @@ class CreateSmallViewportTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
                 File(context().filesDir, "small-vp-staging"),
             ),
-            openPhotoSource = { error("unused") },
+            generatorBridgeProvider = dev.hryshyn.remanence.create.MemoryGeneratorBridge().provider,
+        generatorPreviewLoader = dev.hryshyn.remanence.ui.create.CollageFreezeFixture.previewLoader {
+            dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(it)
+        },
+        openPhotoSource = { id ->
+            dev.hryshyn.remanence.create.PhotoSource {
+                java.io.ByteArrayInputStream(dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id))
+            }
+        },
             frontProcessor = RejectingThenAccepting(),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
@@ -304,9 +330,10 @@ class CreateSmallViewportTest {
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
         )
-        vm.beginSession(1L)
+        vm.beginSession(1L, "11111111-2222-4333-8444-555555555555")
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
+        CreateFrontFixture.reachCamera(vm)
 
         val live = AtomicReference<FakeStillCameraAdapter?>(null)
         composeRule.setContent {
@@ -391,7 +418,15 @@ class CreateSmallViewportTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
                 File(context().filesDir, "small-vp-order-staging"),
             ),
-            openPhotoSource = { error("unused") },
+            generatorBridgeProvider = dev.hryshyn.remanence.create.MemoryGeneratorBridge().provider,
+        generatorPreviewLoader = dev.hryshyn.remanence.ui.create.CollageFreezeFixture.previewLoader {
+            dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(it)
+        },
+        openPhotoSource = { id ->
+            dev.hryshyn.remanence.create.PhotoSource {
+                java.io.ByteArrayInputStream(dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id))
+            }
+        },
             frontProcessor = StillProcessor {
                 ProcessedStill.Accepted(
                     "postcard-sift-rootsift-v1",
@@ -404,7 +439,7 @@ class CreateSmallViewportTest {
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
         )
-        vm.beginSession(1L)
+        vm.beginSession(1L, "11111111-2222-4333-8444-555555555555")
 
         // Land directly on CONTENT through the production gates.
         vm.onResolved(selfSnapshot())

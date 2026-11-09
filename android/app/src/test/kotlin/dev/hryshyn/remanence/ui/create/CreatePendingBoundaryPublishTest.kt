@@ -267,7 +267,8 @@ class CreatePendingBoundaryPublishTest {
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         CollageFreezeFixture.freezeFirstCandidate(vm)
-        assertTrue(vm.goToCompose())
+        val composed = vm.goToCompose()
+        assertTrue("compose refused: ${vm.flowError.value}", composed)
         assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
     }
 

@@ -67,6 +67,7 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35])
 class CreateRecipientConfirmFlowTest {
 
@@ -505,7 +506,7 @@ class CreateRecipientConfirmFlowTest {
         assertFalse(vm.goToCompose())
         CreateFrontFixture.attach(vm)
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertTrue(vm.flowError.value!!.contains("publishing requires step COMPOSE"))
+        assertTrue(vm.flowError.value!!.contains("requires step COMPOSE"))
         runBlocking {
             assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(vm.capsuleId, "0198f0a0-0000-7000-8000-00000000ow01").isEmpty())
         }

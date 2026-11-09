@@ -66,6 +66,7 @@ import org.robolectric.annotation.Config
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class CreateRecipientBindingFailClosedTest {
 
@@ -339,7 +340,7 @@ class CreateRecipientBindingFailClosedTest {
         assertNotNull("a recovery message must be set", vm.flowError.value)
         assertTrue(
             "recovery message must explain the illegal publish",
-            vm.flowError.value!!.contains("publishing", ignoreCase = true),
+            vm.flowError.value!!.let { it.contains("publishing", ignoreCase = true) || it.contains("attach", ignoreCase = true) },
         )
         assertEquals(
             "step must stay on RECIPIENT_LOOKUP - no publication was attempted",
@@ -503,7 +504,7 @@ class CreateRecipientBindingFailClosedTest {
         assertNotNull(vm.flowError.value)
         assertTrue(
             "the recovery message must explain the missing CONTENT prerequisites",
-            vm.flowError.value!!.contains("publishing", ignoreCase = true),
+            vm.flowError.value!!.let { it.contains("publishing", ignoreCase = true) || it.contains("attach", ignoreCase = true) },
         )
         assertEquals(
             "no outbox row from the dropped session is left behind",

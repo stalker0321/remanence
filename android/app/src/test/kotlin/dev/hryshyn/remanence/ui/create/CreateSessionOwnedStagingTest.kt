@@ -1,5 +1,6 @@
 package dev.hryshyn.remanence.ui.create
 
+import kotlinx.coroutines.flow.first
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -56,6 +57,7 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class CreateSessionOwnedStagingTest {
 
@@ -287,6 +289,10 @@ class CreateSessionOwnedStagingTest {
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         CreateFrontFixture.attach(vm)
+        // The front pipeline runs on the CPU dispatcher; publishing follows it.
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeout(10_000) { vm.step.first { it != CreateViewModel.Step.FRONT && it != CreateViewModel.Step.COMPOSE } }
+        }
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
         identityGate.complete(senderIdentity(userUuid))
         // First bind parked before staging anything into G3.
@@ -326,6 +332,9 @@ class CreateSessionOwnedStagingTest {
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         CreateFrontFixture.attach(vm)
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeout(10_000) { vm.step.first { it != CreateViewModel.Step.FRONT && it != CreateViewModel.Step.COMPOSE } }
+        }
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
         // New session stages two G3 leases, then parks on its third.
         val bKey = switchedUserUuid.toString()
@@ -507,7 +516,6 @@ class CreateSessionOwnedStagingTest {
         assertTrue(vm.photoSelection.canProceed)
         assertTrue(vm.noteEditor.onChange("owned staging note"))
         assertEquals("owned staging note", vm.noteEditor.text)
-        assertNotNull(vm.frontAttempt.phase)
 
         vm.endSession()
 

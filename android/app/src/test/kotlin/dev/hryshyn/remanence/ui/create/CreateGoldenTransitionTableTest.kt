@@ -44,6 +44,7 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class CreateGoldenTransitionTableTest {
 
@@ -246,7 +247,7 @@ class CreateGoldenTransitionTableTest {
         Row(CONTENT, "back", Outcome.UNCHANGED_OK),
         Row(CONTENT, "publish", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(CONTENT, "beginFront", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(CONTENT, "confirm", Outcome.UNCHANGED_VISIBLE_ERROR),
+        Row(CONTENT, "confirm", Outcome.UNCHANGED_OK), // a queued second tap on confirm
         Row(CONTENT, "resolve", Outcome.UNCHANGED_VISIBLE_ERROR),
         // COMPOSE
         Row(COMPOSE, "publish", Outcome.TRANSITION_TO_TARGET, FRONT),

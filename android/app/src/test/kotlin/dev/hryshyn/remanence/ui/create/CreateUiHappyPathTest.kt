@@ -368,6 +368,10 @@ class CreateUiHappyPathTest {
         composeRule.onNodeWithTag("capture_shutter_front").performClick()
         composeRule.runOnIdle { live.get()!!.deliverFrame("front-frame".toByteArray()) }
         composeRule.waitForIdle()
+        // Back on the composed sheet, publishing starts once it is drawable again.
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            vm.step.value != CreateViewModel.Step.COMPOSE && vm.step.value != CreateViewModel.Step.FRONT
+        }
 
         // Durable staging completes on Room's own executors; await terminal.
         val deadline = System.currentTimeMillis() + 10_000

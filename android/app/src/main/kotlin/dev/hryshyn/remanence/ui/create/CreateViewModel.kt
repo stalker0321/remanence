@@ -541,6 +541,13 @@ class CreateViewModel(
     /** Drawable inputs recorded alongside the frozen selection, if any. */
     private var frozenDrawableInputs: PrepareInputs? by mutableStateOf(null)
 
+    /**
+     * The front was just captured, but the composed sheet left the screen
+     * while the camera was up and its drawable proof went with it. Publishing
+     * waits for the returning host to prepare the same sheet again.
+     */
+    private var publishWhenDrawable = false
+
     internal val isFrozenCollageDrawable: Boolean
         get() = frozenCollageSelection != null && frozenDrawableInputs == prepareInputs()
 
@@ -574,12 +581,17 @@ class CreateViewModel(
             if (frozenCollageSelection?.candidateId == candidateId &&
                 collageChoices.selected?.candidateId == candidateId) {
                 frozenDrawableInputs = inputs
+                if (publishWhenDrawable && _step.value == Step.COMPOSE && frontFingerprintId != null) {
+                    publishWhenDrawable = false
+                    startPublishing()
+                }
             }
         } else {
             drawableInputs.remove(candidateId)
             if (frozenCollageSelection?.candidateId == candidateId) {
                 frozenCollageSelection = null
                 frozenDrawableInputs = null
+                publishWhenDrawable = false
             }
         }
     }
@@ -1667,7 +1679,7 @@ class CreateViewModel(
     fun confirmRecipient() {
         // A second tap queued before confirmation unmounts is not a new
         // recipient operation. Keep the immutable confirmed snapshot.
-        if (_step.value == Step.FRONT && confirmedRecipient.value != null) return
+        if (_step.value == Step.CONTENT && confirmedRecipient.value != null) return
         if (!requireStep(Step.RECIPIENT_CONFIRM, "recipient confirmation")) return
         pendingPickerResolution?.let { resolution ->
             if (pickerVm.state.value !== resolution) {
@@ -1770,7 +1782,7 @@ class CreateViewModel(
                 clearGuardError()
                 // "use this postcard" is the last step: attach what was composed.
                 _step.value = Step.COMPOSE
-                startPublishing()
+                if (isFrozenCollageDrawable) startPublishing() else publishWhenDrawable = true
             }
             // Rejected/Failed/Superseded stay on FRONT; reasons and failure
             // messages live on the authoritative controller.
@@ -1953,8 +1965,40 @@ class CreateViewModel(
     fun backToRecipient(): Boolean {
         // CONTENT is the step right after the recipient now; FRONT kept for safety.
         if (_step.value != Step.CONTENT && _step.value != Step.FRONT) return false
+        freshDraftIdentity()
         _step.value = Step.RECIPIENT_LOOKUP
         return true
+    }
+
+    /**
+     * Another recipient is another postcard: a fresh draft identity that
+     * keeps the photos and words. Nothing composed, captured or routed for
+     * the previous identity can be published under the new one.
+     */
+    private fun freshDraftIdentity() {
+        createSessionGeneration += 1
+        deliveryGeneration += 1
+        cancelDeliveryAndRetry()
+        // FRONT baselines are immutable per capsule; never overwrite/delete
+        // the old baseline (an earlier publication may still own it).
+        cancelPublishingLocked()
+        dropGeneratorBound { bridge, context, sessionId ->
+            bridge.cancel(context, sessionId)
+        }
+        clearFrozenCollageSelection()
+        publishWhenDrawable = false
+        outboxObservationJob?.cancel()
+        outboxObservationJob = null
+        _capsuleId = UUID.randomUUID().toString()
+        // T186 M12e-cap: the frozen pending route is bound to the old id.
+        sessionStore.clearPendingRoute()
+        collageChoices.beginDraft(_capsuleId)
+        _publishError.value = null
+        _uploadStatus.value = CreateUploadStatus.NotStarted
+        observeCurrentOutbox(sessionOwner, _capsuleId, createSessionGeneration)
+        frontFingerprintId = null
+        frontAttempt.restartCapture()
+        clearGuardError()
     }
 
     /**
@@ -1981,6 +2025,7 @@ class CreateViewModel(
     }
 
     fun startPublishing() {
+        publishWhenDrawable = false
         if (pendingFinalizeAttempt == (sessionOwner to _capsuleId)) {
             if (_step.value != Step.PUBLISHED) {
                 if (_uploadStatus.value !is CreateUploadStatus.PublicationIssue)
@@ -2291,6 +2336,7 @@ class CreateViewModel(
         frozenCollageSelection = null
         frozenDrawableInputs = null
         clearDrawableProofs()
+        publishWhenDrawable = false
         // T157 §6: photo/note edits change the expression identity, so
         // per-photo corrections are dropped fail-closed (no cross-slot reuse).
         clearCropState()
@@ -2390,6 +2436,7 @@ class CreateViewModel(
         frozenCollageSelection = null
         frozenDrawableInputs = null
         clearDrawableProofs()
+        publishWhenDrawable = false
         clearCropState()
         clearCollageDiagnostics()
     }

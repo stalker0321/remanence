@@ -52,6 +52,7 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class CreateTransitionTableTest {
 

@@ -44,6 +44,7 @@ import org.robolectric.annotation.Config
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class CreatePendingRouteStepTest {
 

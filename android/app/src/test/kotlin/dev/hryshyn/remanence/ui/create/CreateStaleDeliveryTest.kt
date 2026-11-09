@@ -47,6 +47,7 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class CreateStaleDeliveryTest {
 
@@ -135,6 +136,8 @@ class CreateStaleDeliveryTest {
                     java.io.ByteArrayInputStream(dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id))
                 }
             },
+            generatorBridgeProvider = dev.hryshyn.remanence.create.MemoryGeneratorBridge().provider,
+            generatorPreviewLoader = CollageFreezeFixture.previewLoader { dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(it) },
             frontProcessor = processor,
             cpuDispatcher = cpuDispatcher,
             ioDispatcher = cpuDispatcher,
@@ -142,7 +145,7 @@ class CreateStaleDeliveryTest {
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
         )
-        vm.beginSession(1L)
+        vm.beginSession(1L, "11111111-2222-4333-8444-555555555555")
 
         // Compose and attach (the camera comes last), then begin a capture
         // whose pipeline is parked in the queue.

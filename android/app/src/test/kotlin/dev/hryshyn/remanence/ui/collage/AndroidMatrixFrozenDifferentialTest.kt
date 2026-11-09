@@ -141,7 +141,9 @@ class AndroidMatrixFrozenDifferentialTest {
         var compared = 0
         var feasible = 0
 
-        for (fx in resolveFixtures()) {
+        // The two song fixtures record the frozen 48 px band; the 9 November 2026 band
+        // rules moved those tiles, and the shared plan reference covers that geometry.
+        for (fx in resolveFixtures().filter { !it.music }) {
             val matrixPhotos = fx.photoOrder.map { row ->
                 CropMatrixPhoto(row.id, row.width, row.height, analyses["${fx.id}|${row.id}"])
             }

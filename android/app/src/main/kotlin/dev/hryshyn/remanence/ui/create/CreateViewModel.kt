@@ -869,10 +869,13 @@ class CreateViewModel(
                 dev.hryshyn.remanence.ui.collage.CollageRenderer.markFits(measurer, mark, shown, tracking)
             }
         }
+        // The song band's caption choice reads the same words and widths the canvas draws.
+        val songWords = collageChooserTrack?.let { dev.hryshyn.remanence.ui.collage.SongBand.Words(it.title, it.artistDisplay) }
+        val runWidth = textMeasurer?.let { dev.hryshyn.remanence.ui.collage.CollageRenderer.runWidth(it) }
         val sealed = ArrayList<CollageCandidate>(outcome.candidates.size)
         for (candidate in outcome.candidates) {
           for (style in AllFamilyV4Adapter.stylesForGrammar(candidate.grammarId)) {
-            val sealedOutcome = AllFamilyV4Adapter.seal(candidate, input, senderHandle, style, artwork, markFits)
+            val sealedOutcome = AllFamilyV4Adapter.seal(candidate, input, senderHandle, style, artwork, markFits, songWords, runWidth)
             if (sealedOutcome !is AllFamilyV4Adapter.Outcome.Sealed) continue
             sealed += CollageCandidate(
                 candidateId = GeneratorBer1Provider.candidateIdFor(sealedOutcome.expression),

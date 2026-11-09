@@ -85,6 +85,21 @@ class CollageTextMeasurer(
         )
     }
 
+    /** One song-band run, unwrapped, in its own face. */
+    fun layoutRun(run: SongBand.Run): TextLayoutResult = layout(
+        CollageRenderer.TextMeasureRequest(
+            text = run.text,
+            family = run.face.family,
+            size = run.face.size,
+            weight = run.face.weight,
+            italic = run.face.italic,
+            line = run.face.line,
+            maxWidth = Int.MAX_VALUE,
+            maxHeight = Int.MAX_VALUE,
+            softWrap = false,
+        ),
+    )
+
     override fun measure(request: CollageRenderer.TextMeasureRequest): CollageRenderer.TextMeasurement {
         val layout = layout(request)
         return CollageRenderer.TextMeasurement(
@@ -284,11 +299,14 @@ fun CollageCanvas(
     val note = scene.note
     val music = scene.music
     val noteLayout = note?.let { remember(it, textMeasurer) { textMeasurer.layout(it.toMeasureRequest()) } }
-    val musicLayout = music?.takeIf { !it.vertical }?.let {
+    val musicLayout = music?.takeIf { !it.vertical && it.band == null }?.let {
         remember(it, textMeasurer) { textMeasurer.layout(it.toMeasureRequest()) }
     }
-    val spineLayouts = music?.takeIf { it.vertical }?.let {
+    val spineLayouts = music?.takeIf { it.vertical && it.band == null }?.let {
         remember(it, textMeasurer) { textMeasurer.layoutSpine(it, scene.grammarId) }
+    }
+    val bandLayouts = music?.band?.let { band ->
+        remember(band, textMeasurer) { band.runs.map { textMeasurer.layoutRun(it) } }
     }
     val provenanceLayouts = remember(scene.provenance, textMeasurer) {
         scene.provenance.map { textMeasurer.layoutProvenance(it) }
@@ -296,6 +314,8 @@ fun CollageCanvas(
 
     val musicFits = when {
         music == null -> true
+        // Prepare already placed every run; long titles were cut to fit.
+        music.band != null -> true
         music.vertical -> spineLayouts?.let { fitsSpine(music, scene.grammarId, it) } == true
         else -> musicLayout?.fitsRegion(music.copyRegion) == true
     }
@@ -469,6 +489,58 @@ fun CollageCanvas(
 
                             is CollagePainter.Op.MusicText -> {
                                 val track = scene.music
+                                val songBand = track?.band
+                                if (songBand != null) {
+                                    val ink = Color(op.color)
+                                    songBand.divider?.let {
+                                        drawRect(ink, Offset(it.x.toFloat(), it.y.toFloat()), Size(it.width.toFloat(), it.height.toFloat()))
+                                    }
+                                    songBand.runs.zip(bandLayouts.orEmpty()).forEach { (run, layout) ->
+                                        if (run.vertical) {
+                                            // Reads bottom to top: the line box spans x .. x + line, the run ends at y.
+                                            withTransform({
+                                                translate(run.x.toFloat(), run.y.toFloat())
+                                                rotate(-90f, pivot = Offset.Zero)
+                                            }) {
+                                                drawText(
+                                                    textLayoutResult = layout,
+                                                    color = Color(op.color),
+                                                    topLeft = Offset.Zero,
+                                                )
+                                            }
+                                        } else {
+                                            drawText(
+                                                textLayoutResult = layout,
+                                                color = Color(op.color),
+                                                topLeft = Offset(run.x.toFloat(), run.y.toFloat()),
+                                            )
+                                        }
+                                    }
+                                    val play = songBand.play
+                                    val center = Offset(play.x + play.width / 2f, play.y + play.height / 2f)
+                                    val radius = min(play.width, play.height) / 2f
+                                    fun triangle(size: Float, color: Color) = drawPath(
+                                        Path().apply {
+                                            moveTo(center.x - size * .36f, center.y - size * .5f)
+                                            lineTo(center.x + size * .5f, center.y)
+                                            lineTo(center.x - size * .36f, center.y + size * .5f)
+                                            close()
+                                        },
+                                        color,
+                                    )
+                                    when (songBand.playStyle) {
+                                        SongBand.PlayStyle.GLYPH -> triangle(min(play.width, play.height).toFloat(), ink)
+                                        SongBand.PlayStyle.RING -> {
+                                            drawCircle(ink, radius - 1f, center, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f))
+                                            triangle(radius * .7f, ink)
+                                        }
+                                        SongBand.PlayStyle.CIRCLE -> {
+                                            drawCircle(ink, radius, center)
+                                            triangle(radius * .7f, Color(track.background))
+                                        }
+                                    }
+                                    return@forEach
+                                }
                                 if (track?.vertical == true) {
                                     // Spine copy reads vertically
                                     // (`.g6 .music-spine .music-copy{
@@ -554,6 +626,21 @@ fun CollageCanvas(
                                             coverRegion.y + (coverRegion.height - height) / 2,
                                         ),
                                         dstSize = IntSize(width, height),
+                                        filterQuality = FilterQuality.High,
+                                    )
+                                } else if (track.band != null) {
+                                    val image = artwork ?: return@Canvas
+                                    val box = track.band.cover ?: return@Canvas
+                                    val scale = maxOf(box.width.toFloat() / image.width, box.height.toFloat() / image.height)
+                                    val srcW = (box.width / scale).roundToInt().coerceAtMost(image.width)
+                                    val srcH = (box.height / scale).roundToInt().coerceAtMost(image.height)
+                                    if (srcW < 1 || srcH < 1) return@Canvas
+                                    drawImage(
+                                        image = image,
+                                        srcOffset = IntOffset((image.width - srcW) / 2, (image.height - srcH) / 2),
+                                        srcSize = IntSize(srcW, srcH),
+                                        dstOffset = IntOffset(box.x, box.y),
+                                        dstSize = IntSize(box.width, box.height),
                                         filterQuality = FilterQuality.High,
                                     )
                                 } else {

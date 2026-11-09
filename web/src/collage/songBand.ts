@@ -70,7 +70,7 @@ const ARTIST: SongFace = { family: 'StudySans', size: 12, weight: 400, italic: f
 const ELLIPSIS = '…'
 
 function upper(text: string): string {
-  return text.toLocaleUpperCase()
+  return text.toUpperCase()
 }
 
 /** The longest prefix (ellipsis added when cut) that fits `width`; null when not even one letter fits. */

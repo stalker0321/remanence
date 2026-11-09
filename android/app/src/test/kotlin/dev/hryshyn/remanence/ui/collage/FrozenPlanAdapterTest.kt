@@ -57,14 +57,16 @@ class FrozenPlanAdapterTest {
     }
 
     @Test
-    fun grammar5ThumbnailMusicStaysRepresentable() {
+    fun grammar5SongPlateIsAV4OnlyBand() {
+        // Since the 9 November 2026 band rules the song band is a `plate`, which only V4 seals.
         val d = input(photos = 3, artwork = true)
         val plan = requireNotNull(plans(d, 5).firstOrNull()) { "missing g5 music branch" }
         val verdict = FrozenPlanAdapter.adapt(5, plan)
-        assertTrue(verdict is FrozenPlanAdapter.Verdict.Representable)
-        val projection = (verdict as FrozenPlanAdapter.Verdict.Representable).projection
-        assertEquals("thumbnail", projection.musicMode)
-        assertTrue("rect tiles only", projection.cells.isNotEmpty())
+        assertTrue(verdict is FrozenPlanAdapter.Verdict.Blocked)
+        val projection = (verdict as FrozenPlanAdapter.Verdict.Blocked).projection
+        assertEquals("plate", projection.musicMode)
+        assertTrue(projection.blocking.contains(FrozenPlanAdapter.Unrepresentable.MUSIC_MODE))
+        assertTrue("geometry is still projected", projection.cells.isNotEmpty())
     }
 
     @Test

@@ -317,6 +317,9 @@ object GeneratorExpression {
     /** Music treatments a sealed collage may carry. */
     val MUSIC_MODES: Set<String> = setOf("text", "thumbnail")
 
+    /** The 9 November 2026 song bands (`SongBand`): plate, one-line caption, layout 6 card. Declared first: the set below reads it. */
+    val SONG_BAND_MODES: Set<String> = setOf("plate", "caption", "card")
+
     /**
      * Frozen music presentation modes (v4 only).
      *
@@ -328,10 +331,11 @@ object GeneratorExpression {
      * `sleeve-empty`, and `spine` are text-only bands.
      */
     val MUSIC_MODES_V4: Set<String> =
-        setOf("text", "thumbnail", "inline", "tile-art", "tile-text", "sleeve", "sleeve-empty", "spine", "pulse")
+        setOf("text", "thumbnail", "inline", "tile-art", "tile-text", "sleeve", "sleeve-empty", "spine", "pulse") +
+            SONG_BAND_MODES
 
     /** Music modes whose frozen DOM carries a cover image when artwork is present. */
-    val MUSIC_COVER_MODES_V4: Set<String> = setOf("thumbnail", "inline", "tile-art", "sleeve", "pulse")
+    val MUSIC_COVER_MODES_V4: Set<String> = setOf("thumbnail", "inline", "tile-art", "sleeve", "pulse", "plate", "caption")
 
     /**
      * Single source of truth for the frozen artwork compatibility matrix
@@ -342,7 +346,7 @@ object GeneratorExpression {
      * validation all read these sets; nothing copies them.
      */
     val MUSIC_ARTWORK_REQUIRED_MODES_V4: Set<String> = setOf("thumbnail", "tile-art", "sleeve")
-    val MUSIC_TEXT_ONLY_MODES_V4: Set<String> = setOf("text", "tile-text", "sleeve-empty", "spine")
+    val MUSIC_TEXT_ONLY_MODES_V4: Set<String> = setOf("text", "tile-text", "sleeve-empty", "spine", "card")
     val MUSIC_BARE_TEXT_OK_MODES_V4: Set<String> = setOf("inline", "pulse")
 
     /** Maximum sealed provenance mark text length in chars (frozen maximum is far below). */

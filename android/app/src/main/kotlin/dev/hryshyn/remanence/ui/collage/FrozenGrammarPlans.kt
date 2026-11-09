@@ -25,6 +25,19 @@ object FrozenGrammarPlans {
     const val CANVAS_WIDTH = 360.0
     const val CANVAS_HEIGHT = 640.0
 
+    /**
+     * Song band rules (owner, 9 November 2026), the same as the site's
+     * `planGrammars.ts`: every horizontal band is a 64 px plate that holds two
+     * lines in the style's own type, and the layout 6 spine is 56 px wide with
+     * the title along its length. Tile bands (11, 24's column), the pulse (24)
+     * and the sleeve (20) keep their frozen form.
+     */
+    const val BAND = 64.0
+    const val SPINE = 56.0
+
+    /** Layout 6 hinge: band, sender line and the gap to the lower photos. */
+    private const val HINGE = 4.0 + BAND + 2.0 + 18.0 + 4.0
+
     /** Active families in frozen enumeration order (`grammars.js` + `expansion.js`). */
     val ACTIVE_GRAMMAR_IDS: List<Int> = listOf(5, 6, 11, 12, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27)
 
@@ -235,19 +248,19 @@ object FrozenGrammarPlans {
     // --------------------------------------------------------------- base plans
 
     private fun basePlans(d: Input, g: GrammarDef, n: NoteState): List<Plan> = when (g.id) {
-        5 -> baseEditorial(d, g, n)
+        5 -> baseEditorial(d, n)
         6 -> baseMusicTransition(d, n)
         11 -> baseInterlock(d, g, n)
-        12 -> baseStrips(d, g, n)
+        12 -> baseStrips(d, n)
         17 -> baseMass(d, n)
-        18 -> baseMount(d, g, n)
+        18 -> baseMount(d, n)
         21 -> baseLetterOpening(d, n)
         else -> emptyList()
     }
 
-    private fun baseEditorial(d: Input, g: GrammarDef, n: NoteState): List<Plan> {
+    private fun baseEditorial(d: Input, n: NoteState): List<Plan> {
         val p = d.photos
-        val r0 = closing(d, g, n, 603.0, 16.0, 328.0, 48.0)
+        val r0 = closing(d, n, 603.0, 16.0, 328.0)
         val prov = listOf(
             brand(Rect(12.0, 4.0, 340.0, 75.0), 64.0, "StudySerif"),
             sender(d, Rect(16.0, 613.0, 328.0, 23.0), 20.0, "StudySerif", italic = true, align = "right"),
@@ -288,15 +301,12 @@ object FrozenGrammarPlans {
             for (frac in listOf(0.52, 0.43, 0.60, 0.28)) {
                 for (power in listOf(0.0, 1.0)) {
                     for (stacked in listOf(false, true)) {
-                        val h1 = (end - 82.0) * frac
-                        val h2 = end - 82.0 - h1
-                        val music = Music(
-                            Rect(32.0, h1 + 4.0, 328.0, 54.0),
-                            if (d.music?.artwork == true) "thumbnail" else "text",
-                        )
+                        val h1 = (end - HINGE) * frac
+                        val h2 = end - HINGE - h1
+                        val music = Music(Rect(32.0, h1 + 4.0, 328.0, BAND), "plate")
                         val prov = listOf(
                             brand(Rect(3.0, 8.0, 24.0, 612.0), 22.0, "Narrow", "vertical-up", weight = 700),
-                            sender(d, Rect(42.0, h1 + 60.0, 304.0, 18.0), 14.0, "StudySans"),
+                            sender(d, Rect(42.0, h1 + 4.0 + BAND + 2.0, 304.0, 18.0), 14.0, "StudySans"),
                         )
                         val a = p.subList(0, split)
                         val b = p.subList(split, p.size)
@@ -305,7 +315,7 @@ object FrozenGrammarPlans {
                         out += Plan(
                             "hinge-$split+${N - split}-${num(frac)}-${if (power != 0.0) "ratio" else "equal"}-${if (stacked) "stacked" else "paired"}",
                             bands(a, ra, Rect(32.0, 0.0, 328.0, h1), gap = 4.0, power = power, zooms = listOf(1.04, 1.0)) +
-                                bands(b, rb, Rect(32.0, h1 + 82.0, 328.0, h2), gap = 4.0, power = power, zooms = listOf(1.04, 1.0)),
+                                bands(b, rb, Rect(32.0, h1 + HINGE, 328.0, h2), gap = 4.0, power = power, zooms = listOf(1.04, 1.0)),
                             note, music, prov, emptyList(),
                         )
                     }
@@ -349,10 +359,10 @@ object FrozenGrammarPlans {
         return out
     }
 
-    private fun baseStrips(d: Input, g: GrammarDef, n: NoteState): List<Plan> {
+    private fun baseStrips(d: Input, n: NoteState): List<Plan> {
         val p = d.photos
         val N = p.size
-        val r0 = closing(d, g, n, 602.0, 28.0, 322.0, 44.0)
+        val r0 = closing(d, n, 602.0, 28.0, 322.0)
         val r = Rect(28.0, 0.0, 332.0, r0.end)
         val prov = listOf(
             brand(Rect(2.0, 8.0, 23.0, 570.0), 18.0, "StudyMono", "vertical-down"),
@@ -380,7 +390,7 @@ object FrozenGrammarPlans {
     private fun baseMass(d: Input, n: NoteState): List<Plan> {
         val p = d.photos
         val N = p.size
-        val r0 = closing(d, def(17), n, 532.0, 16.0, 328.0, 44.0)
+        val r0 = closing(d, n, 532.0, 16.0, 328.0)
         val prov = listOf(
             sender(d, Rect(10.0, 543.0, 340.0, 19.0), 15.0, "StudySans", align = "right"),
             brand(Rect(6.0, 565.0, 350.0, 75.0), 72.0, "Narrow", weight = 700),
@@ -406,9 +416,9 @@ object FrozenGrammarPlans {
         return out
     }
 
-    private fun baseMount(d: Input, g: GrammarDef, n: NoteState): List<Plan> {
+    private fun baseMount(d: Input, n: NoteState): List<Plan> {
         val p = d.photos
-        val r0 = closing(d, g, n, 587.0, 44.0, 290.0, 48.0)
+        val r0 = closing(d, n, 587.0, 44.0, 290.0)
         val r = Rect(34.0, 14.0, 316.0, r0.end - 14.0)
         val prov = listOf(
             brand(Rect(10.0, 23.0, 22.0, 555.0), 19.0, "StudySans", "vertical-up"),
@@ -438,7 +448,7 @@ object FrozenGrammarPlans {
     private fun baseLetterOpening(d: Input, n: NoteState): List<Plan> {
         val p = d.photos
         val N = p.size
-        val end = if (d.music != null) 574.0 else 637.0
+        val end = if (d.music != null) 634.0 - BAND - 10.0 else 637.0
         val out = ArrayList<Plan>()
         for (openingH in listOf(205.0, 166.0, 245.0)) {
             for (power in listOf(0.0, 1.0)) {
@@ -448,7 +458,7 @@ object FrozenGrammarPlans {
                     sender(d, Rect(12.0, openingH + 16.0, 151.0, 33.0), 25.0, "StudySerif", italic = true),
                     brand(Rect(12.0, end - 28.0, 145.0, 24.0), 22.0, "StudySerif"),
                 )
-                val music = if (d.music != null) Music(Rect(12.0, 584.0, 336.0, 50.0), "text") else null
+                val music = if (d.music != null) Music(Rect(12.0, 634.0 - BAND, 336.0, BAND), "plate") else null
                 out += Plan(
                     "letter-opening-${num(openingH)}-${num(power)}",
                     bands(p.subList(0, N - 2), listOf(N - 2), Rect(0.0, 0.0, 360.0, openingH), power = power, gap = 4.0, zooms = listOf(1.05, 1.0)) +
@@ -477,9 +487,9 @@ object FrozenGrammarPlans {
         for (frac in listOf(0.52, 0.43)) {
             val leftCount = Math.ceil(N / 2.0).toInt()
             val rightCount = N - leftCount
-            val music = Music(Rect(156.0, 0.0, 48.0, bottom - 24.0), "spine")
-            val a = bands(p.subList(0, leftCount), List(leftCount) { 1 }, Rect(0.0, 0.0, 153.0, bottom - 24.0), gap = 5.0, zooms = listOf(1.08, 1.0))
-            val b = bands(p.subList(leftCount, N), List(rightCount) { 1 }, Rect(207.0, 0.0, 153.0, bottom - 24.0), gap = 5.0, zooms = listOf(1.08, 1.0))
+            val music = Music(Rect(152.0, 0.0, SPINE, bottom - 24.0), "card")
+            val a = bands(p.subList(0, leftCount), List(leftCount) { 1 }, Rect(0.0, 0.0, 149.0, bottom - 24.0), gap = 5.0, zooms = listOf(1.08, 1.0))
+            val b = bands(p.subList(leftCount, N), List(rightCount) { 1 }, Rect(211.0, 0.0, 149.0, bottom - 24.0), gap = 5.0, zooms = listOf(1.08, 1.0))
             out += Plan(
                 "sound-spine-$leftCount/$rightCount-${num(frac)}",
                 a + b, note, music,
@@ -536,9 +546,9 @@ object FrozenGrammarPlans {
             for (topH in listOf(240.0, 290.0, 340.0)) {
                 val sy = topH + 14.0
                 val ny = sy + 36.0
-                val music = if (d.music != null) Music(Rect(18.0, 586.0, 324.0, 47.0), "inline") else null
+                val music = if (d.music != null) Music(Rect(18.0, 633.0 - BAND, 324.0, BAND), "plate") else null
                 val note = Note(Rect(full.rect.x, ny, full.rect.w, full.rect.h), full.state)
-                val end = if (music != null) 580.0 else 611.0
+                val end = if (music != null) 627.0 - BAND else 611.0
                 if (note.rect.y + note.rect.h <= end) {
                     val rec = when (N) {
                         3 -> listOf(1, 2)
@@ -551,7 +561,7 @@ object FrozenGrammarPlans {
                         note, music,
                         listOf(
                             sender(d, Rect(18.0, sy, 324.0, 31.0), 27.0, "StudySerif", italic = true),
-                            brand(Rect(18.0, if (music != null) 562.0 else 617.0, 324.0, 20.0), 18.0, "StudySerif", align = "right"),
+                            brand(Rect(18.0, if (music != null) 609.0 - BAND else 617.0, 324.0, 20.0), 18.0, "StudySerif", align = "right"),
                         ),
                         emptyList(),
                     )
@@ -560,8 +570,10 @@ object FrozenGrammarPlans {
         }
         if (d.note != null && N <= 4) {
             val text = noteAt(d, 10.0, 51.0, 140.0, 26.0, "StudySerif", 3, measure)
-            if (text != null && text.rect.h >= 360.0 && text.rect.h <= 492.0) {
-                val end = if (d.music != null) 574.0 else 611.0
+            // With a song the brand sits above the taller band, so the letter column is shorter.
+            val tallest = if (d.music != null) 492.0 - (BAND - 49.0) else 492.0
+            if (text != null && text.rect.h >= 360.0 && text.rect.h <= tallest) {
+                val end = if (d.music != null) 632.0 - BAND - 9.0 else 611.0
                 val photoW = 198.0
                 val tiles = bands(
                     p, p.map { 1 }, Rect(162.0, 0.0, photoW, end), gap = 7.0,
@@ -573,10 +585,10 @@ object FrozenGrammarPlans {
                         "letter-full-height-counterpoint",
                         tiles,
                         Note(Rect(10.0, 51.0, 140.0, text.rect.h), text.state),
-                        if (d.music != null) sound(d, Rect(10.0, 583.0, 340.0, 49.0), "inline") else null,
+                        if (d.music != null) sound(d, Rect(10.0, 632.0 - BAND, 340.0, BAND), "plate") else null,
                         listOf(
                             sender(d, Rect(10.0, 10.0, 143.0, 29.0), 24.0, "StudySerif", italic = true),
-                            brand(Rect(10.0, 550.0, 141.0, 23.0), 21.0, "StudySerif"),
+                            brand(Rect(10.0, if (d.music != null) 550.0 - (BAND - 49.0) else 550.0, 141.0, 23.0), 21.0, "StudySerif"),
                         ),
                         emptyList(),
                     ),
@@ -600,8 +612,8 @@ object FrozenGrammarPlans {
             for (rhythm in rhythms) {
                 val note = noteAt(d, 18.0, heroH + 47.0, 324.0, 27.0, "StudySerif", 3, measure)
                 val ny = if (note != null) note.rect.y + note.rect.h + 13.0 else heroH + 48.0
-                val music = sound(d, Rect(12.0, 563.0, 336.0, 47.0), "inline")
-                val ph = (if (music != null) 555.0 else 606.0) - ny
+                val music = sound(d, Rect(12.0, 610.0 - BAND, 336.0, BAND), "plate")
+                val ph = (if (music != null) 602.0 - BAND else 606.0) - ny
                 val hero = tile(p[0], Rect(0.0, 0.0, 360.0, heroH), "rect", listOf(1.07, 1.0), assignmentRole = "human-anchor")
                 out += Plan(
                     "human-hinge-${num(heroH)}-${rhythm.joinToString("+")}",
@@ -625,7 +637,7 @@ object FrozenGrammarPlans {
                 val note = noteAt(d, 14.0, 0.0, 332.0, 24.0, "StudySans", 3, measure)
                 val bottom = if (note != null) 603.0 - note.rect.h else 603.0
                 if (note != null) note.rect.y = bottom
-                val music = sound(d, Rect(12.0, bottom - 64.0, 336.0, 49.0), "inline")
+                val music = sound(d, Rect(12.0, bottom - 15.0 - BAND, 336.0, BAND), "plate")
                 val end = if (music != null) music.rect.y - 10.0 else bottom - 12.0
                 val y = heroH + 39.0
                 val h = end - y
@@ -736,7 +748,7 @@ object FrozenGrammarPlans {
             val note = noteAt(d, 17.0, 0.0, 326.0, 26.0, "StudySerif", 3, measure)
             val end = if (note != null) 599.0 - note.rect.h else 599.0
             if (note != null) note.rect.y = end
-            val music = sound(d, Rect(12.0, end - 61.0, 336.0, 48.0), "inline")
+            val music = sound(d, Rect(12.0, end - 13.0 - BAND, 336.0, BAND), "plate")
             val photoEnd = if (music != null) music.rect.y - 35.0 else end - 35.0
             val gap = 9.0
             val total = h * 3.0 + gap * 2.0
@@ -757,7 +769,7 @@ object FrozenGrammarPlans {
         val note = noteAt(d, 17.0, 0.0, 326.0, 26.0, "StudySerif", 3, measure)
         val end = if (note != null) 599.0 - note.rect.h else 599.0
         if (note != null) note.rect.y = end
-        val music = sound(d, Rect(12.0, end - 61.0, 336.0, 48.0), "inline")
+        val music = sound(d, Rect(12.0, end - 13.0 - BAND, 336.0, BAND), "plate")
         val photoEnd = if (music != null) music.rect.y - 35.0 else end - 35.0
         for (topH in listOf(222.0, 260.0)) {
             val tiles = listOf(
@@ -783,7 +795,7 @@ object FrozenGrammarPlans {
         val note = noteAt(d, 18.0, 0.0, 324.0, 26.0, "StudySerif", 3, measure)
         val bottom = if (note != null) 594.0 - note.rect.h else 594.0
         if (note != null) note.rect.y = bottom
-        val music = sound(d, Rect(14.0, bottom - 55.0, 332.0, 47.0), "inline")
+        val music = sound(d, Rect(14.0, bottom - 8.0 - BAND, 332.0, BAND), "plate")
         val end = if (music != null) music.rect.y - 8.0 else bottom - 8.0
         for (rhythm in listOf(1.0, 1.35)) {
             val heights = p.mapIndexed { i, _ -> if (i == 1) rhythm else 1.0 }
@@ -848,7 +860,7 @@ object FrozenGrammarPlans {
             val note = noteAt(d, 14.0, 0.0, 332.0, 25.0, "StudySerif", 3, measure)
             val bottom = if (note != null) 598.0 - note.rect.h else 598.0
             if (note != null) note.rect.y = bottom
-            val music = sound(d, Rect(10.0, bottom - 61.0, 340.0, 49.0), "inline")
+            val music = sound(d, Rect(10.0, bottom - 12.0 - BAND, 340.0, BAND), "plate")
             val end = if (music != null) music.rect.y - 30.0 else bottom - 30.0
             val hero = tile(p[0], Rect(0.0, 0.0, 355.0 - sideW, end), "rect", listOf(1.08, 1.0), assignmentRole = "vertical-anchor")
             val replies = bands(p.subList(1, N), List(N - 1) { 1 }, Rect(360.0 - sideW, 0.0, sideW, end), gap = 6.0, zooms = listOf(1.04, 1.0))
@@ -894,12 +906,10 @@ object FrozenGrammarPlans {
 
     private data class Closing(val note: Note?, val music: Music?, val end: Double)
 
-    private fun closing(d: Input, g: GrammarDef, n: NoteState, end: Double, x: Double, w: Double, mh: Double): Closing {
+    private fun closing(d: Input, n: NoteState, end: Double, x: Double, w: Double): Closing {
         val note = if (n.height > 0.0) Note(Rect(x, end - n.height, n.width, n.height), n.state) else null
         var top = if (note != null) note.rect.y - 10.0 else end
-        val music = if (d.music != null) {
-            Music(Rect(x, top - mh, w, mh), if (d.music.artwork && g.artwork != "ignored") "thumbnail" else "text")
-        } else null
+        val music = if (d.music != null) Music(Rect(x, top - BAND, w, BAND), "plate") else null
         if (music != null) top = music.rect.y - 8.0
         return Closing(note, music, top)
     }

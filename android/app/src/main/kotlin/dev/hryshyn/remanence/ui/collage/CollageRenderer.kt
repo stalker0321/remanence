@@ -109,6 +109,8 @@ object CollageRenderer {
         /** Copy and play share the exact geometry admitted by prepare. */
         val copyRegion: RectI = region,
         val playRegion: RectI? = null,
+        /** The 9 November 2026 band (plate, caption, card); null for the frozen modes. */
+        val band: SongBand.Layout? = null,
     )
 
     /**
@@ -236,6 +238,23 @@ object CollageRenderer {
      * Whether a provenance mark fits its sealed box as [shown] with [tracking].
      * Prepare and the sender's seal-time type fitting share this one check.
      */
+    /** One unwrapped run's width through the host's measurer, for [SongBand]. */
+    fun runWidth(measurer: TextMeasurer): SongBand.RunWidth = SongBand.RunWidth { text, face ->
+        measurer.measure(
+            TextMeasureRequest(
+                text = text,
+                family = face.family,
+                size = face.size,
+                weight = face.weight,
+                italic = face.italic,
+                line = face.line,
+                maxWidth = Int.MAX_VALUE,
+                maxHeight = Int.MAX_VALUE,
+                softWrap = false,
+            ),
+        ).width
+    }
+
     fun markFits(
         measurer: TextMeasurer,
         mark: GeneratorExpression.ProvenanceMark,
@@ -654,7 +673,38 @@ object CollageRenderer {
             } else {
                 parseColor(style.palette.soundInk)
             }
-            if (verified && !isV4) {
+            if (isV4 && SongBand.isSongBandMode(musicRegion.mode)) {
+                // The 9 November 2026 band: one shared layout; a caption whose
+                // line does not fit these metrics is drawn as a plate.
+                val type = SongBand.Face(musicType.family, musicType.size, musicType.weight, musicType.italic, musicType.line)
+                val words = SongBand.Words(snapshot.title, snapshot.artistDisplay)
+                val widths = runWidth(measurer)
+                val cover = verified && descriptor != null
+                val band = SongBand.layout(regionRect, musicRegion.mode, type, words, widths, cover)
+                    ?: (if (musicRegion.mode == "caption") SongBand.layout(regionRect, "plate", type, words, widths, cover) else null)
+                    ?: return SceneResult.Rejected("music does not fit its sealed region")
+                musicScene = SceneMusic(
+                    title = snapshot.title,
+                    artist = snapshot.artistDisplay,
+                    text = "${snapshot.title}\n${snapshot.artistDisplay}",
+                    region = regionRect,
+                    family = musicType.family,
+                    size = musicType.size,
+                    weight = musicType.weight,
+                    italic = musicType.italic,
+                    line = musicType.line,
+                    fontResourceId = requireNotNull(musicFont),
+                    background = parseColor(if (band.filled) style.palette.sound else style.palette.paper),
+                    color = parseColor(if (band.filled) style.palette.soundInk else style.palette.ink),
+                    transparentBackground = !band.filled,
+                    mode = band.mode,
+                    vertical = band.mode == "card",
+                    copyRegion = regionRect,
+                    playRegion = band.play,
+                    band = band,
+                )
+                artworkScene = band.cover?.let { SceneArtwork(it, parseColor(style.palette.sound)) }
+            } else if (verified && !isV4) {
                 // A1 guarantees `mode == "thumbnail"` whenever artwork is sealed.
                 musicScene = null
                 artworkScene = SceneArtwork(regionRect, parseColor(style.palette.sound))

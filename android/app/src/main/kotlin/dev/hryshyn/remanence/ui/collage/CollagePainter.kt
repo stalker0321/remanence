@@ -154,7 +154,9 @@ object CollagePainter {
         scene.music?.let {
             ops += Op.MusicText(it.title, it.artist, it.text, it.region, it.color)
             // Cover art is not a player. Only the text-only design carries a cue.
-            it.playRegion?.takeIf { scene.artwork == null }?.let { play ->
+            // The 9 November band draws its own play control with its runs.
+            val track = it
+            it.playRegion?.takeIf { scene.artwork == null && track.band == null }?.let { play ->
                 ops += Op.MusicPlay(play,
                     foreground = if (it.transparentBackground) it.color else it.background,
                     background = if (it.transparentBackground) null else it.color)

@@ -43,6 +43,9 @@ internal object AllFamilyV4Adapter {
         artwork: GeneratorExpression.ArtworkRef? = null,
         /** The renderer's own mark check; null keeps the grammar's mark type unstyled. */
         markFits: MarkFits? = null,
+        /** The chosen song's words and the host's run widths: a plate becomes a caption when one line fits. */
+        songWords: SongBand.Words? = null,
+        runWidth: SongBand.RunWidth? = null,
     ): Outcome {
         if (style.grammar != candidate.grammarId) {
             return Outcome.Rejected(listOf("style belongs to another grammar"))
@@ -127,14 +130,28 @@ internal object AllFamilyV4Adapter {
             style = GeneratorExpression.StyleBinding(style.id, style.version, styleDigest),
             noteType = textType(style.note),
             musicRegion = candidate.plan.music?.let { music ->
+                val rect = CollageRenderer.RectI(
+                    floor(music.rect.x).toInt(), floor(music.rect.y).toInt(),
+                    floor(music.rect.w).toInt(), floor(music.rect.h).toInt(),
+                )
+                val type = textType(style.music)
+                val holdsCover = artwork != null && music.mode in GeneratorExpression.MUSIC_COVER_MODES_V4
+                // Owner, 9 November 2026: a plate is sealed as a one-line caption when the whole line fits.
+                val mode = if (music.mode == "plate" && songWords != null && runWidth != null &&
+                    SongBand.layout(
+                        rect, "caption",
+                        SongBand.Face(type.family, type.size, type.weight, type.italic, type.line),
+                        songWords, runWidth, holdsCover,
+                    ) != null
+                ) "caption" else music.mode
                 GeneratorExpression.MusicRegion(
-                    x = floor(music.rect.x).toInt(),
-                    y = floor(music.rect.y).toInt(),
-                    width = floor(music.rect.w).toInt(),
-                    height = floor(music.rect.h).toInt(),
-                    mode = music.mode,
-                    type = textType(style.music),
-                    artwork = if (music.mode in GeneratorExpression.MUSIC_COVER_MODES_V4) artwork else null,
+                    x = rect.x,
+                    y = rect.y,
+                    width = rect.width,
+                    height = rect.height,
+                    mode = mode,
+                    type = type,
+                    artwork = if (holdsCover) artwork else null,
                 )
             },
             provenance = marks.ifEmpty { null },

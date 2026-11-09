@@ -461,8 +461,15 @@ export function creatorScene(input: CreatorSceneInput): Scene {
     // is drawn as text, as the recipient sees it when a cover cannot be checked.
     const cover = input.cover ?? null
     const holdsCover = cover !== null && (MUSIC_COVER_MODES_V4 as readonly string[]).includes(input.view.music.mode)
-    const region = { ...input.view.music.region, mode: input.view.music.mode, type: roleTextType(style!.music), artwork: holdsCover ? cover : null }
-    const layers = musicLayers(region, grammarId, style!, true, holdsCover, track, input.measurer!)
+    // The song words take the style's music type at the largest size, down to
+    // 14, that fits the band, like the marks do. The size is sealed in the
+    // band's type, so any recipient draws exactly this.
+    let layers: ReturnType<typeof musicLayers> = 'music does not fit its sealed region'
+    for (const type of musicTypes(style!)) {
+      const region = { ...input.view.music.region, mode: input.view.music.mode, type, artwork: holdsCover ? cover : null }
+      layers = musicLayers(region, grammarId, style!, true, holdsCover, track, input.measurer!)
+      if (typeof layers !== 'string') break
+    }
     if (typeof layers === 'string') fail(layers)
     music = (layers as Exclude<typeof layers, string>).music
     artwork = (layers as Exclude<typeof layers, string>).artwork
@@ -496,6 +503,18 @@ export function creatorScene(input: CreatorSceneInput): Scene {
     })),
     decor: input.view.decor.map((plane) => sceneDecor(plane.kind, { ...plane.region }, grammarId, style!)),
   }
+}
+
+/** Smallest size the song words step down to. */
+export const MUSIC_MIN_SIZE = 14
+
+/** The style's music type, then each smaller size down to 14, line = ceil(size * 1.12). */
+export function musicTypes(style: CollageStyle): Array<ReturnType<typeof roleTextType>> {
+  const out: Array<ReturnType<typeof roleTextType>> = []
+  for (let size = style.music.size; size >= Math.min(style.music.size, MUSIC_MIN_SIZE); size--) {
+    out.push(roleTextType({ ...style.music, size }))
+  }
+  return out
 }
 
 /** The painted note's wrapped rows, measured the way the recipient measures them. */

@@ -18,15 +18,16 @@ holds the keys.
 | Part | State |
 | --- | --- |
 | Android | `0.2.0-beta.15` (versionCode 50) on the Play internal track. Make, send, scan and open postcards, with the album, history, music, recovery and languages. |
-| Website | Live at [remanence.to](https://remanence.to). Sign in with Google or a passkey, make and send a postcard, scan and open one, history, settings, installable as a PWA. The site cannot attach a song yet (see below). |
+| Website | Live at [remanence.to](https://remanence.to). Sign in with Google or a passkey, make and send a postcard with a song, scan and open one, history, settings, installable as a PWA. |
 | Server | FastAPI and PostgreSQL. Accounts, key directory, capsule drafts and finalize, delivery feeds, music search, send access, recovery. |
 | First gifts | Sending to a phone number without an account ([ADR-020](docs/decisions/ADR-020-first-gift-card-seal.md)). Built on all three clients and behind flags. Not yet run with real SMS. See [`docs/pending-gifts-status.md`](docs/pending-gifts-status.md). |
 
 Known gaps:
 
-- The website makes only one of the 14 layouts (grammar 5). Its song band is
-  too short for a two-line title and artist in every style, so the song picker
-  stays hidden. Everything after the picker already carries a song.
+- The website offers the same 14 layouts as Android, minus the two that need
+  what it does not have: grammar 22 (a detected face) and grammar 20 (a song
+  cover). It crops photos to the centre; Android places them by detected faces
+  and objects.
 - The privacy policy has to change before first gifts go to everyone. The draft
   is in [`docs/privacy-policy-draft-2026-11.md`](docs/privacy-policy-draft-2026-11.md).
 

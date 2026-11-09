@@ -273,27 +273,10 @@ export async function prepare(
     musicScene = layers.music
     artworkScene = layers.artwork
   }
-  const grammarNumber = expression.grammarId.replace(/^g/, '')
   const provenance: SceneProvenance[] = []
   for (const [index, mark] of (expression.provenance ?? []).entries()) {
     if (!fontFile(mark.family, mark.weight, mark.italic)) return reject('font face for provenance is not bundled')
-    const horizontal = mark.orientation === 'horizontal'
-    const measurement = measurer.measure({
-      text: mark.text,
-      family: mark.family,
-      size: mark.size,
-      weight: mark.weight,
-      italic: mark.italic,
-      line: mark.line,
-      maxWidth: horizontal ? mark.width : mark.height,
-      maxHeight: horizontal ? mark.height : mark.width,
-    })
-    const maxWidth = horizontal ? mark.width : mark.height
-    const maxHeight = horizontal ? mark.height : mark.width
-    if (measurement.hasVisualOverflow || measurement.width < 1 || measurement.height < 1 || measurement.width > maxWidth || measurement.height > maxHeight) {
-      return reject(`provenance ${index} does not fit its sealed region`)
-    }
-    const brandOnSound = mark.kind === 'brand' && (grammarNumber === '23' || grammarNumber === '24')
+    if (!markFits(measurer, mark)) return reject(`provenance ${index} does not fit its sealed region`)
     provenance.push({
       kind: mark.kind,
       text: mark.text,
@@ -305,26 +288,11 @@ export async function prepare(
       line: mark.line,
       orientation: mark.orientation,
       align: mark.align,
-      color: opaqueColor(brandOnSound ? style.palette.soundInk : style.palette.ink),
+      color: markColor(mark.kind, expression.grammarId, style),
       tracking: mark.kind === 'brand' ? style.tracking : 0,
     })
   }
-  const decor: SceneDecor[] = []
-  for (const plane of expression.decor ?? []) {
-    const fill = decorFill(plane.kind)
-    const shadow = plane.kind === 'print-plane' && printPlaneShadow(expression.grammarId, style.surfaceMode)
-    const edgeBorder = plane.kind === 'print-plane' && !shadow
-    const palette = style.palette
-    const role = (name: 'surface' | 'sound' | 'edge') => opaqueColor(palette[name])
-    decor.push({
-      kind: plane.kind,
-      region: rectOf(plane),
-      background: role(fill.background),
-      border: edgeBorder ? role('edge') : fill.border ? role(fill.border) : null,
-      shadow,
-      borderWidth: plane.kind === 'carrier' ? carrierBorderWidth(style.surfaceMode) : 1,
-    })
-  }
+  const decor = (expression.decor ?? []).map((plane) => sceneDecor(plane.kind, rectOf(plane), expression.grammarId, style))
   return {
     kind: 'ready',
     scene: {
@@ -343,6 +311,46 @@ export async function prepare(
       provenance,
       decor,
     },
+  }
+}
+
+/** The recipient's own fit check for one provenance mark in its sealed box. */
+export function markFits(measurer: TextMeasurer, mark: Pick<ProvenanceMark, 'text' | 'family' | 'size' | 'weight' | 'italic' | 'line' | 'orientation' | 'width' | 'height'>): boolean {
+  const horizontal = mark.orientation === 'horizontal'
+  const maxWidth = horizontal ? mark.width : mark.height
+  const maxHeight = horizontal ? mark.height : mark.width
+  const measurement = measurer.measure({
+    text: mark.text,
+    family: mark.family,
+    size: mark.size,
+    weight: mark.weight,
+    italic: mark.italic,
+    line: mark.line,
+    maxWidth,
+    maxHeight,
+  })
+  return !measurement.hasVisualOverflow && measurement.width >= 1 && measurement.height >= 1 && measurement.width <= maxWidth && measurement.height <= maxHeight
+}
+
+/** Marks are ink, except the brand on the sound ribbon of grammars 23 and 24. */
+export function markColor(kind: ProvenanceMark['kind'], grammarId: string, style: CollageStyle): number {
+  const onSound = kind === 'brand' && (grammarId === 'g23' || grammarId === 'g24')
+  return opaqueColor(onSound ? style.palette.soundInk : style.palette.ink)
+}
+
+/** One decor plane painted in the style's palette. */
+export function sceneDecor(kind: SceneDecor['kind'], region: Rect, grammarId: string, style: CollageStyle): SceneDecor {
+  const fill = decorFill(kind)
+  const shadow = kind === 'print-plane' && printPlaneShadow(grammarId, style.surfaceMode)
+  const edgeBorder = kind === 'print-plane' && !shadow
+  const role = (name: 'surface' | 'sound' | 'edge') => opaqueColor(style.palette[name])
+  return {
+    kind,
+    region,
+    background: role(fill.background),
+    border: edgeBorder ? role('edge') : fill.border ? role(fill.border) : null,
+    shadow,
+    borderWidth: kind === 'carrier' ? carrierBorderWidth(style.surfaceMode) : 1,
   }
 }
 

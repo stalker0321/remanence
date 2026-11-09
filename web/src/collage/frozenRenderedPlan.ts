@@ -95,7 +95,8 @@ export interface FrozenRenderedDecor {
 
 export interface FrozenRenderedPlan {
   readonly canvasVersion: number
-  readonly grammarId: 'g5'
+  /** `g<id>` of the painted grammar. */
+  readonly grammarId: string
   readonly branchId: string
   readonly canvas: {
     readonly width: number
@@ -152,7 +153,7 @@ function deepFreeze<T>(value: T): T {
  */
 export function captureFrozenRenderedPlan(input: FrozenRenderedCaptureInput): FrozenRenderedPlan {
   const { scene } = input
-  if (scene.grammarId !== 'g5') throw new CollageError('REJECTED')
+  if (!/^g\d+$/.test(scene.grammarId)) throw new CollageError('REJECTED')
   if (input.branchId.trim() === '' || input.styleId.trim() === '') throw new CollageError('REJECTED')
   if (scene.note !== null && input.noteLayout === null) throw new CollageError('REJECTED')
   // The creator never holds a cover yet: a painted cover would be a band the sealed sheet cannot repeat.
@@ -220,7 +221,7 @@ export function captureFrozenRenderedPlan(input: FrozenRenderedCaptureInput): Fr
   }))
   const plan: FrozenRenderedPlan = {
     canvasVersion: 1,
-    grammarId: 'g5',
+    grammarId: scene.grammarId,
     branchId: input.branchId,
     canvas: {
       width: scene.canvasWidth,

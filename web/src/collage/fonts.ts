@@ -15,3 +15,11 @@ const files: Record<string, string> = {
 export function fontFile(family: string, weight: number, italic: boolean): string | null {
   return files[`${family}/${weight}/${italic}`] ?? null
 }
+
+/** Every bundled face, for loading before the sender's layouts are measured. */
+export function bundledFaces(): Array<{ family: string; weight: number; italic: boolean }> {
+  return Object.keys(files).map((key) => {
+    const [family, weight, italic] = key.split('/')
+    return { family: family!, weight: Number(weight), italic: italic === 'true' }
+  })
+}

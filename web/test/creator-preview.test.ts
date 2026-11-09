@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { CollageError } from '../src/collage/errors'
 import { creatorScene, plannerFromTextMeasurer, previewCandidates, previewSlot } from '../src/collage/creatorPreview'
-import { grammar5Plans } from '../src/collage/planGrammar5'
-import reference from './g5-plans-reference.txt?raw'
+import { grammarDef, plans as grammarPlans, type PlanInput } from '../src/collage/planGrammars'
+import reference from './v5-plans-reference.txt?raw'
 import { CROP_ASPECT_TOLERANCE } from '../src/collage/crop'
 import type { TextMeasurer } from '../src/collage/prepare'
+
+function grammar5Plans(input: PlanInput) {
+  return grammarPlans(input, grammarDef(5))
+}
 
 interface CaseSpec {
   id: string

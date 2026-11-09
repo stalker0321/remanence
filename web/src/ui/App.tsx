@@ -584,11 +584,6 @@ export function Scan({
 }
 
 
-// Grammar 5 is the only layout the site can make, and its 48 px song band cannot hold the
-// two-line title and artist in any of its styles (the same check refuses it on Android).
-// The picker stays hidden until the site has a layout whose band fits; everything after
-// the picker already carries the song.
-const WEB_SENDS_MUSIC = false
 
 // The long note beside the sheet: receiving one always works; sending waits for the owner's word.
 const WEB_SENDS_LETTER = import.meta.env.VITE_SENDS_LETTER === 'true'
@@ -1435,7 +1430,6 @@ export function Create({
           ) : null}
           <div className="workspace-next"><button type="button" className="quiet" onClick={() => showCreateStep('content')}>{t('createEditContent')}</button></div>
           </div>
-          {WEB_SENDS_MUSIC ? (
           <details className="music-draft" open hidden={createStep !== 'content'}>
             <summary>{t('createMusicTitle')}</summary>
             <label className="handle-form">
@@ -1474,7 +1468,6 @@ export function Create({
               ))}
             </ul>
             </details>
-          ) : null}
           <div hidden={createStep !== 'content'} className="workspace-next"><p className="field-hint">{t('createContentHint')}</p><button type="button" className="primary" disabled={accepted === null || !noteFits || photoIntakePending || creatorImages === null || sendPhase !== 'idle'} onClick={() => showCreateStep('composition')}>{t('createChooseComposition')}<Icon name="arrow" /></button></div>
           <div hidden={createStep !== 'postcard'} className="postcard-workspace">
           <figure className={`chosen-design${designUrl ? ' is-ready' : ''}`}>

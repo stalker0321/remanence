@@ -29,7 +29,7 @@ export interface CreatorSlotFreeze {
 }
 
 export interface CreatorFreeze {
-  readonly grammarId: 'g5';
+  readonly grammarId: string;
   readonly branchId: string;
   readonly styleId: string;
   readonly styleVersion: string;
@@ -118,7 +118,7 @@ export function freezeSelection(input: FreezeInput): FreezeResult {
     if (input.renderedPlan.slots[index]?.contentId !== slot.contentId) throw new CollageError('REJECTED')
   })
   const frozen: CreatorFreeze = {
-    grammarId: 'g5',
+    grammarId: input.renderedPlan.grammarId,
     branchId: input.branchId,
     styleId: input.styleId,
     styleVersion: input.styleVersion,

@@ -1,57 +1,56 @@
 # ADR-021 (draft): voice notes, video circles and the letter
 
-Status: proposed, 9 November 2026. Nothing below is decided until the owner
-agrees. The letter (section 2) is already built behind flags.
+Status: proposed, 9 November 2026. The owner set the direction on 9 November
+(sections 1 and 2). The wire details are still to be agreed.
 
-## 1. What we are adding and the limit
+## 1. What a postcard carries
 
-A postcard keeps 3 to 5 photos and the short note drawn on the sheet. On top of
-that it may carry:
+A postcard keeps 3 to 5 photos and the short note on the front. On top of that:
 
-- one **media attachment**: a song (exists), **or** a voice note, **or** a
-  video circle. Never two at once. Carrying everything at once is too much
-  content for one card.
-- one **letter**: a long note read beside the sheet. It does not use the media
-  slot.
+- **One audio slot:** a song **or** a voice note. Both sit in the song band
+  the layouts already have.
+- **A video circle takes the place of one photo.** Its tile is square and
+  plainly visible. It does not have to be the largest or the central tile.
+  A card with a circle has 2 to 4 photos plus the circle.
+- **The letter is the back of the card** (section 2), not a separate thing
+  beside it.
 
 Proposed bounds, to confirm:
 
 | Attachment | Length | Format | Size cap (ciphertext) |
 | --- | --- | --- | --- |
 | Voice | up to 60 s | AAC-LC in MP4 (`audio/mp4`), mono, 48 kbit/s | 1 MiB |
-| Circle | up to 30 s | H.264 + AAC in MP4 (`video/mp4`), square 480×480, about 1.5 Mbit/s | 8 MiB, the photo cap |
+| Circle | up to 30 s | H.264 + AAC in MP4 (`video/mp4`), 480×480, about 1.5 Mbit/s | 8 MiB, the photo cap |
 | Letter | 8000 UTF-8 bytes (about 4000 Cyrillic or 8000 Latin characters) | text | inside the content manifest |
 
 The whole capsule stays under the existing 42 MiB cap
-(`total_capsule_max_ciphertext_bytes`). When a circle is attached, the photo
-budget shrinks by its size and the client says so before sending.
+(`total_capsule_max_ciphertext_bytes`).
 
-## 2. The letter (built)
+## 2. The letter: the back of the card
 
-- `ContentManifest.letter = 8`, v2 only, 1..8000 UTF-8 bytes, not blank. It
-  rides inside the AEAD-sealed manifest, so there is no new artifact kind and
-  no server change.
-- Android: `CapsuleLetter` bounds, `ContentManifestCodec` writes and reads the
-  letter, the publisher and the first-gift publisher carry it, and
-  `CapsuleLetterAction` opens it full screen under the sheet. Writing one is
-  behind `-Premanence.letter.enabled=true`.
-- Web: the parser accepts field 8 always, so letters sent from Android open on
-  the site. The encoder, the send path and a field on the content step sit
-  behind `VITE_SENDS_LETTER=true`. Reading is on the live site.
-- Older Android builds skip the unknown field and open the sheet without the
-  letter. An older web build would refuse the manifest, but the site is always
-  current.
-- Open: should the sheet show a small "there is a letter" mark? That means a
-  grammar change, like the media mark below.
+One text field. The front shows what fits in the layout's note region, with a
+small "continued on the back" mark. Turning the card over shows the back with
+the whole text in the handwriting font.
+
+- Wire: `ContentManifest.letter = 8`, v2 only, 1..8000 UTF-8 bytes, not blank.
+  It rides inside the AEAD-sealed manifest, so there is no new artifact kind
+  and no server change. This part is built.
+- To change: the separate letter field and the "read the letter" button that
+  were built on 9 November go. The note field becomes the one text field; the
+  layouts take the first part and mark the rest. The mark is drawn by the
+  layout, so it is a grammar change, and older receivers open the front
+  without the mark or the back.
+- Writing a letter stays behind `remanence.letter.enabled` on Android and
+  `VITE_SENDS_LETTER` on the site until the back of the card is built.
 
 ## 3. Media on the wire
 
 ### Artifact kind
 
 `ArtifactKind.MEDIA = 4`, ordinal `0`, at most one per capsule. The publish
-statement allows 5..8 artifacts (it allows 5..7 today). The AAD is the same
-`ArtifactAad` with `artifact_kind = 4`. Voice and circle use the same kind; the
-manifest says which one it is.
+statement allows 5..8 artifacts (5..7 today). The AAD is the same
+`ArtifactAad` with `artifact_kind = 4`. Voice and circle use the same kind;
+the manifest says which one it is.
 
 ### Manifest entry
 
@@ -64,13 +63,23 @@ message MediaEntry {
   uint32 duration_ms = 4;   // 1..60000 voice, 1..30000 circle
   uint32 width = 5;         // circle only
   uint32 height = 6;        // circle only
+  string poster_content_id = 7; // circle only: the photo that holds its first frame
 }
 // ContentManifest
-optional MediaEntry media = 9; // v2 only; excludes track_snapshot (field 7)
+optional MediaEntry media = 9; // v2 only
 ```
 
-A manifest that carries both `media` and `track_snapshot` is refused. That is
-the one-slot rule.
+A voice note excludes `track_snapshot` (field 7): one audio slot.
+
+### The circle is a photo with a video behind it
+
+The circle's tile holds an ordinary photo artifact: the first frame. The
+layouts place it like any other photo, constrained to a square tile above a
+minimum size. `poster_content_id` ties the video to that photo. So:
+
+- older apps and the image export show the first frame as a photo;
+- new apps play the video in that tile when the card is open;
+- no new kind of tile in the expression is needed for the circle.
 
 ### Server (not built)
 
@@ -86,70 +95,63 @@ All of these must change together:
   `recipient_material_synced_service.py`: the receive side.
 - First gifts: `delivery_v2.proto` artifact kinds and the pending services.
 
-### Compatibility: the blocker to solve first
+### Compatibility
 
 Released Android builds refuse an incoming capsule whose blob list contains an
 unknown kind (`IncomingCapsuleRepository`: "unsupported incoming blob kind").
-Depending on how the feed page is handled, that can break more than the one
-card. So the server must not show a MEDIA blob to a client that does not
-understand it. Options:
-
-1. **Separate field (recommended).** The incoming row keeps `blobs` with the
-   three old kinds and adds `media: [...]` that only new clients read. Old
-   apps open the sheet and never see the media.
-2. A client capability header (`X-Remanence-Features: media`) that decides
-   whether MEDIA rows are listed at all.
-3. A minimum app version enforced before media goes live.
+The incoming row keeps `blobs` with the three old kinds and adds a separate
+`media: [...]` that only new clients read. Old apps open the card and never
+see the media.
 
 ## 4. Recording and playback
 
 | | Android | Website |
 | --- | --- | --- |
-| Voice | `MediaRecorder`, AAC/MP4, hold or tap to record, 60 s cap | `MediaRecorder` with `audio/mp4` (Chrome 126+, Safari). Firefox records only WebM/Opus, so it says "record in Chrome, Safari or the app" |
-| Circle | CameraX `VideoCapture` on the front camera, square crop, 30 s cap | `getUserMedia` + `MediaRecorder` `video/mp4`; same Firefox limit |
+| Voice | `MediaRecorder`, AAC/MP4, 60 s cap | `MediaRecorder` with `audio/mp4` (Chrome, Safari) |
+| Circle | CameraX `VideoCapture`, front camera, square crop, 30 s cap | `getUserMedia` + `MediaRecorder` `video/mp4` |
 | Playback | decrypt into app-private cache, play, wipe on close | decrypt into a `blob:` URL, revoke on close |
 
+Firefox records only WebM. The site converts a Firefox recording to MP4 in the
+browser if that is fast and small enough; otherwise recording is not offered
+in Firefox. Playing a received voice note or circle works there either way.
+
 Encryption is the existing single-blob artifact cryptor. An 8 MiB blob fits in
-memory on both clients. Streaming encryption can wait.
+memory on both clients.
 
-## 5. Where media sits on the sheet
+## 5. In the layouts
 
-Two stages:
+- **Voice:** a new song-band mode with a waveform and the length. Older
+  receivers reject an unknown band mode, so this needs an expression contract
+  bump (V5) shipped to receivers before senders use it.
+- **Circle:** a square-tile constraint per grammar. Grammars that cannot give
+  one photo a square tile above the minimum are not offered for a card with a
+  circle, the way grammars that need a song are not offered without one.
+  Where too few qualify, add two or three layouts.
+- **Letter:** the "continued on the back" mark in the note region.
 
-1. **Beside the sheet first**, like the letter: a "play voice note" action
-   under the postcard and a round player over the sheet. No grammar change and
-   no expression version change. The image export stays as it is.
-2. **In the layout next.** Media takes the layouts' existing music slot (all
-   14 grammars have one; 6, 11, 20 and 24 require it). The voice band shows a
-   waveform and its length. The circle is a round frame with the first frame
-   as a still, and it plays when the card is open. This needs new
-   `musicRegion.mode` values, which older receivers reject. So it needs an
-   expression contract bump (V5) and the same compatibility care as the wire
-   change.
+The site and Android share one pool of layouts (done on 9 November), so each
+of these is made once and checked on both against the same reference plans.
 
 ## 6. Export
 
-As the owner asked on 2026-10-31: "save picture" stays as it is, and a new
-"save postcard" gives a folder with the sheet image, the letter as text, and
-the voice or circle file. For stories, a later option is a video of the card
-with the circle playing in it.
+"Save picture" stays as it is. A new "save postcard" gives a folder with the
+sheet image, the letter as text, and the voice or circle file. For stories, a
+later option is a video of the card with the circle playing in it.
 
 ## 7. Order of work
 
-1. Server: the MEDIA kind behind a feature flag, the migration, the separate
-   `media` field on incoming rows, and tests. Deploy only after the owner
-   agrees.
-2. Voice on Android, then on the web (record, seal, upload, open, play),
-   beside the sheet.
-3. Circle on Android, then on the web.
-4. The media slot in the layouts (expression V5).
-5. Folder export.
+1. One pool of layouts on Android and the site (done).
+2. The letter on the back of the card.
+3. Server: the MEDIA kind behind a flag, the migration, the separate `media`
+   field on incoming rows, tests. Deploy after the owner agrees.
+4. The circle: recording on Android, then the site; the square-tile
+   constraint in the layouts.
+5. Voice in the audio slot, with the V5 band mode.
+6. Folder export.
 
-## 8. Questions for the owner
+## 8. Still open
 
-- One slot (song or voice or circle) or song plus voice?
 - 60 s voice and 30 s circle: right lengths?
-- Letter size: is 8000 bytes enough?
-- Can a circle replace a photo, so a card has 2 photos + a circle?
-- Firefox on the web: say "record in another browser", or skip recording there
-  entirely?
+- The minimum size of the circle's square tile.
+- Is 8000 bytes enough for the letter?
+- Can a circle travel with a song? Both make sound when the card is open.

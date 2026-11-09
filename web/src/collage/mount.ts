@@ -12,7 +12,7 @@ import { CANVAS_HEIGHT, CANVAS_WIDTH, type Rect } from './model'
  *   - `AllFamilyV4Adapter.kt:90-93`           — provenance `x/y/width/height`
  *   - `AllFamilyV4Adapter.kt:118-121`         — note region `x/y/width/height`
  *
- * T233's `grammar5Plans` legitimately emits fractional tile rects, so this
+ * The grammar plans (`planGrammars`) legitimately emit fractional rects, so this
  * conversion is applied at the creator MOUNT boundary — BEFORE the crop window
  * is derived from the cell and BEFORE paint/freeze capture — so the displayed
  * integer destination, its derived source window, and the frozen local snapshot

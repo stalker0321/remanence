@@ -1,20 +1,20 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { clampTransform, type CropTransform } from './crop'
 import {
+  creatorChoices,
   creatorScene,
-  plannerFromTextMeasurer,
-  previewCandidates,
+  sceneNoteLayout,
   type CreatorCandidateView,
 } from './creatorPreview'
 import { freezeSelection, freezeValid, type CreatorFreeze, type CreatorSlotFreeze, type FreezeCurrent } from '../create/creatorFreeze'
 import { captureFrozenRenderedPlan, type FrozenRenderedPlan } from './frozenRenderedPlan'
-import { layoutCreatorNote, paintCreatorNote, type CreatorNoteFace, type CreatorNoteLayout } from './creatorNote'
+import { paintCreatorNote, type CreatorNoteFace, type CreatorNoteLayout } from './creatorNote'
+import { bundledFaces } from './fonts'
 import { paintScene, type PaintImage } from './paint'
 import type { TextMeasurer } from './prepare'
 import { styleById } from './styles'
 import type { SessionStore } from '../session/session'
 import type { TrackSnapshot } from '../create/music'
-import type { Grammar5Measure } from './planGrammar5'
 import './creatorComposer.css'
 
 export type CreatorLang = 'en' | 'ru' | 'uk'
@@ -39,6 +39,7 @@ export interface CreatorComposerProps {
   note: string | null
   /** The chosen song, painted as a text band and sealed with the layout. */
   track: TrackSnapshot | null
+  /** Offer only this style (tests); every bundled style otherwise. */
   styleId?: string
   recipient: CreatorComposerRecipient | null
   /** Explicit sender handle (same owner). Falls back to the live session handle. */
@@ -73,6 +74,7 @@ interface Copy {
   noSender: string
   noteOverflow: string
   noteMissing: string
+  noFit: string
   notReady: string
   locked: string
   empty: string
@@ -103,6 +105,7 @@ const copy: Record<CreatorLang, Copy> = {
     noSender: 'Confirm a sender to compose.',
     noteOverflow: 'The note does not fit this layout. Shorten it or choose another.',
     noteMissing: 'Add a note for this layout, or choose one without text.',
+    noFit: 'No layout fits these words and photos. Shorten the note or change the photos.',
     notReady: 'Wait for the preview before choosing this layout.',
     locked: 'Locked — preview cleared.',
     empty: 'Add 3–5 photos to compose.',
@@ -130,6 +133,7 @@ const copy: Record<CreatorLang, Copy> = {
     noSender: 'Подтвердите отправителя для композиции.',
     noteOverflow: 'Текст не помещается в эту композицию. Сократите его или выберите другую.',
     noteMissing: 'Добавьте заметку для этой композиции или выберите вариант без текста.',
+    noFit: 'Ни один вариант не вмещает этот текст и фото. Сократите заметку или поменяйте фото.',
     notReady: 'Дождитесь предпросмотра, прежде чем выбирать композицию.',
     locked: 'Заблокировано — предпросмотр очищен.',
     empty: 'Добавьте 3–5 фото для композиции.',
@@ -157,6 +161,7 @@ const copy: Record<CreatorLang, Copy> = {
     noSender: 'Підтвердіть відправника для композиції.',
     noteOverflow: 'Текст не вміщується в цю композицію. Скоротіть його або виберіть іншу.',
     noteMissing: 'Додайте нотатку для цієї композиції або виберіть варіант без тексту.',
+    noFit: 'Жоден варіант не вміщує цей текст і фото. Скоротіть нотатку або змініть фото.',
     notReady: 'Дочекайтеся попереднього перегляду, перш ніж вибирати композицію.',
     locked: 'Заблоковано — попередній перегляд очищено.',
     empty: 'Додайте 3–5 фото для композиції.',
@@ -189,7 +194,9 @@ function measurerIdOf(measurer: TextMeasurer): number {
 
 export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element {
   const t = copy[props.lang]
-  const styleId = props.styleId ?? 'press'
+  const onlyStyle = props.styleId
+  /** One draft keeps one order of offered layouts. */
+  const [seed] = useState(() => crypto.randomUUID())
   const snap = useSyncExternalStore(props.session.subscribe, props.session.getSnapshot)
   const [planIndex, setPlanIndex] = useState(0)
   const [activeSlot, setActiveSlot] = useState(0)
@@ -227,8 +234,8 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const inputKey = useMemo(() => {
     const photosKey = JSON.stringify(props.photos.map((photo) => [photo.contentId, photo.width, photo.height, photo.contentHash]))
     const transformsKey = JSON.stringify(transforms)
-    return JSON.stringify([photosKey, props.note, transformsKey, styleId, senderHandle, props.track])
-  }, [props.photos, props.note, transforms, styleId, senderHandle, props.track])
+    return JSON.stringify([photosKey, props.note, transformsKey, onlyStyle, senderHandle, props.track])
+  }, [props.photos, props.note, transforms, onlyStyle, senderHandle, props.track])
 
   // Fonts gate: the ONLY async step. Required bundled faces load first;
   // its own epoch, never shared with paint (paint is synchronous after
@@ -245,15 +252,10 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     let cancelled = false
     void (async () => {
       try {
-        const style = styleById(styleId)
-        if (!style) throw new Error(`unknown style ${styleId}`)
-        await Promise.all([
-          document.fonts.load('400 27px StudySerif'),
-          document.fonts.load(`${style.note.weight} ${style.note.size}px ${style.note.font}`),
-          document.fonts.load(`${style.music.italic ? 'italic ' : ''}${style.music.weight} ${style.music.size}px ${style.music.font}`),
-          document.fonts.load('400 64px StudySerif'),
-          document.fonts.load('italic 400 20px StudySerif'),
-        ])
+        // Every layout and style is measured before one is offered, so every
+        // bundled face loads first.
+        await Promise.all(bundledFaces().map((face) =>
+          document.fonts.load(`${face.italic ? 'italic ' : ''}${face.weight} 20px ${face.family}`)))
         if (cancelled || epoch !== fontsEpochRef.current) return
         setFontsReady(true)
       } catch (error) {
@@ -265,7 +267,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       cancelled = true
       fontsEpochRef.current += 1
     }
-  }, [styleId, tornDown])
+  }, [tornDown])
 
   // Synchronous planning bound to the exact current inputs: after the
   // fonts gate, every render derives views deterministically from the
@@ -274,10 +276,8 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const planned: { views: CreatorCandidateView[] } | { error: string } | null = useMemo(() => {
     if (tornDown || !fontsReady) return null
     try {
-      const noteFace = styleById(styleId)?.note
-      const planner: Grammar5Measure = plannerFromTextMeasurer(props.measurer, 640, 640, noteFace)
-      const completed = previewCandidates(
-        {
+      const completed = creatorChoices({
+        preview: {
           id: 'creator',
           sender: senderHandle ?? 'creator',
           photos: props.photos.map((photo) => ({
@@ -289,18 +289,22 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
           note: props.note && props.note.trim() !== '' ? props.note : null,
           music: props.track === null ? null : { artwork: false },
         },
-        new Map(Object.entries(transforms)),
-        planner,
-      )
+        transforms: new Map(Object.entries(transforms)),
+        measurer: props.measurer,
+        track: props.track === null ? null : { title: props.track.title, artistDisplay: props.track.artistDisplay },
+        seed,
+        ...(onlyStyle === undefined ? {} : { styleIds: [onlyStyle] }),
+      })
       return { views: completed }
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
     }
-  }, [tornDown, fontsReady, inputKey, props.measurer, props.photos, props.note, props.track, transforms, senderHandle])
+  }, [tornDown, fontsReady, inputKey, props.measurer, props.photos, props.note, props.track, transforms, senderHandle, seed, onlyStyle])
 
   const views = planned !== null && 'views' in planned ? planned.views : null
   const planError = fontsError ?? (planned !== null && 'error' in planned ? planned.error : null)
   const view = views !== null ? views[Math.min(planIndex, views.length - 1)] ?? null : null
+  const styleId = view?.styleId ?? ''
 
   // T247 binding key: the full rendered geometry + choice/context that was
   // painted. The whole `view` is included, so a measurer/font change (which
@@ -448,31 +452,12 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       // the real rows on top, so a measured 3/7-line note is fully visible.
       let noteLayout: CreatorNoteLayout | null = null
       let noteFace: CreatorNoteFace | null = null
-      if (scene.note) {
-        const face: CreatorNoteFace = {
-          font: scene.note.family,
-          weight: scene.note.weight,
-          italic: scene.note.italic,
-          size: scene.note.size,
-          line: scene.note.line,
-        }
-        const measureLineWidth = (lineText: string): number =>
-          props.measurer.measure({
-            text: lineText,
-            family: face.font,
-            size: face.size,
-            weight: face.weight,
-            italic: face.italic,
-            line: face.line,
-            maxWidth: Number.POSITIVE_INFINITY,
-            maxHeight: Number.POSITIVE_INFINITY,
-            softWrap: false,
-          }).width
-        const layout = layoutCreatorNote(scene.note.text, face, scene.note.region, measureLineWidth)
-        noteLayout = layout
-        noteFace = face
-        setNoteFits(!layout.overflow)
-        if (layout.overflow) {
+      const measuredNote = sceneNoteLayout(scene, props.measurer)
+      if (measuredNote !== null) {
+        noteLayout = measuredNote.layout
+        noteFace = measuredNote.face
+        setNoteFits(!measuredNote.layout.overflow)
+        if (measuredNote.layout.overflow) {
           renderedRef.current = null
           setReadySig(null)
           context.setTransform(1, 0, 0, 1, 0, 0)
@@ -546,6 +531,14 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       <div className="creator-composer" data-testid="creator-composer">
         <p data-testid="creator-empty">{t.empty}</p>
         <p data-testid="creator-paint-error">{planError}</p>
+      </div>
+    )
+  }
+
+  if (views !== null && views.length === 0) {
+    return (
+      <div className="creator-composer" data-testid="creator-composer">
+        <p data-testid="creator-no-fit">{t.noFit}</p>
       </div>
     )
   }

@@ -4,8 +4,10 @@ import { CollageError } from './errors'
 import { encodeExpression } from './codec'
 import { FONT_VERSION } from './fonts'
 import type { FrozenRenderedRect } from './frozenRenderedPlan'
+import { ACTIVE_GRAMMAR_IDS } from './planGrammars'
 import {
   EXPRESSION_CONTRACT_V4,
+  MUSIC_MODES_V4,
   type GeneratorInput,
   type PhotoRef,
   type Placement,
@@ -22,12 +24,12 @@ import { PALETTE_VERSION, roleTextType, styleById, styleDigest, type CollageStyl
  * `ResolvedExpression` + `encodeExpression` bytes.
  *
  * Mirrors the accepted Android `AllFamilyV4Adapter.kt` mapping (canvasVersion
- * 1, grammarId `g5`, grammarVersion 1, `noteTreatment 'regular-region'`,
+ * 1, the painted grammar id, grammarVersion 1, `noteTreatment 'regular-region'`,
  * `diagnostics []`, the bundled style binding + `styleDigest`, plan-state note
- * face, `noteType` from the bundled style ONLY when no note was painted, g5
- * `decor` -> null, authored-order placements/provenance) but reads the geometry
+ * face, `noteType` from the bundled style ONLY when no note was painted, the
+ * painted decor planes (null when none), authored-order placements/provenance) but reads the geometry
  * ONLY from the already-painted deep-immutable `CreatorFreeze` — never from
- * `previewCandidates`/`grammar5Plans`/live props/a measurer. Nothing is
+ * `creatorChoices`/`planGrammars`/live props/a measurer. Nothing is
  * floored, rounded, or regenerated here: T252 already mounted the producer to
  * integers, so any fractional wire value is an honest typed refusal.
  *
@@ -66,6 +68,9 @@ export interface FrozenExpressionRefused {
 export type FrozenExpressionResult = FrozenExpressionOk | FrozenExpressionRefused
 
 const INT64_MAX = (2n ** 63n) - 1n
+const SEALABLE_GRAMMARS = new Set(ACTIVE_GRAMMAR_IDS.map((id) => `g${id}`))
+/** Bands drawn around a cover; without one the plan picks their text twins. */
+const COVER_ONLY_MODES = new Set(['thumbnail', 'tile-art', 'sleeve'])
 /** Max value `CanonicalWriter.int` accepts (signed int32). */
 const INT32_MAX = 0x7fffffff
 
@@ -101,15 +106,13 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
   if (typeof epoch !== 'bigint') return refuse('epoch-invalid', 'epoch must be a bigint')
   if (epoch < 0n || epoch > INT64_MAX) return refuse('epoch-invalid', `epoch out of int64 range: ${epoch}`)
 
-  if (frozen.grammarId !== 'g5' || frozen.renderedPlan.grammarId !== 'g5') {
+  if (!SEALABLE_GRAMMARS.has(frozen.grammarId) || frozen.renderedPlan.grammarId !== frozen.grammarId) {
     return refuse('unsupported', `grammar ${frozen.grammarId}`)
   }
   if (frozen.renderedPlan.branchId !== frozen.branchId) {
     return refuse('render-mismatch', `rendered plan branch ${frozen.renderedPlan.branchId} != ${frozen.branchId}`)
   }
-  // g5 emits no decor; the model rejects an empty decor list, so anything but
-  // empty is out of scope here.
-  if (frozen.renderedPlan.decor.length !== 0) return refuse('unsupported', 'decor is out of scope')
+  if (frozen.renderedPlan.decor.some((plane) => !intRect(plane.region))) return refuse('fraction', 'decor region is not integral')
 
   const style = styleById(frozen.styleId)
   if (!style) return refuse('style-unknown', frozen.styleId)
@@ -127,6 +130,7 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
       `rendered style ${frozen.renderedPlan.style.styleId}@${frozen.renderedPlan.style.styleVersion} != ${frozen.styleId}@${frozen.styleVersion}`,
     )
   }
+  if (`g${style.grammar}` !== frozen.grammarId) return refuse('style-mismatch', `style ${style.id} belongs to g${style.grammar}`)
   const digest = await styleDigest(frozen.styleId)
   if (!digest || digest.length !== 32) return refuse('style-unknown', `${frozen.styleId} has no bundled digest`)
 
@@ -233,7 +237,10 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
     if (frozenMusic.title !== frozen.track.title || frozenMusic.artist !== frozen.track.artistDisplay) {
       return refuse('music-mismatch', 'painted song words differ from the chosen song')
     }
-    if (frozenMusic.mode !== 'text') return refuse('unsupported', `song band mode ${frozenMusic.mode}`)
+    // The site holds no cover, so a band that needs one cannot be sealed.
+    if (!(MUSIC_MODES_V4 as readonly string[]).includes(frozenMusic.mode) || COVER_ONLY_MODES.has(frozenMusic.mode)) {
+      return refuse('unsupported', `song band mode ${frozenMusic.mode}`)
+    }
     if (!intRect(frozenMusic.region)) return refuse('fraction', 'song band region is not integral')
     // Android seals the style's music role, the same type the band was painted in.
     const type = roleTextType(style.music)
@@ -280,7 +287,7 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
 
   const expression: ResolvedExpression = {
     canvasVersion: 1,
-    grammarId: 'g5',
+    grammarId: frozen.grammarId,
     grammarVersion: 1,
     branchId: frozen.branchId,
     input,
@@ -295,7 +302,9 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
     noteType,
     musicRegion,
     provenance,
-    decor: null,
+    decor: frozen.renderedPlan.decor.length === 0
+      ? null
+      : frozen.renderedPlan.decor.map((plane) => ({ kind: plane.kind, ...copyRect(plane.region) })),
   }
 
   const validation = validateResolved(expression)

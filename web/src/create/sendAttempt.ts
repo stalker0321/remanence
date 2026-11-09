@@ -156,7 +156,7 @@ export function sendPreflight(visit: SendVisit, ports: SendPortsFull): SendPrefl
   }
   if (visit.photos.length < 3 || visit.photos.length > 5) return { ok: false, reason: 'photos' }
   if (visit.trackId !== (visit.freeze.track?.trackId ?? null)) return { ok: false, reason: 'music' }
-  if (visit.freeze.grammarId !== 'g5') return { ok: false, reason: 'freeze' }
+  if (visit.freeze.grammarId !== visit.freeze.renderedPlan.grammarId) return { ok: false, reason: 'freeze' }
   if (visit.still.bytes.length === 0) return { ok: false, reason: 'still' }
   if (visit.fingerprint.wire.length === 0) return { ok: false, reason: 'fingerprint' }
   return { ok: true }

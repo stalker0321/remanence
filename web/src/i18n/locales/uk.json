@@ -7,7 +7,7 @@
   "createComposition": "оформлення",
   "createCompositionTitle": "який варіант ближчий?",
   "createPostcardTitle": "тепер листівка",
-  "createContentHint": "додайте кілька слів і 3–5 фотографій. далі оберете, як їх розкласти",
+  "createContentHint": "3–5 фотографій і, якщо хочеться, кілька слів. далі оберете, як їх розкласти",
   "createChooseComposition": "переглянути варіанти",
   "createEditContent": "змінити фото й слова",
   "createContinuePostcard": "обрати цей",
@@ -36,7 +36,7 @@
   "accountLockedTitle": "з поверненням",
   "accountHandleTitle": "оберіть нік",
   "accountKeysTitle": "лише для двох",
-  "accountVisitHint": "вхід діє, поки відкрита вкладка. на чужому комп’ютері не забудьте вийти",
+  "accountVisitHint": "на цьому пристрої ви залишаєтеся в акаунті, доки не вийдете. на чужому комп’ютері не забудьте вийти",
   "accountNext": "що далі?",
   "stepAccount": "акаунт",
   "stepHandle": "нік",
@@ -345,5 +345,8 @@
   "giftNoneBody": "можливо, листівку надіслали на інший. запитайте у відправника",
   "giftFailedTitle": "не вийшло",
   "giftFailedBody": "спробуйте ще раз трохи згодом",
-  "giftTryAgain": "спробувати ще раз"
+  "giftTryAgain": "спробувати ще раз",
+  "createLinkedFor": "листівка буде для",
+  "createLinkedSelf": "листівка буде для вас",
+  "createChosenDesign": "ваш макет"
 }

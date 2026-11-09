@@ -36,7 +36,7 @@
   "accountLockedTitle": "Account page heading when signed in but still locked.",
   "accountHandleTitle": "Account page heading during sign-up while choosing a username.",
   "accountKeysTitle": "Account page side-panel heading about keys, followed by the privacy explanation.",
-  "accountVisitHint": "Account page body when signed in and unlocked; explains staying signed in in this tab.",
+  "accountVisitHint": "Account page body when signed in; explains this device stays signed in until sign-out.",
   "accountNext": "Account page heading above the next-action links after unlocking.",
   "stepAccount": "Step-trail label 'account' in the account flow. Short.",
   "stepHandle": "Step-trail label 'username' in the account flow. Short.",
@@ -345,5 +345,8 @@
   "giftNoneBody": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
   "giftFailedTitle": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
   "giftFailedBody": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
-  "giftTryAgain": "First gift by postcard code: the page a new recipient follows, see ADR-020."
+  "giftTryAgain": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
+  "createLinkedFor": "Create page when signed out from a /<nick> link; followed by @handle of who the postcard will be for.",
+  "createLinkedSelf": "Create page when signed out from the /me link; the postcard will be for the signed-in person themself.",
+  "createChosenDesign": "Create page, postcard step: caption above the small preview of the chosen layout."
 }

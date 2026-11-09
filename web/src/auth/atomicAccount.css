@@ -53,3 +53,10 @@
   .account-intro > h1 { max-width: 16ch; }
   .key-explanation { margin-top: 0; }
 }
+/* Signed in: one quiet column, the handle as the heading. */
+.card.atomic-account.account-home { max-width: 34rem; }
+.account-home h1 { margin: 0 0 1rem; font-size: clamp(2rem, 5vw, 2.8rem); }
+.account-home-hint { margin: 0 0 1.2rem; }
+.account-home-privacy { margin: 0; padding-top: 1.2rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
+.account-home .actions { margin-top: 2rem; }
+@media (max-width: 700px) { .account-home .account-emblem { display: flex; } }

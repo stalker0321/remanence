@@ -11,7 +11,7 @@
 [hidden] { display:none !important; }
 body { margin:0; min-height:100vh; }
 button,a,input,textarea,select { font:inherit; color:inherit; }
-button,a.button {
+button,a.button,label.button {
   display:inline-flex; align-items:center; justify-content:center; gap:.65rem;
   min-height:var(--touch); max-width:100%; padding:.7rem 1.15rem;
   border:1px solid var(--line); border-radius:.6rem; background:transparent;
@@ -19,9 +19,9 @@ button,a.button {
   white-space:normal; overflow-wrap:anywhere;
   transition:background-color 150ms ease,border-color 150ms ease;
 }
-button:not(:disabled):not([aria-disabled="true"]):hover,a.button:hover { background:var(--bridge); border-color:var(--lilac-edge); }
-button.primary,a.button.primary { background:var(--lilac-deep); color:#fffdf8; border-color:var(--lilac-deep); }
-button.primary:not(:disabled):not([aria-disabled="true"]):hover,a.button.primary:hover { background:#424d80; }
+button:not(:disabled):not([aria-disabled="true"]):hover,a.button:hover,label.button:hover { background:var(--bridge); border-color:var(--lilac-edge); }
+button.primary,a.button.primary,label.button.primary { background:var(--lilac-deep); color:#fffdf8; border-color:var(--lilac-deep); }
+button.primary:not(:disabled):not([aria-disabled="true"]):hover,a.button.primary:hover,label.button.primary:hover { background:#424d80; }
 button:disabled { opacity:.45; cursor:default; }
 button[aria-disabled="true"] { opacity:.65; cursor:wait; }
 button.quiet,a.button.quiet { background:transparent; border-color:transparent; box-shadow:none; text-decoration:underline; text-underline-offset:.2em; }
@@ -488,3 +488,44 @@ button.google-button:not(:disabled):not([aria-disabled="true"]):hover { backgrou
 label.photo-pick { position:relative; width:100%; cursor:pointer; }
 label.photo-pick input[type="file"] { position:absolute; inset:0; opacity:0; width:100%; height:100%; margin:0; cursor:pointer; }
 .content-workspace .draft-section textarea { min-height:5.5rem; }
+.linked-recipient { display:flex; flex-wrap:wrap; align-items:baseline; gap:.2rem .6rem; margin:0 0 1.5rem; padding:1.2rem 1.4rem; background:var(--sand); border-radius:.8rem; color:var(--muted); overflow-wrap:anywhere; }
+.linked-recipient strong { font-weight:400; font-size:1.6rem; line-height:1.2; color:var(--ink); }
+
+/* Making a postcard, second pass: one centred column of steps on a desk,
+   photos beside the words, the chosen layout beside the camera. */
+.create-page:not(.recipient-picker) { max-width:60rem; margin-inline:auto; }
+.workspace-nav { flex-wrap:nowrap; gap:.25rem; }
+.workspace-nav button { flex:0 1 auto; min-width:0; white-space:nowrap; }
+.workspace-nav button span { margin-inline-end:.45rem; }
+.workspace-nav button:disabled { opacity:.5; }
+@media (min-width:900px) {
+  .content-workspace { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); align-items:start; max-width:none; }
+  .content-workspace .draft-section textarea { min-height:12rem; }
+}
+.postcard-workspace { display:grid; gap:1.5rem; }
+.chosen-design { display:flex; align-items:center; gap:1rem; margin:0; padding:.8rem; background:var(--surface); border:1px solid var(--line); border-radius:.8rem; }
+.chosen-design img { width:4.5rem; height:auto; aspect-ratio:360/640; object-fit:cover; border-radius:.3rem; border:1px solid var(--line); }
+.chosen-design figcaption { display:grid; gap:.2rem; font-size:.85rem; color:var(--muted); }
+.chosen-design figcaption button { justify-self:start; padding-inline:0; min-height:36px; }
+@media (min-width:900px) {
+  .postcard-workspace { grid-template-columns:minmax(0,13rem) minmax(0,1fr); align-items:start; gap:2rem; }
+  .chosen-design { flex-direction:column; align-items:stretch; padding:1rem; }
+  .chosen-design img { width:100%; }
+  .postcard-workspace .front-section,.postcard-workspace .send-block { grid-column:2; margin:0; }
+  .postcard-workspace .chosen-design { grid-row:1 / span 2; }
+}
+@media (max-width:700px) {
+  .workspace-nav { margin-bottom:1.3rem; }
+  .workspace-nav button { padding:.5rem .55rem; font-size:.78rem; }
+  .create-page[data-workspace] .page-heading h1 { font-size:1.75rem; }
+  .create-page[data-workspace] .page-heading { margin-bottom:1rem; }
+  .draft-recipient { margin-bottom:1.1rem; }
+}
+@media (max-width:700px) {
+  /* The next step stays in reach above the tab bar while photos scroll by. */
+  .create-page > .workspace-next:not([hidden]) { position:sticky; z-index:1; bottom:calc(3.4rem + env(safe-area-inset-bottom)); margin:0 -18px; padding:.7rem 18px; background:var(--paper); border-top:1px solid var(--line); }
+  .create-page > .workspace-next .field-hint { display:none; }
+  .create-page > .workspace-next .primary { flex:1 1 100%; }
+}
+.create-locked { max-width:42rem; }
+.history-toolbar .quiet { padding-inline:.25rem; }

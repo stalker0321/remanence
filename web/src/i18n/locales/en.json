@@ -7,7 +7,7 @@
   "createComposition": "layout",
   "createCompositionTitle": "which one feels right?",
   "createPostcardTitle": "now the postcard",
-  "createContentHint": "add a few words and 3–5 photos. next you’ll pick how they’re laid out",
+  "createContentHint": "3–5 photos, and a few words if you like. next you’ll pick how they’re laid out",
   "createChooseComposition": "see layouts",
   "createEditContent": "edit photos and words",
   "createContinuePostcard": "use this one",
@@ -36,7 +36,7 @@
   "accountLockedTitle": "welcome back",
   "accountHandleTitle": "pick a username",
   "accountKeysTitle": "just for the two of you",
-  "accountVisitHint": "you stay signed in while this tab is open. on a shared computer, sign out when you’re done",
+  "accountVisitHint": "this device stays signed in until you sign out. on a shared computer, sign out when you’re done",
   "accountNext": "what next?",
   "stepAccount": "account",
   "stepHandle": "username",
@@ -345,5 +345,8 @@
   "giftNoneBody": "maybe it went to another one. ask whoever sent the postcard",
   "giftFailedTitle": "that didn’t work",
   "giftFailedBody": "try again in a moment",
-  "giftTryAgain": "try again"
+  "giftTryAgain": "try again",
+  "createLinkedFor": "this one will be for",
+  "createLinkedSelf": "this one will be for you",
+  "createChosenDesign": "your layout"
 }

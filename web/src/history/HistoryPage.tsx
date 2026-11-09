@@ -85,7 +85,7 @@ export function HistoryPage({ store, transport, t, language }: {
   return <section className="card history" data-testid="history-page">
     <header className="page-heading"><h1 ref={heading} tabIndex={-1}>{t('historyTitle')}</h1>
     <p className="page-lead">{t('historyBody')}</p></header>
-    {signedIn && (rows.length > 0 || loading || failed) ? <div className="history-toolbar"><button type="button" disabled={loading || cancelling} onClick={() => { setNotice(null); void load(null) }}>{t('historyRefresh')}</button><a href={href('create')}>{t('make')}<Icon name="arrow" /></a></div> : null}
+    {signedIn && (rows.length > 0 || loading || failed) ? <div className="history-toolbar"><button type="button" className="quiet" disabled={loading || cancelling} onClick={() => { setNotice(null); void load(null) }}>{t('historyRefresh')}</button><a href={href('create')}>{t('make')}<Icon name="arrow" /></a></div> : null}
     {!signedIn ? <div className="empty-state"><Icon name="postcard" /><p>{t('historyAuth')}</p><div className="actions"><a className="button primary" href={href('account')}>{t('signInToHistory')}<Icon name="arrow" /></a></div></div> : <>
       {notice ? <p role="status" data-testid="history-result">{t(notice)}</p> : null}
       {loading ? <p role="status">{t('historyLoading')}</p> : null}

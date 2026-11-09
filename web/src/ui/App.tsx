@@ -660,6 +660,9 @@ export function Create({
   const [creatorImageState, setCreatorImageState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const measurer = useMemo(() => canvasTextMeasurer(document), [])
   const recipientHeading = useRef<HTMLHeadingElement>(null)
+  const composition = useRef<HTMLDivElement>(null)
+  // A still of the chosen layout, shown beside the camera so the person sees what the card will open.
+  const [designUrl, setDesignUrl] = useState<string | null>(null)
 
   const open = view.phase !== 'signed-out' && view.phase !== 'authenticated' && view.accountId !== null
   const pending = open ? recipient.pending() : null
@@ -1229,6 +1232,8 @@ export function Create({
     return (
       <section className="card create-locked">
         <header className="page-heading"><h1>{t('homeMakeTitle')}</h1><p className="page-lead">{t('homeMakeBody')}</p></header>
+        {/* A /<nick> or /me link names who it is for before anything else. */}
+        {linked ? <p className="linked-recipient">{t(linked.kind === 'self' ? 'createLinkedSelf' : 'createLinkedFor')}{linked.kind === 'named' ? <strong>@{linked.handle}</strong> : null}</p> : null}
         <div className="empty-state"><Icon name="key" /><p>{t('createLocked')}</p>
         <div className="actions">
           <a className="button primary" href={href('account')}>{t(view.phase === 'signed-out' ? 'signInToMake' : 'unlockToMake')}<Icon name="arrow" /></a>
@@ -1361,7 +1366,7 @@ export function Create({
           {noteAtLimit ? <p className="field-hint">{t('noteTooLong')}</p> : null}
           </section>
           </div>
-          <div hidden={createStep !== 'composition'} className="composition-workspace">
+          <div hidden={createStep !== 'composition'} className="composition-workspace" ref={composition}>
           {accepted !== null && noteFits ? (
             creatorImageState === 'loading' ? (
               <p>{t('photoLoading')}</p>
@@ -1387,6 +1392,9 @@ export function Create({
                     // the same visit without extra parent state updates.
                     invalidateSend()
                     setStamp((value) => value + 1)
+                    let still: string | null = null
+                    try { if (frozen !== null) still = composition.current?.querySelector('canvas')?.toDataURL('image/jpeg', 0.85) ?? null } catch { still = null }
+                    setDesignUrl(still)
                     if (frozen !== null) showCreateStep('postcard')
                   }}
                 />
@@ -1440,6 +1448,11 @@ export function Create({
           </> : null}
           <div hidden={createStep !== 'content'} className="workspace-next"><p className="field-hint">{t('createContentHint')}</p><button type="button" className="primary" disabled={accepted === null || !noteFits || photoIntakePending || creatorImages === null || sendPhase !== 'idle'} onClick={() => showCreateStep('composition')}>{t('createChooseComposition')}<Icon name="arrow" /></button></div>
           <div hidden={createStep !== 'postcard'} className="postcard-workspace">
+          <figure className={`chosen-design${designUrl ? ' is-ready' : ''}`}>
+            {designUrl ? <img src={designUrl} alt="" /> : null}
+            <figcaption><span>{t('createChosenDesign')}</span>
+              <button type="button" className="quiet" disabled={sendPhase !== 'idle' || busy} onClick={() => showCreateStep('composition')}>{t('createBackComposition')}</button></figcaption>
+          </figure>
           <section className="front-section">
             <h2>{t('createFrontTitle')}</h2><p>{t('createFrontHint')}</p>
             <div ref={host} />
@@ -1482,7 +1495,6 @@ export function Create({
                 </>
               ) : null}
             </div>
-          <div className="actions"><button type="button" className="quiet" disabled={sendPhase !== 'idle' || busy} onClick={() => showCreateStep('composition')}>{t('createBackComposition')}</button></div>
           </div>
         </>
       ) : null}

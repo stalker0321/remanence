@@ -7,7 +7,7 @@
   "createComposition": "оформление",
   "createCompositionTitle": "какой вариант ближе?",
   "createPostcardTitle": "теперь открытка",
-  "createContentHint": "добавьте пару слов и 3–5 фотографий. дальше выберете, как их разложить",
+  "createContentHint": "3–5 фотографий и, если хочется, пара слов. дальше выберете, как их разложить",
   "createChooseComposition": "посмотреть варианты",
   "createEditContent": "изменить фото и слова",
   "createContinuePostcard": "выбрать этот",
@@ -36,7 +36,7 @@
   "accountLockedTitle": "с возвращением",
   "accountHandleTitle": "выберите ник",
   "accountKeysTitle": "только для двоих",
-  "accountVisitHint": "вход действует, пока открыта вкладка. на чужом компьютере не забудьте выйти",
+  "accountVisitHint": "на этом устройстве вы остаётесь в аккаунте, пока не выйдете. на чужом компьютере не забудьте выйти",
   "accountNext": "что дальше?",
   "stepAccount": "аккаунт",
   "stepHandle": "ник",
@@ -345,5 +345,8 @@
   "giftNoneBody": "возможно, открытку отправили на другой. спросите у отправителя",
   "giftFailedTitle": "не получилось",
   "giftFailedBody": "попробуйте ещё раз чуть позже",
-  "giftTryAgain": "попробовать ещё раз"
+  "giftTryAgain": "попробовать ещё раз",
+  "createLinkedFor": "открытка будет для",
+  "createLinkedSelf": "открытка будет для вас",
+  "createChosenDesign": "ваш макет"
 }

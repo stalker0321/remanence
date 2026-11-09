@@ -42,9 +42,8 @@ export function Settings({ t, language, onSelectLanguage, handle, signedIn, sess
           <dt>{t('settingsSession')}</dt>
           <dd>{sessionState}</dd>
         </dl> : <p>{t('settingsSignedOut')}</p>}
-        {signedIn ? <p className="field-hint">{t('settingsAccountHint')}</p> : null}
         <div className="actions">
-          <a href={href('account')}>{t('account')}</a>
+          <a className="button" href={href('account')}>{t(signedIn ? 'account' : 'signInToMake')}</a>
         </div>
       </section>
       {sendAccess}

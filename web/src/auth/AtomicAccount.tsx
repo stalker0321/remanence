@@ -93,8 +93,17 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     : creating ? 'atomicCreateTitle' : verifying || pendingCredential ? 'atomicCreatedTitle' : state.phase === 'unknown' ? 'atomicCheck' : 'atomicSignInTitle'
   const body: MessageKey = unreadableCreation ? 'atomicUnreadableBody' : unsupported ? 'atomicUnsupportedBody' : signedIn ? unlocked ? 'accountVisitHint' : 'authBody' : choosing ? 'atomicHandleBody'
     : creating ? 'atomicCreateBody' : pendingCredential ? 'atomicPendingBody' : verifying ? 'atomicVerifyBody' : 'atomicSignInBody'
+  // Signed in: who you are, how long it lasts, and the way out. Making and
+  // opening live on the home page and the menu, not here.
+  if (unlocked) return <section className="card atomic-account account-home" data-atomic-phase={state.phase}>
+    <span className="account-emblem"><Icon name="key" /></span>
+    <h1 ref={heading} tabIndex={-1}>{view.handle ? `@${view.handle}` : t(title)}</h1>
+    <p className="account-home-hint">{t('accountVisitHint')}</p>
+    <p className="account-home-privacy">{t('atomicPrivacy')}</p>
+    <div className="actions"><button type="button" onClick={() => { leave(); store.signOut() }}>{t('signOut')}</button></div>
+  </section>
   return <section className="card atomic-account" data-atomic-phase={state.phase}>
-    {!signedIn ? <StepTrail labels={['stepAccount', 'stepHandle', 'atomicStepCreate', 'atomicStepVerify']} current={state.phase === 'idle' || state.phase === 'google' ? 0 : choosing ? 1 : creating || pendingCredential ? 2 : 3} t={t} /> : null}
+    {!signedIn && !start ? <StepTrail labels={['stepAccount', 'stepHandle', 'atomicStepCreate', 'atomicStepVerify']} current={state.phase === 'idle' || state.phase === 'google' ? 0 : choosing ? 1 : creating || pendingCredential ? 2 : 3} t={t} /> : null}
     <div className="account-layout">
     <div className="account-intro">
     <span className="account-emblem"><Icon name="key" /></span>

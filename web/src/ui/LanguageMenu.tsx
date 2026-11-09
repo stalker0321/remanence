@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { Language, MessageKey } from '../i18n/catalog'
-import { languageOptions, wrapIndex } from './languageOptions'
+import { LANGUAGE_NAMES, languageOptions, wrapIndex } from './languageOptions'
 import './settings.css'
 
 export interface LanguageMenuProps {
@@ -90,7 +90,7 @@ export function LanguageMenu({ language, onSelect, t, compact = false }: Languag
         onClick={() => setOpen((value) => !value)}
         onKeyDown={onTriggerKeyDown}
       >
-        {compact ? language.toUpperCase() : t('language')}
+        {compact ? language.toUpperCase() : LANGUAGE_NAMES[language]}
       </button>
       {open ? (
         <div className="language-list" role="listbox" id={listId} aria-label={t('language')}>

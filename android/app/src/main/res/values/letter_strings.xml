@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="capsule_letter_open">read the letter</string>
+    <string name="create_letter_label">a letter</string>
+    <string name="create_letter_hint">longer words, read beside the postcard</string>
+</resources>

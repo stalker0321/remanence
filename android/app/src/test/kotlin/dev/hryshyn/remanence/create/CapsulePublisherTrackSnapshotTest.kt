@@ -197,6 +197,40 @@ class CapsulePublisherTrackSnapshotTest {
     }
 
     @Test
+    fun letterIsSealedBesideTheSheetAndNeedsTheV2Frame() {
+        assertThrows(IllegalArgumentException::class.java) {
+            publisher.publish(request(null, null).copy(letter = "hello"))
+        }
+        val letter = "Дорогая мама,\nэто письмо рядом с открыткой."
+        val prepared = publisher.publish(request(ber1(), snapshot()).copy(letter = letter))
+        assertEquals(letter, openContent(prepared).letter)
+        assertNull(openContent(publisher.publish(request(ber1(), null))).letter)
+    }
+
+    private fun openContent(prepared: dev.hryshyn.remanence.core.data.outbox.PreparedOutboxCapsule): dev.hryshyn.remanence.core.crypto.ContentManifestContent {
+        val content = prepared.artifacts.single {
+            it.kind == dev.hryshyn.remanence.core.data.outbox.OutboxArtifactKind.CONTENT_MANIFEST
+        }
+        val opened = RecipientEnvelopeCryptor().open(
+            identity.encryptionPrivateHandle,
+            dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                CapsuleId(capsuleUuid), UserId(userUuid), UserId(userUuid), KeyBundleId(bundleUuid),
+            ),
+            prepared.envelopeCiphertext,
+        )
+        val capsuleKeyset = TinkProtoKeysetFormat.parseKeyset(
+            dev.hryshyn.remanence.protocol.v1.RecipientEnvelopePlaintext.parseFrom(opened)
+                .capsuleAeadKeyset.toByteArray(),
+            InsecureSecretKeyAccess.get(),
+        )
+        return ContentManifestCodec().decryptAndParse(
+            capsuleKeyset,
+            RecognitionManifestCodec.RoutingContext(CapsuleId(capsuleUuid), BlobId(content.blobId), UserId(userUuid), UserId(userUuid)),
+            content.ciphertext,
+        )
+    }
+
+    @Test
     fun snapshotLessV2ParsesNullSnapshot() {
         val prepared = publisher.publish(request(ber1(), null))
         val content = prepared.artifacts.single {

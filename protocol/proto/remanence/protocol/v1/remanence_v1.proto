@@ -119,6 +119,11 @@ message ContentManifest {
   // S2: v2-only authenticated track snapshot. Absent in v1; v1 decoders
   // never set or read it. Optional even in v2 (expression stays required).
   optional CapsuleTrackSnapshotV1 track_snapshot = 7;
+  // Long note ("letter"): v2-only, read beside the sheet rather than drawn on
+  // it, 1..8000 UTF-8 bytes when present. Rides inside the authenticated
+  // manifest like the track snapshot; no new artifact kind. Older Android
+  // builds skip the unknown field and still open the sheet.
+  optional string letter = 8;
 }
 
 // ADR-018: one authored source binding (expression content-id -> manifest

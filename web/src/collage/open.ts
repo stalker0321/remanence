@@ -34,6 +34,8 @@ export interface OpenedPostcard {
   scene: Scene
   photos: Map<string, Uint8Array>
   artwork: Uint8Array | null
+  /** Long note read beside the sheet, or null. */
+  letter: string | null
 }
 
 /**
@@ -156,7 +158,7 @@ export async function openGrantedPostcard(
     if (prepared.kind !== 'ready') throw new CollageError('REJECTED')
     const kept = new Map<string, Uint8Array>()
     for (const [id, bytes] of photoPlain) kept.set(id, bytes.slice())
-    return { scene: prepared.scene, photos: kept, artwork: cover && artwork ? artwork.bytes.slice() : null }
+    return { scene: prepared.scene, photos: kept, artwork: cover && artwork ? artwork.bytes.slice() : null, letter: manifest.letter }
   } catch (error) {
     if (error instanceof CollageError || error instanceof ProtocolError) throw error
     throw new CollageError('INTEGRITY')

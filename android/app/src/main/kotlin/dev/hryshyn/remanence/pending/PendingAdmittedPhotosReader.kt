@@ -56,6 +56,11 @@ internal class PendingAdmittedPhotosReader(
         return opened.manifest.trackSnapshot
     }
 
+    override suspend fun letter(capsuleId: String): String? {
+        requireId(capsuleId)
+        return opened.manifest.letter
+    }
+
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {
         requireId(capsuleId)
         val manifest = opened.manifest

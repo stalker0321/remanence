@@ -133,6 +133,8 @@ internal class PreparedIncomingPresentation internal constructor(
     /** S2b-receiver: the sealed v2-only track snapshot, or null when absent. */
     internal fun trackSnapshot(): CapsuleTrackSnapshotV1? = material.trackSnapshot()
 
+    internal fun letter(): String? = material.letter()
+
     internal fun loadPhoto(ordinal: Int): ByteArray = material.loadPhoto(ordinal)
 
     /** Used only while the owner/capsule boundary is held before grant issue. */

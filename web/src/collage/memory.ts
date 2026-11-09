@@ -14,6 +14,7 @@ export interface HeldSheet {
   scene: Scene
   photos: ReadonlyMap<string, string>
   artwork: string | null
+  letter: string | null
 }
 
 export const browserUrls: UrlPort = {
@@ -66,7 +67,7 @@ export class PresentationMemory {
         artwork = this.urls.create(copy, 'image/webp')
         this.#urls.push(artwork)
       }
-      const held = { scene: opened.scene, photos, artwork }
+      const held = { scene: opened.scene, photos, artwork, letter: opened.letter }
       this.#sheet = held
       this.#emit()
       return held

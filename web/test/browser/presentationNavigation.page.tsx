@@ -78,7 +78,7 @@ async function admit() {
   const scene = creatorScene({ view, styleId: 'press', senderHandle: 'fixture_qa', noteText: text,
     photos: new Map(images.map((image) => [image.contentId, { width: image.width, height: image.height }])) })
   store.matchPostcard()
-  showGrantedPostcard(store, memory, { scene, photos: new Map(images.map((image, index) => [image.contentId, bytes[index]!])), artwork: null })
+  showGrantedPostcard(store, memory, { scene, photos: new Map(images.map((image, index) => [image.contentId, bytes[index]!])), artwork: null, letter: null })
 }
 Object.assign(window, { presentationNavigation: {
   admit, lock: () => store.lock(), switchAccount: () => signIn(true),

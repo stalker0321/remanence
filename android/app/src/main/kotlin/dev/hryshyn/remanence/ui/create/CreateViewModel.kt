@@ -368,6 +368,24 @@ class CreateViewModel(
     val noteEditor = NoteEditorState().also { it.onEdit = { invalidateGeneratorForNoteEdit() } }
 
     /**
+     * The long note ("letter") read beside the sheet. It is not drawn on the
+     * layout, so editing it never invalidates the chosen collage.
+     */
+    private val _letter = MutableStateFlow("")
+    val letter: StateFlow<String> = _letter.asStateFlow()
+
+    /** Keeps at most [CapsuleLetter.MAX_UTF8_BYTES] of UTF-8, cut on a character boundary. */
+    fun setLetter(text: String) {
+        _letter.value = dev.hryshyn.remanence.ui.create.LetterBounds.clip(text)
+    }
+
+    private fun currentLetter(): String? {
+        if (!dev.hryshyn.remanence.BuildConfig.REMANENCE_LETTER_ENABLED) return null
+        val text = _letter.value
+        return text.takeIf { dev.hryshyn.remanence.core.model.CapsuleLetter.valid(it) }
+    }
+
+    /**
      * S2b-sender: the picker selection that becomes the sealed
      * track snapshot at publish time (release flow since S4). Null = no snapshot (v1 and
      * snapshot-less v2 flows unchanged). Written only from the debug
@@ -1374,6 +1392,8 @@ class CreateViewModel(
         val frontFingerprintId: String,
         val photoIds: List<String>,
         val trackSnapshot: CapsuleTrackSnapshotV1?,
+        /** Long note captured at publication entry; null when empty or the feature is off. */
+        val letter: String? = null,
         /**
          * T186 M12e-gap3: immutable route + ORIGINAL lease captured at
          * publication entry (startPublishing, before ANY identity or
@@ -1454,6 +1474,7 @@ class CreateViewModel(
         _pickedPhotoIds.value = emptyList()
         clearPickedThumbnails()
         noteEditor.reset()
+        _letter.value = ""
         // S2b-sender: a picker selection belongs to exactly one
         // session; a new epoch/owner must never inherit it (placed after
         // the same-epoch early return above, so rotation keeps it).
@@ -2137,6 +2158,7 @@ class CreateViewModel(
             frontFingerprintId = requireNotNull(frontFingerprintId),
             photoIds = photoSelection.selectedIds.toList(),
             trackSnapshot = trackSnapshot,
+            letter = currentLetter(),
             // T186 M12e-gap3: capture the immutable route + ORIGINAL
             // lease synchronously here (no awaits above since the
             // guard) so the boundary consumes entry-time state even
@@ -2893,6 +2915,7 @@ class CreateViewModel(
                             expression = frozenSelection.expression,
                         ),
                         trackSnapshot = trackSnapshot,
+                        letter = inputs.letter,
                     ),
                 )
                 }
@@ -3011,6 +3034,7 @@ class CreateViewModel(
                             expression = frozenSelection.expression,
                             contentIds = frozenSelection.expression.input.photos.map { it.contentId },
                             trackSnapshot = trackSnapshot,
+                            letter = inputs.letter,
                         ),
                     ),
                     claimExpiresAt = frozen.claimDeadline,
@@ -3241,6 +3265,7 @@ class CreateViewModel(
         _pickedPhotoIds.value = emptyList()
         clearPickedThumbnails()
         noteEditor.reset()
+        _letter.value = ""
         // S2b-sender: leaving the surface drops the picker selection
         // with every other content state (see beginSession for the rationale).
         _musicSelection.value = null

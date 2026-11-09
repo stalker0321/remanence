@@ -100,6 +100,7 @@ async function buildHeld(tint: string): Promise<{ held: HeldSheet; urls: string[
       scene,
       photos: new Map(photos.map((photo, index) => [photo.contentId, urls[index]!])),
       artwork: null,
+      letter: null,
     },
     urls,
   }

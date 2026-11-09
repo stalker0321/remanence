@@ -54,6 +54,7 @@ import { FrontStillError } from '../scan/frontStillProducer'
 import { browserPhotoCodec } from '../create/browserPhoto'
 import { PhotoIntake, PhotoNormalizer, type PhotoCodec, type IntakeFence, type IntakeOutcome } from '../create/normalize'
 import { PhotoIntakeActivity } from '../create/intakeActivity'
+import { clipLetter } from '../create/letter'
 import { MUSIC_QUERY_MAX_CODE_POINTS, MUSIC_SEARCH_DEBOUNCE_MS, musicLine, MusicDraft, searchMusic, trackSnapshotOf } from '../create/music'
 import type { NoteDraft } from '../create/note'
 import { PHOTO_COUNT_MAX, type PhotoDraft } from '../create/photos'
@@ -589,6 +590,9 @@ export function Scan({
 // the picker already carries the song.
 const WEB_SENDS_MUSIC = false
 
+// The long note beside the sheet: receiving one always works; sending waits for the owner's word.
+const WEB_SENDS_LETTER = import.meta.env.VITE_SENDS_LETTER === 'true'
+
 /** Exported for connected browser checks; production renders it via App. */
 export function Create({
   t,
@@ -642,6 +646,10 @@ export function Create({
   const [busy, setBusy] = useState(false)
   const [stamp, setStamp] = useState(0)
   const [noteAtLimit, setNoteAtLimit] = useState(false)
+  // Held only while Create is mounted; never stored.
+  const [letterText, setLetterText] = useState('')
+  const letterRef = useRef('')
+  letterRef.current = letterText
   const [live, setLive] = useState(false)
   const [pictured, setPictured] = useState(false)
   const [cameraFailure, setCameraFailure] = useState<CameraFailure | null>(null)
@@ -702,6 +710,7 @@ export function Create({
     recipientCurrent: () => recipient.confirmed(),
     photosCurrent: () => photos.photos(),
     noteTextCurrent: () => note.accepted() ?? '',
+    letterTextCurrent: () => (WEB_SENDS_LETTER ? letterRef.current : ''),
     trackIdCurrent: () => music.selected()?.id ?? null,
     freezeCurrent: () => frozenRef.current,
     stillCurrent: () => front.current.still(),
@@ -1015,6 +1024,7 @@ export function Create({
       // Snapshot identity values; never alias the live PhotoDraft array.
       photos: photos.photos().slice(),
       noteText: acceptedNote,
+      letterText: WEB_SENDS_LETTER ? letterText : '',
       trackId: selectedMusic?.id ?? null,
       freeze,
       still,
@@ -1371,6 +1381,21 @@ export function Create({
             />
           </label>
           {noteAtLimit ? <p className="field-hint">{t('noteTooLong')}</p> : null}
+          {WEB_SENDS_LETTER ? (
+            <label className="handle-form letter-field">
+              {t('createLetterLabel')}
+              <textarea
+                value={letterText}
+                rows={5}
+                disabled={sendPhase === 'working'}
+                onChange={(event) => {
+                  invalidateSend()
+                  setLetterText(clipLetter(event.target.value))
+                }}
+              />
+              <span className="field-hint">{t('createLetterHint')}</span>
+            </label>
+          ) : null}
           </section>
           </div>
           <div hidden={createStep !== 'composition'} className="composition-workspace" ref={composition}>

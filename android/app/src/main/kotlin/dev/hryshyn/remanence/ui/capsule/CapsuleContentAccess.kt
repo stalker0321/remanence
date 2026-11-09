@@ -43,6 +43,9 @@ interface CapsuleContentReader {
      */
     suspend fun trackSnapshot(capsuleId: String): CapsuleTrackSnapshotV1? = null
 
+    /** The long note read beside the sheet (manifest field 8), or null. */
+    suspend fun letter(capsuleId: String): String? = null
+
     /**
      * Default: a reader that has no content-manifest view is treated as the
      * legacy v1 photo path, so every existing reader/test is unchanged.
@@ -107,6 +110,13 @@ class GrantGuardedCapsuleContentSource(
         val snapshot = delegate.trackSnapshot(capsuleId)
         validateLiveGrant()
         return snapshot
+    }
+
+    override suspend fun letter(capsuleId: String): String? {
+        validateLiveGrant()
+        val letter = delegate.letter(capsuleId)
+        validateLiveGrant()
+        return letter
     }
 
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {

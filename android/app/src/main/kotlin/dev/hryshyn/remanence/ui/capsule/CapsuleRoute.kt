@@ -235,6 +235,7 @@ internal fun CapsuleRoute(
                             // ride the same grant-guarded source.
                             note = source.noteText(binding.capsuleId),
                             track = source.trackSnapshot(binding.capsuleId),
+                            letter = source.letter(binding.capsuleId),
                             // Client-only verified cover fetch; failure degrades
                             // to the text/no-art layout.
                             artworkFetcher = ArtworkFetcher.Default,

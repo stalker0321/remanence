@@ -95,6 +95,8 @@ data class CapsulePublishRequest(
      * fail-closed in [CapsulePublisher.publish], never silently dropped.
      */
     val trackSnapshot: dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1? = null,
+    /** Long note read beside the sheet (manifest field 8); requires [expression]. */
+    val letter: String? = null,
 ) {
     /** Redacted so note text / photo bytes / keys can never reach logs. */
     override fun toString(): String =
@@ -105,6 +107,7 @@ data class CapsulePublishRequest(
             "photoCount=${photoJpegs.size}, notePresent=${noteUtf8 != null}, " +
             "expression=${if (expression == null) "v1" else "v2"}, " +
             "trackSnapshot=${if (trackSnapshot == null) "absent" else "present"}, " +
+            "letterPresent=${letter != null}, " +
             "frontFingerprintProfileId=$frontFingerprintProfileId)"
 }
 
@@ -180,6 +183,9 @@ class CapsulePublisher(
         // S2b-sender: a track snapshot rides only the v2 expression frame.
         // A snapshot without an expression is refused before any crypto
         // work — never silently dropped into a v1 manifest.
+        require(request.letter == null || request.expression != null) {
+            "a letter requires the v2 expression artifact"
+        }
         require(request.trackSnapshot == null || request.expression != null) {
             "track snapshot requires the v2 expression frame"
         }
@@ -259,6 +265,7 @@ class CapsulePublisher(
                 artifact.expression,
                 blobIdByContentId,
                 request.trackSnapshot,
+                request.letter,
             )
         } else {
             ContentManifestCodec().buildAndEncrypt(

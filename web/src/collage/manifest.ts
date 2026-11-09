@@ -4,6 +4,7 @@ import { protoBytes, protoVarint, zigzag32 } from '../protocol/proto'
 import { projectionHash } from './codec'
 import { CollageError } from './errors'
 import type { TrackSnapshot } from '../create/music'
+import { letterValid } from './wire'
 import {
   EXPRESSION_CONTRACT_V4,
   type ProvenanceMark,
@@ -43,11 +44,14 @@ export interface ContentManifestInput {
   blobIdByContentId: ReadonlyMap<string, Uint8Array>
   /** The chosen song (root field 7); required exactly when the expression has a song band. */
   track?: TrackSnapshot | null
+  /** Long note read beside the sheet (root field 8), or null. */
+  letter?: string | null
 }
 
 export type ContentManifestRefusal =
   | 'unsupported'
   | 'music'
+  | 'letter'
   | 'expression-invalid'
   | 'capsule-id'
   | 'candidate-id'
@@ -263,6 +267,8 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
     return refuse('unsupported', `only the V4/GENEX04 (artifact 3) manifest is supported, got ${expression.expressionContractVersion}`)
   }
   const track = input.track ?? null
+  const letter = input.letter ?? null
+  if (letter !== null && !letterValid(letter)) return refuse('letter', 'letter must be 1..8000 UTF-8 bytes and not blank')
   if ((track === null) !== (expression.musicRegion === null)) return refuse('music', 'song band and track snapshot must match')
   if ((track === null) !== (expression.input.music === null)) return refuse('music', 'generator input song and track snapshot must match')
   if (track !== null && (!trackValid(track) || expression.input.music?.trackId !== track.trackId)) return refuse('music', 'track snapshot is invalid')
@@ -352,6 +358,7 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
     if (note !== null) chunks.push(protoBytes(4, utf8(note)))
     chunks.push(protoBytes(6, expressionMessage(snapshotExpression, candidateId, expressionHash, snapshotBlobs)))
     if (snapshotTrack !== null) chunks.push(protoBytes(7, trackMessage(snapshotTrack)))
+    if (letter !== null) chunks.push(protoBytes(8, utf8(letter)))
     const bytes = concat(chunks)
     // Explicit plaintext-output bound: the existing parser's `MAX_BYTES` (and
     // the manifest contract) cap the FINAL manifest at 65536. The projection

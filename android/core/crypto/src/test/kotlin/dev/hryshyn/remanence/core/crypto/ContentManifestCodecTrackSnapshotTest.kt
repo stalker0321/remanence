@@ -163,6 +163,66 @@ class ContentManifestCodecTrackSnapshotTest {
         }
     }
 
+    @Test
+    fun v2RoundTripCarriesTheLetter() {
+        val letter = "Дорогая мама,\n\n" + "длинное письмо. ".repeat(200)
+        val ciphertext = codec.buildAndEncryptV2(
+            keyset, routing(), manifestPhotos(), null,
+            "cand-1", ber1(), blobMap(), null, letter,
+        )
+        val content = codec.decryptAndParse(keyset, routing(), ciphertext)
+        assertEquals(letter, content.letter)
+        assertNull(content.trackSnapshot)
+        val without = codec.decryptAndParse(
+            keyset, routing(),
+            codec.buildAndEncryptV2(keyset, routing(), manifestPhotos(), null, "cand-1", ber1(), blobMap()),
+        )
+        assertNull(without.letter)
+    }
+
+    @Test
+    fun letterOutsideItsBoundIsRefusedAtBuild() {
+        for (letter in listOf("   ", "x".repeat(dev.hryshyn.remanence.core.model.CapsuleLetter.MAX_UTF8_BYTES + 1), "ж".repeat(4001))) {
+            assertFailsWith<IllegalArgumentException> {
+                codec.buildAndEncryptV2(keyset, routing(), manifestPhotos(), null, "cand-1", ber1(), blobMap(), null, letter)
+            }
+        }
+        // The bound is inclusive.
+        codec.buildAndEncryptV2(keyset, routing(), manifestPhotos(), null, "cand-1", ber1(), blobMap(), null, "ж".repeat(4000))
+    }
+
+    @Test
+    fun v1FrameCarryingALetterFailsClosed() {
+        val manifest = ContentManifest.newBuilder()
+            .setProtocolVersion(1)
+            .setCapsuleId(ByteString.copyFrom(uuidBytes(capsuleUuid)))
+            .setLetter("hello")
+        blobUuids.forEachIndexed { index, blobId ->
+            manifest.addPhotos(
+                PhotoEntry.newBuilder()
+                    .setBlobId(ByteString.copyFrom(uuidBytes(blobId)))
+                    .setOrdinal(index)
+                    .setMediaType("image/jpeg")
+                    .setWidth(1000).setHeight(1000),
+            )
+        }
+        val ciphertext = CapsuleArtifactCryptor().encrypt(
+            capsuleKeyset = keyset,
+            context = ArtifactAadInput(
+                capsuleId = CapsuleId(capsuleUuid),
+                blobId = BlobId(contentBlobUuid),
+                artifactKind = CapsuleArtifactKind.CONTENT_MANIFEST,
+                ordinal = -1,
+                senderUserId = UserId(senderUuid),
+                recipientUserId = UserId(recipientUuid),
+            ),
+            plaintext = manifest.build().toByteArray(),
+        )
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing(), ciphertext)
+        }
+    }
+
     private fun expressionProto(expression: GeneratorExpression.ResolvedExpression): dev.hryshyn.remanence.protocol.v1.ExpressionV1 {
         val hash = GeneratorExpressionProjection.hash(expression, "cand-1", blobMap())
         val builder = dev.hryshyn.remanence.protocol.v1.ExpressionV1.newBuilder()

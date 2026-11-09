@@ -55,6 +55,8 @@ export function CollageStage({
   const exportUrls = useRef(new Set<string>())
   const restoreFocus = useRef<{ trigger: HTMLButtonElement; owner: HeldSheet } | null>(null)
   const [viewer, setViewer] = useState<{ index: number; owner: HeldSheet } | null>(null)
+  const [letterOwner, setLetterOwner] = useState<HeldSheet | null>(null)
+  const letterOpen = letterOwner === held && held.letter !== null
   const [paintState, setPaintState] = useState<PaintState>('loading')
   const [exporting, setExporting] = useState(false)
   const [exportFailed, setExportFailed] = useState(false)
@@ -214,7 +216,7 @@ export function CollageStage({
 
   return (
     <div ref={panel} className="stage" role="dialog" aria-modal="true" aria-label={t('sheetViewer')}>
-      <div className="stage-main" inert={viewerOpen}>
+      <div className="stage-main" inert={viewerOpen || letterOpen}>
         <div className="stage-viewport">
           <div className="sheet">
             <canvas ref={canvas} width={held.scene.canvasWidth} height={held.scene.canvasHeight} />
@@ -239,6 +241,9 @@ export function CollageStage({
         <div className="stage-chrome">
           <p className="status" role="status" aria-live="polite">{status}</p>
           <div className="actions">
+            {held.letter !== null ? (
+              <button type="button" className="letter-open" onClick={() => setLetterOwner(held)}>{t('letterOpen')}</button>
+            ) : null}
             <button type="button" disabled={paintState !== 'ready' || exporting} onClick={exportSheet}>
               {t('exportComposition')}
             </button>
@@ -254,6 +259,14 @@ export function CollageStage({
           onIndex={(index) => navigation ? navigation.select(index) : setViewer({ index, owner: held })}
           onClose={() => navigation ? navigation.close() : setViewer(null)}
         />
+      ) : null}
+      {letterOpen ? (
+        <div className="letter-reader" role="dialog" aria-modal="true" aria-label={t('letterTitle')}>
+          <div className="letter-reader-bar">
+            <button type="button" autoFocus onClick={() => setLetterOwner(null)}>{t('closeSheet')}</button>
+          </div>
+          <div className="letter-reader-text">{held.letter}</div>
+        </div>
       ) : null}
     </div>
   )

@@ -607,6 +607,20 @@ private fun ContentStepContent(
                 Text(stringResource(R.string.create_note_too_long), color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.testTag("create_note_limit_error"))
             }
+            if (dev.hryshyn.remanence.BuildConfig.REMANENCE_LETTER_ENABLED) {
+                val letter by viewModel.letter.collectAsStateWithLifecycle()
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = letter,
+                    onValueChange = viewModel::setLetter,
+                    label = { Text(stringResource(R.string.create_letter_label), style = MaterialTheme.typography.bodySmall) },
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    minLines = 4,
+                    modifier = Modifier.fillMaxWidth().testTag("create_letter_input"),
+                )
+                Text(stringResource(R.string.create_letter_hint), color = HoldColors.Muted,
+                    style = MaterialTheme.typography.bodySmall)
+            }
             Spacer(Modifier.height(12.dp))
             MusicPickerContent(
                 search = repository::search, vmSelection = selection, selectedArtwork = artwork,

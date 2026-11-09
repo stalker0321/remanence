@@ -66,6 +66,8 @@ object PendingCapsulePublisher {
         /** Authored-order content ids, one per photo (required). */
         val contentIds: List<String>,
         val trackSnapshot: CapsuleTrackSnapshotV1?,
+        /** Long note read beside the sheet (manifest field 8). */
+        val letter: String? = null,
     )
 
     data class Publication(
@@ -233,7 +235,7 @@ object PendingCapsulePublisher {
             ContentManifestCodec().buildPlaintext(
                 capsule, manifestPhotos, noteUtf8,
                 Triple(expression.candidateId, projectionHash, expression.expression),
-                blobIdByContentId, expression.trackSnapshot,
+                blobIdByContentId, expression.trackSnapshot, expression.letter,
             )
         }
         val contentCiphertext = PendingArtifactCryptor.encrypt(

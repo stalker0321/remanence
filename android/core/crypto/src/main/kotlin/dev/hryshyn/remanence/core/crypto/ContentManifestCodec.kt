@@ -19,6 +19,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import dev.hryshyn.remanence.core.model.ArtifactAadInput
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
+import dev.hryshyn.remanence.core.model.CapsuleLetter
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.CryptoContextEncoder
 import dev.hryshyn.remanence.core.model.GeneratorExpression
@@ -47,6 +48,8 @@ data class ContentManifestContent(
     val expression: ContentExpression? = null,
     /** S2 v2-only own-catalog track snapshot; always null on v1 frames. */
     val trackSnapshot: CapsuleTrackSnapshotV1? = null,
+    /** v2-only long note read beside the sheet (field 8); null when absent. */
+    val letter: String? = null,
 )
 
 /**
@@ -97,6 +100,7 @@ class ContentManifestCodec {
         expression: GeneratorExpression.ResolvedExpression,
         blobIdByContentId: Map<String, ByteArray>,
         trackSnapshot: CapsuleTrackSnapshotV1?,
+        letter: String? = null,
     ): ByteArray {
         require(
             expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V2 ||
@@ -115,7 +119,7 @@ class ContentManifestCodec {
         return build(
             capsuleKeyset, routingContext, photos, note,
             Triple(candidateId, projectionHash, expression), blobIdByContentId,
-            trackSnapshot,
+            trackSnapshot, letter,
         )
     }
 
@@ -127,12 +131,13 @@ class ContentManifestCodec {
         expression: Triple<String, String, GeneratorExpression.ResolvedExpression>?,
         blobIdByContentId: Map<String, ByteArray>?,
         trackSnapshot: CapsuleTrackSnapshotV1? = null,
+        letter: String? = null,
     ): ByteArray = CapsuleArtifactCryptor().encrypt(
         capsuleKeyset = capsuleKeyset,
         context = contentContext(routingContext),
         plaintext = buildPlaintext(
             routingContext.capsuleId, photos, note,
-            expression, blobIdByContentId, trackSnapshot,
+            expression, blobIdByContentId, trackSnapshot, letter,
         ),
     )
 
@@ -149,12 +154,15 @@ class ContentManifestCodec {
         expression: Triple<String, String, GeneratorExpression.ResolvedExpression>?,
         blobIdByContentId: Map<String, ByteArray>?,
         trackSnapshot: CapsuleTrackSnapshotV1? = null,
+        letter: String? = null,
     ): ByteArray {
         validatePhotos(photos)
         validateNote(note)
         require(trackSnapshot == null || expression != null) {
             "track snapshot requires the v2 expression frame"
         }
+        require(letter == null || expression != null) { "a letter requires the v2 expression frame" }
+        require(letter == null || CapsuleLetter.valid(letter)) { "letter must be 1..${CapsuleLetter.MAX_UTF8_BYTES} UTF-8 bytes" }
 
         val builder = ContentManifest.newBuilder()
             .setProtocolVersion(if (expression == null) PROTOCOL_VERSION else PROTOCOL_VERSION_V2)
@@ -191,6 +199,7 @@ class ContentManifestCodec {
             snapshot.durationMs?.let(snapshotBuilder::setDurationMs)
             builder.setTrackSnapshot(snapshotBuilder.build())
         }
+        letter?.let(builder::setLetter)
 
         return builder.build().toByteArray()
     }
@@ -287,6 +296,9 @@ class ContentManifestCodec {
             if (manifest.hasTrackSnapshot()) {
                 throw GeneralSecurityException("v1 content manifest must not carry a track snapshot")
             }
+            if (manifest.hasLetter()) {
+                throw GeneralSecurityException("v1 content manifest must not carry a letter")
+            }
             ContentManifestContent(protocolVersion = manifest.protocolVersion, photos = parsed, note = note)
         } else {
             if (!manifest.hasExpression()) {
@@ -298,6 +310,9 @@ class ContentManifestCodec {
             ) {
                 throw GeneralSecurityException("expression music region and track snapshot must match")
             }
+            if (manifest.hasLetter() && !CapsuleLetter.valid(manifest.letter)) {
+                throw GeneralSecurityException("content manifest letter is out of bounds")
+            }
             ContentManifestContent(
                 protocolVersion = manifest.protocolVersion,
                 photos = parsed,
@@ -308,6 +323,7 @@ class ContentManifestCodec {
                 } else {
                     null
                 },
+                letter = if (manifest.hasLetter()) manifest.letter else null,
             )
         }
     } catch (failure: GeneralSecurityException) {

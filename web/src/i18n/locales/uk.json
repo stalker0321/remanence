@@ -346,5 +346,9 @@
   "giftTryAgain": "спробувати ще раз",
   "createLinkedFor": "листівка буде для",
   "createLinkedSelf": "листівка буде для вас",
-  "createChosenDesign": "ваш макет"
+  "createChosenDesign": "ваш макет",
+  "letterOpen": "читати лист",
+  "letterTitle": "лист",
+  "createLetterLabel": "лист",
+  "createLetterHint": "довші слова, їх прочитають поруч із листівкою"
 }

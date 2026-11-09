@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="capsule_letter_open">читать письмо</string>
+    <string name="create_letter_label">письмо</string>
+    <string name="create_letter_hint">слова подлиннее, их прочтут рядом с открыткой</string>
+</resources>

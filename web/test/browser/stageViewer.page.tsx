@@ -74,6 +74,7 @@ async function buildHeld(tint: string, labels: string[]): Promise<Fixture> {
       scene,
       photos: new Map(photos.map((photo, index) => [photo.contentId, urls[index]!])),
       artwork: null,
+      letter: null,
     },
     urls,
   }
@@ -110,6 +111,10 @@ async function main(): Promise<void> {
     },
     replace(): void {
       current = b
+      render()
+    },
+    letter(text: string | null): void {
+      current = { ...current, held: { ...current.held, letter: text } }
       render()
     },
     unmount(): void {

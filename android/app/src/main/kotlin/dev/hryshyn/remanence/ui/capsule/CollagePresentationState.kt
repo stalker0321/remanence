@@ -52,6 +52,8 @@ class CollagePresentationState(
     private val loadPhoto: suspend (contentId: String) -> ByteArray,
     val note: String? = null,
     val track: CapsuleTrackSnapshotV1? = null,
+    /** Long note read beside the sheet; never drawn on it. */
+    val letter: String? = null,
     private val decoder: Ber1PhotoDecoder = DefaultBer1PhotoDecoder,
     /**
      * Direct client-only cover fetcher. Null (or a fetch failure) degrades a
@@ -271,7 +273,7 @@ internal fun CollagePresentationHost(
                     CapsuleSheetFrame(export, enabled = state.status is CollagePresentationState.Status.Ready,
                         ratio = result.scene.canvasWidth.toFloat() / result.scene.canvasHeight,
                         onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_collage_close",
-                        actions = { CapsuleListenAction(state.track, musicAction) },
+                        actions = { CapsuleListenAction(state.track, musicAction); CapsuleLetterAction(state.letter) },
                         overlay = { CapsuleMusicCue(result.scene, images) }) { sheetModifier ->
                     CollageCanvas(
                         scene = contentScene,

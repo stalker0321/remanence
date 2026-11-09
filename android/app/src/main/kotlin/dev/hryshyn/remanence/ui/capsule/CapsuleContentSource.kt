@@ -168,6 +168,8 @@ class CapsuleContentSource(
     override suspend fun trackSnapshot(capsuleId: String): CapsuleTrackSnapshotV1? =
         decryptContent(capsuleId)?.trackSnapshot
 
+    override suspend fun letter(capsuleId: String): String? = decryptContent(capsuleId)?.letter
+
     /**
      * ADR-018: a v2 outbox capsule (e.g. a self-send) renders its sealed
      * exact BER1 expression; v1 keeps the existing photo path; an

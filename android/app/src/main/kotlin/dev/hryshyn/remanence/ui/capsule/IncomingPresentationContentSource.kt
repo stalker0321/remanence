@@ -32,6 +32,11 @@ internal class IncomingPresentationContentSource(
         return prepared.trackSnapshot()
     }
 
+    override suspend fun letter(capsuleId: String): String? {
+        require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
+        return prepared.letter()
+    }
+
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {
         require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
         if (prepared.protocolVersion == 1) return CapsulePresentationAdmission.LegacyV1

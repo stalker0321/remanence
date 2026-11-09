@@ -346,5 +346,9 @@
   "giftTryAgain": "First gift by postcard code: the page a new recipient follows, see ADR-020.",
   "createLinkedFor": "Create page when signed out from a /<nick> link; followed by @handle of who the postcard will be for.",
   "createLinkedSelf": "Create page when signed out from the /me link; the postcard will be for the signed-in person themself.",
-  "createChosenDesign": "Create page, postcard step: caption above the small preview of the chosen layout."
+  "createChosenDesign": "Create page, postcard step: caption above the small preview of the chosen layout.",
+  "letterOpen": "Postcard viewer action that opens the long note (letter) sent beside the sheet.",
+  "letterTitle": "Accessible name of the full-screen letter reader.",
+  "createLetterLabel": "Create content step: label of the optional long note field, sent beside the postcard.",
+  "createLetterHint": "Create content step: hint under the long note field; the letter is read next to the postcard, not drawn on it."
 }

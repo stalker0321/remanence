@@ -107,6 +107,9 @@ class PreparedPresentationMaterial internal constructor(
     /** S2b-receiver: the sealed v2-only track snapshot, or null when absent. */
     fun trackSnapshot(): CapsuleTrackSnapshotV1? = requireOpen().trackSnapshot
 
+    /** The long note read beside the sheet, or null when absent. */
+    fun letter(): String? = requireOpen().letter
+
     /** Decrypts one verified photo from the exact snapshot captured at prepare time. */
     fun loadPhoto(ordinal: Int): ByteArray {
         val manifest = requireOpen()

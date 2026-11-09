@@ -346,5 +346,9 @@
   "giftTryAgain": "try again",
   "createLinkedFor": "this one will be for",
   "createLinkedSelf": "this one will be for you",
-  "createChosenDesign": "your layout"
+  "createChosenDesign": "your layout",
+  "letterOpen": "read the letter",
+  "letterTitle": "letter",
+  "createLetterLabel": "a letter",
+  "createLetterHint": "longer words, read beside the postcard"
 }

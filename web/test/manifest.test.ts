@@ -7,6 +7,7 @@ import { buildFrozenExpression } from '../src/collage/frozenExpression'
 import { encodeContentManifest, type ContentManifestRefusal } from '../src/collage/manifest'
 import { prepare } from '../src/collage/prepare'
 import { parseContentManifest } from '../src/collage/wire'
+import { clipLetter } from '../src/create/letter'
 import { styleById } from '../src/collage/styles'
 import { freezeSelection } from '../src/create/creatorFreeze'
 import { validateResolved, type ResolvedExpression } from '../src/collage/model'
@@ -272,6 +273,26 @@ describe('content manifest encoder', () => {
     // The song band lifts the photo field: the last row ends 8 px above it.
     const bottom = Math.max(...expression.placements.map((placement) => placement.y + placement.height))
     expect(bottom).toBeLessThanOrEqual(expression.musicRegion!.y - 8)
+  })
+
+  it('carries a letter beside the sheet and refuses one out of bounds', async () => {
+    const expression = await expressionFor('Probe note text.')
+    const blobs = blobsFor(expression)
+    const letter = 'Дорогая мама,\n\n' + 'длинное письмо. '.repeat(200)
+    const encoded = await encodeContentManifest({ expression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobs, letter })
+    if (!encoded.ok) throw new Error(`encode failed: ${encoded.reason}`)
+    expect((await parseContentManifest(encoded.bytes)).letter).toBe(letter)
+    const plain = await encodeContentManifest({ expression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobs })
+    if (!plain.ok) throw new Error('plain encode failed')
+    expect((await parseContentManifest(plain.bytes)).letter).toBeNull()
+    for (const bad of ['   ', 'x'.repeat(8001), 'ж'.repeat(4001)]) {
+      expect(await encodeContentManifest({ expression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobs, letter: bad })).toMatchObject({ ok: false, reason: 'letter' })
+    }
+    // A blank letter written by another client fails closed on parse.
+    const forged = new Uint8Array([...plain.bytes, 0x42, 0x01, 0x20])
+    await expect(parseContentManifest(forged)).rejects.toThrow()
+    expect(clipLetter('ж'.repeat(5000)).length).toBe(4000)
+    expect(clipLetter('a' + '😀'.repeat(2500))).toBe('a' + '😀'.repeat(1999))
   })
 
   it('refuses a song band and a track snapshot that disagree', async () => {

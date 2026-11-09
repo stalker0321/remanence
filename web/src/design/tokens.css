@@ -337,6 +337,37 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
 /* Physical chrome must never translate a canonical canvas hit target. */
 .stage button.hit:active { transform: none; box-shadow: none; }
 
+/* The letter reads like paper, not like the dark sheet stage behind it. */
+.letter-reader {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #f4f2ec;
+  color: #333951;
+}
+
+.letter-reader-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: calc(0.6rem + env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 0.6rem max(1rem, env(safe-area-inset-left));
+}
+
+.stage .letter-reader button { background: transparent; color: #333951; border-color: rgba(51, 57, 81, 0.3); }
+
+.letter-reader-text {
+  overflow: auto;
+  width: min(100%, 38rem);
+  justify-self: center;
+  box-sizing: border-box;
+  padding: 0.5rem max(1.25rem, env(safe-area-inset-right)) calc(2rem + env(safe-area-inset-bottom)) max(1.25rem, env(safe-area-inset-left));
+  font-size: 1.15rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .viewer {
   position: fixed;
   inset: 0;
@@ -529,3 +560,4 @@ label.photo-pick input[type="file"] { position:absolute; inset:0; opacity:0; wid
 }
 .create-locked { max-width:42rem; }
 .history-toolbar .quiet { padding-inline:.25rem; }
+.letter-field { margin-top:1rem; display:grid; gap:.35rem; }

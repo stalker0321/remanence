@@ -34,6 +34,10 @@ val atomicRegistrationEnabled = providers.gradleProperty("remanence.atomicRegist
         "Atomic registration requires Google and recovery; no unprotected fallback"
     }
 }
+// Long note ("letter") beside the sheet. Default OFF; receiving one always works.
+val letterEnabled = (findProperty("remanence.letter.enabled") as? String ?: "false").lowercase().also {
+    require(it == "true" || it == "false") { "remanence.letter.enabled must be true or false" }
+}
 // ADR-020: first gifts by card. Default OFF everywhere; one property turns the
 // journey on in any variant, together with the service pin below.
 val pendingEnabled = (findProperty("remanence.pending.enabled") as? String ?: "false").lowercase().also {
@@ -61,6 +65,7 @@ android {
         versionName = remanenceProductVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "REMANENCE_PLAY_BETA", "false")
+        buildConfigField("boolean", "REMANENCE_LETTER_ENABLED", letterEnabled)
         // T186: launcher label placeholder. Default points at the existing
         // @string/app_name; the pending debug block below repoints it at the
         // generated @string/pending_app_name. No duplicated app_name value.

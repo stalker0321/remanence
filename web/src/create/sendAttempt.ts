@@ -53,6 +53,8 @@ export interface SendVisit {
   recipient: RecipientSnapshot
   photos: readonly DraftPhoto[]
   noteText: string
+  /** The long note as typed; empty when there is none. */
+  letterText?: string
   /** Id of the chosen song, or null; must be the song the freeze sealed. */
   trackId: string | null
   freeze: CreatorFreeze
@@ -110,6 +112,7 @@ function visitCurrent(visit: SendVisit, ports: SendPortsFull): boolean {
       recipient.directoryVersion !== visit.recipient.directoryVersion) return false
   if (photoSignature(ports.photosCurrent()) !== photoSignature(visit.photos)) return false
   if (ports.noteTextCurrent() !== visit.noteText) return false
+  if ((ports.letterTextCurrent?.() ?? '') !== (visit.letterText ?? '')) return false
   if (ports.trackIdCurrent() !== visit.trackId) return false
   if (ports.freezeCurrent() !== visit.freeze) return false
   if (ports.stillCurrent() !== visit.still) return false
@@ -127,6 +130,7 @@ export interface SendCurrentAccessors {
   recipientCurrent(): RecipientSnapshot | null
   photosCurrent(): readonly DraftPhoto[]
   noteTextCurrent(): string
+  letterTextCurrent?(): string
   trackIdCurrent(): string | null
   freezeCurrent(): CreatorFreeze | null
   stillCurrent(): FrontStill | null
@@ -228,6 +232,7 @@ export async function runSendAttempt(
       epoch: visit.epoch,
       frontFingerprint: visit.fingerprint.wire,
       placeLabel: null,
+      letter: visit.letterText && visit.letterText.trim() !== '' ? visit.letterText : null,
     })
   } catch (error) {
     if (error instanceof SealCapsuleError) {

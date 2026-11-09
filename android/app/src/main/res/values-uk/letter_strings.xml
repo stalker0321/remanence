@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="capsule_letter_open">читати лист</string>
+    <string name="create_letter_label">лист</string>
+    <string name="create_letter_hint">довші слова, їх прочитають поруч із листівкою</string>
+</resources>

@@ -17,6 +17,12 @@ import type { TrackWords } from './prepare'
 import { equalBytes } from './styles'
 
 const MAX_BYTES = 65536
+/** Inclusive UTF-8 bound of the long note, shared with Android `CapsuleLetter`. */
+export const LETTER_MAX_UTF8_BYTES = 8000
+
+export function letterValid(letter: string): boolean {
+  return letter.trim() !== '' && new TextEncoder().encode(letter).length <= LETTER_MAX_UTF8_BYTES
+}
 const ARTIFACT_V3 = 2
 const ARTIFACT_V4 = 3
 
@@ -36,6 +42,8 @@ export interface ParsedManifest {
   photos: ManifestPhoto[]
   note: string | null
   track: TrackWords | null
+  /** Long note read beside the sheet (field 8), or null. */
+  letter: string | null
 }
 
 interface Part {
@@ -49,7 +57,7 @@ interface Part {
  * and 3 (GENEX04) are refused before a scene exists.
  */
 export async function parseContentManifest(bytes: Uint8Array): Promise<ParsedManifest> {
-  const root = readParts(bytes, [1, 2, 3, 4, 5, 6, 7], [3])
+  const root = readParts(bytes, [1, 2, 3, 4, 5, 6, 7, 8], [3])
   if (root.some((part) => part.field === 5)) throw new ProtocolError('INVALID_PROTO')
   const version = requiredNumber(root, 1)
   if (version === 1) throw new CollageError('UNSUPPORTED')
@@ -69,6 +77,9 @@ export async function parseContentManifest(bytes: Uint8Array): Promise<ParsedMan
   const note = noteText === '' ? null : noteText
   const trackPart = optional(root, 7)
   const track = trackPart ? parseTrack(asBytes(trackPart)) : null
+  const letterPart = optional(root, 8)
+  const letter = letterPart ? text(asBytes(letterPart)) : null
+  if (letter !== null && !letterValid(letter)) throw new ProtocolError('INVALID_ENCODING')
   const expressionPart = optional(root, 6)
   if (!expressionPart) throw new ProtocolError('INVALID_ENCODING')
   const parsed = parseExpression(asBytes(expressionPart), photos, note)
@@ -82,6 +93,7 @@ export async function parseContentManifest(bytes: Uint8Array): Promise<ParsedMan
     photos,
     note,
     track,
+    letter,
   }
 }
 

@@ -346,5 +346,9 @@
   "giftTryAgain": "попробовать ещё раз",
   "createLinkedFor": "открытка будет для",
   "createLinkedSelf": "открытка будет для вас",
-  "createChosenDesign": "ваш макет"
+  "createChosenDesign": "ваш макет",
+  "letterOpen": "читать письмо",
+  "letterTitle": "письмо",
+  "createLetterLabel": "письмо",
+  "createLetterHint": "слова подлиннее, их прочтут рядом с открыткой"
 }

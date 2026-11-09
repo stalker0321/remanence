@@ -10,6 +10,8 @@ import { freezeSelection, freezeValid, type CreatorFreeze, type CreatorSlotFreez
 import { captureFrozenRenderedPlan, type FrozenRenderedPlan } from './frozenRenderedPlan'
 import { paintCreatorNote, type CreatorNoteFace, type CreatorNoteLayout } from './creatorNote'
 import { bundledFaces } from './fonts'
+import { analyzePhotos } from './analysis/photoAnalyzer'
+import type { CollageAnalysis } from './analysis/cropSolver'
 import { paintScene, type PaintImage } from './paint'
 import type { TextMeasurer } from './prepare'
 import { styleById } from './styles'
@@ -41,6 +43,8 @@ export interface CreatorComposerProps {
   track: TrackSnapshot | null
   /** Offer only this style (tests); every bundled style otherwise. */
   styleId?: string
+  /** Find faces and objects before offering layouts (production); off keeps the centred crop. */
+  analyze?: boolean
   recipient: CreatorComposerRecipient | null
   /** Explicit sender handle (same owner). Falls back to the live session handle. */
   senderHandle?: string
@@ -172,6 +176,7 @@ const copy: Record<CreatorLang, Copy> = {
 }
 
 const IDENTITY_CROP: CropTransform = { z: 1, xPercent: 0, yPercent: 0 }
+const ANALYSIS_TIMEOUT_MS = 45_000
 
 /**
  * T247 R2: a stable local id per measurer object. The rendered binding key is
@@ -231,6 +236,28 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const sessionSender = snap.handle !== null && snap.handle.trim() !== '' ? snap.handle.trim() : null
   const senderHandle = explicitSender ?? sessionSender
 
+  // Photo analysis (faces, objects, fields) runs once per photo set in a
+  // worker. Layouts wait for it, up to a bound; a failure or a timeout keeps
+  // the centred crop instead of blocking the postcard.
+  const photosKey = useMemo(
+    () => JSON.stringify(props.photos.map((photo) => [photo.contentId, photo.contentHash, photo.width, photo.height])),
+    [props.photos],
+  )
+  const [analysed, setAnalysed] = useState<{ key: string; analyses: Map<string, CollageAnalysis> | null } | null>(null)
+  useEffect(() => {
+    if (props.analyze !== true || tornDown) return
+    let cancelled = false
+    const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), ANALYSIS_TIMEOUT_MS))
+    void Promise.race([analyzePhotos(props.photos), timeout]).then((analyses) => {
+      if (!cancelled) setAnalysed({ key: photosKey, analyses })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [photosKey, props.analyze, tornDown])
+  const analysisReady = props.analyze !== true || analysed?.key === photosKey
+  const analyses = props.analyze === true && analysed?.key === photosKey ? analysed.analyses : null
+
   const inputKey = useMemo(() => {
     const photosKey = JSON.stringify(props.photos.map((photo) => [photo.contentId, photo.width, photo.height, photo.contentHash]))
     const transformsKey = JSON.stringify(transforms)
@@ -274,7 +301,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   // live props. No stale geometry can survive an input change, and no
   // paint epoch can cancel a replan.
   const planned: { views: CreatorCandidateView[] } | { error: string } | null = useMemo(() => {
-    if (tornDown || !fontsReady) return null
+    if (tornDown || !fontsReady || !analysisReady) return null
     try {
       const completed = creatorChoices({
         preview: {
@@ -293,13 +320,14 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         measurer: props.measurer,
         track: props.track === null ? null : { title: props.track.title, artistDisplay: props.track.artistDisplay },
         seed,
+        analyses,
         ...(onlyStyle === undefined ? {} : { styleIds: [onlyStyle] }),
       })
       return { views: completed }
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
     }
-  }, [tornDown, fontsReady, inputKey, props.measurer, props.photos, props.note, props.track, transforms, senderHandle, seed, onlyStyle])
+  }, [tornDown, fontsReady, analysisReady, analyses, inputKey, props.measurer, props.photos, props.note, props.track, transforms, senderHandle, seed, onlyStyle])
 
   const views = planned !== null && 'views' in planned ? planned.views : null
   const planError = fontsError ?? (planned !== null && 'error' in planned ? planned.error : null)
@@ -658,8 +686,9 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     }
   }
 
+  const analysisState = props.analyze !== true ? 'off' : analyses !== null ? 'ready' : 'fallback'
   return (
-    <div className="creator-composer" data-testid="creator-composer">
+    <div className="creator-composer" data-testid="creator-composer" data-analysis={analysisState}>
       <div className="creator-preview">
       <div className="creator-pager">
         <button type="button" data-testid="creator-prev" aria-label={t.prev} disabled={planIndex === 0} onClick={() => setPlanIndex((i) => Math.max(0, i - 1))}>

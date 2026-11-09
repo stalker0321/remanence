@@ -1410,6 +1410,7 @@ export function Create({
                   session={store}
                   lang={view.language}
                   measurer={measurer}
+                  analyze
                   chooseLabel={t('createContinuePostcard')}
                   onFrozenChange={(frozen) => {
                     frozenRef.current = frozen

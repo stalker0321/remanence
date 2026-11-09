@@ -1,2 +1,3 @@
 import react from '@vitejs/plugin-react'
-export default { root: '/home/vodkolyan/projects/Remanence-release/web', plugins: [react()], logLevel: 'warn', server: { fs: { allow: ['..'] } } }
+import { ortWasm } from './tools/ort-wasm.mjs'
+export default { root: '/home/vodkolyan/projects/Remanence-release/web', plugins: [react(), ortWasm()], logLevel: 'warn', server: { fs: { allow: ['..'] } } }

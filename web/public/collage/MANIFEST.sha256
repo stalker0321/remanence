@@ -1,0 +1,6 @@
+# Photo-analysis models for the site, the same ONNX files Android bundles in
+# android/app/src/main/assets/collage/. nanodet.onnx is a byte copy. yunet.onnx
+# is Android's file (sha256 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4)
+# with a symbolic input size, made by web/tools/collage/yunet_dynamic.py.
+b07773e1ea89188b02da50f9b229765dbcc63f33adea3c541a7abd0c3f466d8f  yunet.onnx
+4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186  nanodet.onnx

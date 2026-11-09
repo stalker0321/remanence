@@ -1,6 +1,7 @@
 import { CollageError } from './errors'
 import {
   centerCoverBase,
+  type NormalizedCrop,
   correctEditorCrop,
   toCropWindow,
   CROP_ASPECT_TOLERANCE,
@@ -28,6 +29,8 @@ import { mountRect } from './mount'
 import { layoutCreatorNote, wrapNoteLines, type CreatorNoteFace, type CreatorNoteLayout } from './creatorNote'
 import { opaqueColor, roleTextType, styleById, styleIds, type CollageStyle } from './styles'
 import type { Scene } from './prepare'
+import { solveCropDetailed, type CollageAnalysis } from './analysis/cropSolver'
+import { assign, assignmentOk, hasProminentFace, isObjectPhoto, matrixCell } from './analysis/resolve'
 
 /**
  * Creator preview adapter (pure, no DOM): a grammar plan + normalized
@@ -136,9 +139,13 @@ export function previewSlot(
   tile: { photoId: string; rect: Rect; shape: string },
   photo: CreatorPhoto,
   transform: CropTransform | null,
+  solved: NormalizedCrop | null = null,
 ): CreatorSlotView & { effective: CropTransform } {
   if (tile.rect.width <= 0 || tile.rect.height <= 0) fail(`creator slot has a non-positive destination for ${tile.photoId}`)
-  const base = centerCoverBase(photo.width, photo.height, tile.rect.width, tile.rect.height)
+  // The analysed crop is solved for the fractional tile; fit it to the mounted cell.
+  const base = solved !== null
+    ? fitToCell(solved, photo.width, photo.height, tile.rect.width, tile.rect.height)
+    : centerCoverBase(photo.width, photo.height, tile.rect.width, tile.rect.height)
   if (!base) fail(`creator slot has impossible dimensions for ${tile.photoId}`)
   const admitted = correctEditorCrop(
     base,
@@ -164,6 +171,36 @@ export function previewSlot(
     shape: tile.shape as PhotoShape,
     effective: admitted.transform,
   }
+}
+
+/**
+ * The largest window of the cell's aspect centred on `crop` and inside it
+ * when it can be, never outside the source: the solved window keeps its
+ * subject while matching the integer cell the wire carries.
+ */
+export function fitToCell(crop: NormalizedCrop, sourceWidth: number, sourceHeight: number, cellWidth: number, cellHeight: number): NormalizedCrop | null {
+  const target = cellWidth / cellHeight
+  let width = crop.width
+  let height = crop.height
+  const aspect = (width * sourceWidth) / (height * sourceHeight)
+  if (aspect > target) width = (height * sourceHeight * target) / sourceWidth
+  else height = (width * sourceWidth) / (target * sourceHeight)
+  if (!(width > 0 && height > 0) || width > 1 || height > 1) return null
+  const cx = crop.x + crop.width / 2
+  const cy = crop.y + crop.height / 2
+  return {
+    x: Math.min(1 - width, Math.max(0, cx - width / 2)),
+    y: Math.min(1 - height, Math.max(0, cy - height / 2)),
+    width,
+    height,
+  }
+}
+
+/** Where an analysed branch puts each photo: the photo per tile and its solved crop. */
+export interface BranchPlacement {
+  /** Photo id per tile, in tile order. */
+  order: string[]
+  crops: ReadonlyMap<string, NormalizedCrop>
 }
 
 export interface PreviewInput {
@@ -274,6 +311,7 @@ export function previewCandidate(
   transforms?: ReadonlyMap<string, CropTransform>,
   choice: ViewChoice = DEFAULT_CHOICE,
   senderHandle = '',
+  placement: BranchPlacement | null = null,
 ): CreatorCandidateView {
   const style = styleById(choice.styleId)
   if (!style || style.grammar !== plan.grammarId) fail(`style ${choice.styleId} does not belong to grammar ${plan.grammarId}`)
@@ -281,14 +319,24 @@ export function previewCandidate(
   // this boundary FIRST — the same component-wise floor the Android producer
   // uses (`AllFamilyCandidateProducer`, `AllFamilyV4Adapter`). The crop and
   // source window are derived from the exact integer cell that is painted.
-  const slots = plan.tiles.map((tile) => {
-    const photo = byId.get(tile.photoId)
-    if (!photo) fail(`creator plan needs photo ${tile.photoId}`)
-    const destination = mountRect({ x: tile.rect.x, y: tile.rect.y, width: tile.rect.width, height: tile.rect.height })
+  // Slots are in authored photo order: an analysed branch may seat a photo in
+  // another tile, and the sealed placements follow the authored order.
+  const tileOf = (photoId: string, index: number) => {
+    if (placement === null) return plan.tiles[index]
+    const at = placement.order.indexOf(photoId)
+    return at < 0 ? undefined : plan.tiles[at]
+  }
+  const slots = plan.tiles.map((planned, index) => {
+    const photoId = placement === null ? planned.photoId : byId.size === plan.tiles.length ? [...byId.keys()][index]! : planned.photoId
+    const tile = tileOf(photoId, index)
+    const photo = byId.get(photoId)
+    if (!photo || !tile) fail(`creator plan needs photo ${photoId}`)
+    const destination = mountRect({ x: tile!.rect.x, y: tile!.rect.y, width: tile!.rect.width, height: tile!.rect.height })
     return previewSlot(
-      { photoId: tile.photoId, rect: destination, shape: tile.shape },
+      { photoId, rect: destination, shape: tile!.shape },
       photo as CreatorPhoto,
-      transforms?.get(tile.photoId) ?? null,
+      transforms?.get(photoId) ?? null,
+      placement?.crops.get(photoId) ?? null,
     )
   })
   const grammarMarks: CreatorProvenanceView[] = plan.provenance.map((mark) => {
@@ -480,6 +528,12 @@ export interface ChoicesInput {
   seed: string
   /** Only these styles (tests); every bundled style otherwise. */
   styleIds?: readonly string[]
+  /**
+   * The photos' analyses (faces, objects, fields), keyed by content id. With
+   * one for every photo, photos are matched to tiles and cropped the way
+   * Android does it; otherwise they keep the authored order and a centred crop.
+   */
+  analyses?: ReadonlyMap<string, CollageAnalysis> | null
 }
 
 /**
@@ -498,10 +552,13 @@ export interface ChoicesInput {
  */
 export function creatorChoices(input: ChoicesInput): CreatorCandidateView[] {
   const byId = uniquePhotos(input.preview.photos)
+  const analysed = analysedPhotos(input)
   const d = planInput(input.preview)
+  if (analysed !== null) d.photos = d.photos.map((photo) => ({ ...photo, hasProminentFace: hasProminentFace(analysed.get(photo.id)!) }))
+  const matching = analysed === null ? null : new Matching(input.preview.photos.map((photo) => photo.contentId), analysed)
   const allowed = new Set(input.styleIds ?? styleIds())
   const fits = creatorMarkFits(input.measurer)
-  const perGrammar = new Map<number, { styles: CollageStyle[]; branches: Map<string, Plan[]> }>()
+  const perGrammar = new Map<number, { styles: CollageStyle[]; branches: Map<string, Branch[]> }>()
   const buckets: Array<[number, string[]]> = []
   for (const gid of ACTIVE_GRAMMAR_IDS) {
     const g = grammarDef(gid)
@@ -511,24 +568,32 @@ export function creatorChoices(input: ChoicesInput): CreatorCandidateView[] {
       .map((id) => styleById(id)!)
       .filter((style) => style.grammar === gid && allowed.has(style.id))
     if (styles.length === 0) continue
-    const branches = new Map<string, Plan[]>()
+    const branches = new Map<string, Branch[]>()
     for (const style of styles) {
       const measure = plannerFromTextMeasurer(input.measurer, 640, 640, style.note)
-      const chosen: Plan[] = []
+      const chosen: Branch[] = []
       const seen = new Set<string>()
       for (const plan of grammarPlans(d, g, noteState(d, g, measure), measure)) {
         if (chosen.length >= 2) break
-        if (!sourceOrderAssignment(plan).feasible || !validatePlan(plan)) continue
+        let order: string[] | null = null
+        if (matching === null) {
+          if (!sourceOrderAssignment(plan).feasible) continue
+        } else {
+          const assigned = matching.assign(plan)
+          if (!assignmentOk(assigned)) continue
+          order = assigned.compositionOrder
+        }
+        if (!validatePlan(plan)) continue
         if (seen.has(geometryKey(plan))) continue
         seen.add(geometryKey(plan))
-        chosen.push(plan)
+        chosen.push({ plan, order })
       }
       branches.set(style.id, chosen)
     }
     const first = branches.get(styles[0]!.id) ?? []
     if (first.length === 0) continue
     perGrammar.set(gid, { styles, branches })
-    buckets.push([gid, first.map((plan) => plan.branch)])
+    buckets.push([gid, first.map((branch) => branch.plan.branch)])
   }
   // The frozen policy caps how many branches of each grammar compete.
   const depth = new Map<number, number>()
@@ -538,8 +603,10 @@ export function creatorChoices(input: ChoicesInput): CreatorCandidateView[] {
   for (const [gid, { styles, branches }] of perGrammar) {
     for (const style of styles) {
       const candidates = (branches.get(style.id) ?? []).slice(0, depth.get(gid) ?? 0)
-      for (const plan of candidates) {
-        const view = tryView(plan, byId, input, style, fits)
+      for (const branch of candidates) {
+        const placement = branch.order === null ? null : matching!.placement(branch.plan, branch.order)
+        if (branch.order !== null && placement === null) continue
+        const view = tryView(branch.plan, byId, input, style, fits, placement)
         if (view === null) continue
         drawable.push(view)
         break
@@ -549,15 +616,76 @@ export function creatorChoices(input: ChoicesInput): CreatorCandidateView[] {
   return arrange(drawable, input.seed)
 }
 
+interface Branch {
+  plan: Plan
+  /** Photo per tile from the analysed matching; null keeps the authored order. */
+  order: string[] | null
+}
+
+function analysedPhotos(input: ChoicesInput): ReadonlyMap<string, CollageAnalysis> | null {
+  const analyses = input.analyses
+  if (!analyses) return null
+  for (const photo of input.preview.photos) {
+    const analysis = analyses.get(photo.contentId)
+    // The analysis must describe this exact photo, or every box is read in the wrong space.
+    if (!analysis || analysis.width !== photo.width || analysis.height !== photo.height) return null
+  }
+  return analyses
+}
+
+/**
+ * Android's analysed matching: the frozen crop/cost matrix per (photo,
+ * tile), the cheapest complete matching, and the envelope-50 crop for each
+ * seated photo, all under the product's BALANCED policy.
+ */
+class Matching {
+  private readonly cells = new Map<string, number | null>()
+  private readonly anyObject: boolean
+
+  constructor(private readonly ids: string[], private readonly analyses: ReadonlyMap<string, CollageAnalysis>) {
+    this.anyObject = ids.some((id) => isObjectPhoto(analyses.get(id)!))
+  }
+
+  assign(plan: Plan) {
+    const matrix = plan.tiles.map((tile) => this.ids.map((id) => this.cost(id, tile)))
+    return assign(plan, this.ids, matrix, false)
+  }
+
+  placement(plan: Plan, order: string[]): BranchPlacement | null {
+    const crops = new Map<string, NormalizedCrop>()
+    for (let index = 0; index < plan.tiles.length; index++) {
+      const tile = plan.tiles[index]!
+      const id = order[index]!
+      const solved = solveCropDetailed(this.analyses.get(id)!, { width: tile.rect.width, height: tile.rect.height, shape: tile.shape, zooms: tile.zooms }, 'BALANCED')
+      if (solved.kind !== 'solved') return null
+      crops.set(id, solved.crop)
+    }
+    return { order, crops }
+  }
+
+  private cost(id: string, tile: Plan['tiles'][number]): number | null {
+    const key = `${id}|${tile.rect.width}|${tile.rect.height}|${tile.shape}|${tile.zooms.join(',')}|${tile.assignmentRole ?? ''}`
+    const cached = this.cells.get(key)
+    if (cached !== undefined) return cached
+    const cell = matrixCell(this.analyses.get(id)!, this.anyObject, {
+      slotWidth: tile.rect.width, slotHeight: tile.rect.height, shape: tile.shape, zooms: tile.zooms, assignmentRole: tile.assignmentRole,
+    }, 'BALANCED')
+    const cost = cell.feasible ? cell.cost! : null
+    this.cells.set(key, cost)
+    return cost
+  }
+}
+
 function tryView(
   plan: Plan,
   byId: ReadonlyMap<string, CreatorPhoto>,
   input: ChoicesInput,
   style: CollageStyle,
   fits: (mark: CreatorProvenanceView) => boolean,
+  placement: BranchPlacement | null = null,
 ): CreatorCandidateView | null {
   try {
-    const view = previewCandidate(plan, byId, input.transforms, { grammarId: plan.grammarId, styleId: style.id, markFits: fits }, input.preview.sender)
+    const view = previewCandidate(plan, byId, input.transforms, { grammarId: plan.grammarId, styleId: style.id, markFits: fits }, input.preview.sender, placement)
     if (view.provenance.some((mark) => !fits(mark))) return null
     const scene = creatorScene({
       view,

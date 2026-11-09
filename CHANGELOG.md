@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.0-rc.4 to 0.2.0-beta.15 — October and November 2026
+
+Android versionCodes 25 to 50 went to the Play closed and internal tracks. This
+entry summarises them. The per-build detail is in the git history.
+
+- **Layouts.** The finished V5 collage engine with 14 grammars and their
+  bundled styles. The sheet is sealed into ContentManifest v2 and redrawn
+  exactly on the recipient's side.
+- **Music.** Search over the own music catalogue. A chosen song is sealed as a
+  track snapshot and drawn in the layout's song band. Covers come from the
+  Cover Art Archive and are checked by hash.
+- **Website.** A second client at remanence.to: Google and passkey sign-in, a
+  device session kept until sign-out, making and sending a postcard (grammar
+  5), scanning and opening one in the browser, history, settings and a PWA
+  shell. The site does not decrypt anything on the server.
+- **Domain.** On 2026-11-03 the product moved to remanence.to. Passkeys, the
+  recovery origin and app links moved with it. The old host serves only the
+  API for older builds.
+- **First gifts (ADR-020).** Send a postcard to a phone number with a code
+  written on the card. A split key means the server never sees the secret, and
+  an SMS check runs before the server half is released. Built on the server,
+  Android and web behind flags, and turned on only for internal testing.
+- **Order of making.** Who it is for, then photos and words, then the layout,
+  then the postcard is photographed last, just before sending. The same order
+  is used on Android (vc50) and the website.
+- **Other.** Durable account recovery with passkeys, send access limits,
+  in-app language switch (English, Russian, Ukrainian), links to `/<handle>`,
+  and deploy scripts for the backend, web and Play.
+
 ## 0.2.0-rc.3 — BER1 expression artifact (ContentManifest v2)
 
 Android `versionCode` is **24** (`23` was consumed by `v0.2.0-rc.2` and is

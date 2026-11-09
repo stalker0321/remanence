@@ -68,14 +68,44 @@ export async function searchMusic(
   return page
 }
 
+/** Android `CapsuleTrackSnapshotV1`: the song as it rides inside the sealed manifest. */
+export interface TrackSnapshot {
+  trackId: string
+  title: string
+  artistDisplay: string
+  version: string | null
+  durationMs: number | null
+}
+
+export const TRACK_TITLE_MAX_CHARS = 100
+export const TRACK_ARTIST_MAX_CHARS = 200
+export const TRACK_VERSION_MAX_CHARS = 100
+export const TRACK_DURATION_MAX_MS = 86_400_000
+
+/**
+ * The sealed snapshot for a picked hit (`mapMusicSelectionToSnapshot`), or null
+ * when the hit is outside the snapshot bounds and cannot be sent.
+ */
+export function trackSnapshotOf(hit: MusicHit): TrackSnapshot | null {
+  const artistDisplay = hit.artists.join(', ')
+  if (!UUID.test(hit.id)) return null
+  if (hit.title.trim() === '' || hit.title.length > TRACK_TITLE_MAX_CHARS) return null
+  if (artistDisplay.trim() === '' || artistDisplay.length > TRACK_ARTIST_MAX_CHARS) return null
+  if (hit.version !== null && (hit.version.trim() === '' || hit.version.length > TRACK_VERSION_MAX_CHARS)) return null
+  if (!wellFormed(hit.title) || !wellFormed(artistDisplay) || (hit.version !== null && !wellFormed(hit.version))) return null
+  const durationMs = hit.durationMs !== null && hit.durationMs >= 1 && hit.durationMs <= TRACK_DURATION_MAX_MS ? hit.durationMs : null
+  return { trackId: hit.id, title: hit.title, artistDisplay, version: hit.version, durationMs }
+}
+
+/** No lone surrogates: the text must encode to UTF-8 as it reads. */
+function wellFormed(value: string): boolean {
+  return !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)
+}
+
 /** Title line only. The recording id is not part of the line. */
 export function musicLine(hit: MusicHit): string {
   const names = hit.artists.join(', ')
   return hit.version ? `${hit.title} — ${names} (${hit.version})` : `${hit.title} — ${names}`
-}
-
-export function musicCoverKey(hit: MusicHit): 'musicCoverLater' | 'musicNoCover' {
-  return hit.artworkAvailable ? 'musicCoverLater' : 'musicNoCover'
 }
 
 /** One selected hit for this visit. A late page cannot replace it. */

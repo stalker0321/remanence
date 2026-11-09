@@ -40,12 +40,14 @@ function plan(branchId: string, slotList: ReadonlyArray<{ contentId: string }>):
       ),
     ),
     note: null,
+    music: null,
     provenance: Object.freeze([]),
     decor: Object.freeze([]),
   })
 }
 
 const RENDERED_KEY = 'render-key-1'
+const TRACK = { trackId: '0198f0a0-1111-7000-8000-000000000001', title: 'Song', artistDisplay: 'Singer', version: null, durationMs: null }
 
 function current(): FreezeCurrent {
   return {
@@ -58,7 +60,7 @@ function current(): FreezeCurrent {
     sessionGeneration: 7,
     recipient: { userId: 'u-1', keyBundleId: 'b-1', directoryVersion: 'd-1' },
     senderHandle: 'sergio',
-    musicSelected: false,
+    trackId: null,
     renderedKey: RENDERED_KEY,
   }
 }
@@ -74,7 +76,7 @@ describe('creator freeze', () => {
       note: null,
       noteRegion: null,
       noteFits: true,
-      musicSelected: false,
+      track: null,
       ownerId: 'owner-1',
       sessionGeneration: 7,
       recipient: { userId: 'u-1', keyBundleId: 'b-1', directoryVersion: 'd-1' },
@@ -107,7 +109,7 @@ describe('creator freeze', () => {
       note: null as string | null,
       noteRegion: null as { x: number; y: number; width: number; height: number } | null,
       noteFits: true,
-      musicSelected: false,
+      track: null,
       ownerId: 'owner-1',
       sessionGeneration: 7,
       recipient: { userId: 'u-1', keyBundleId: 'b-1', directoryVersion: 'd-1' },
@@ -120,7 +122,7 @@ describe('creator freeze', () => {
     expect(() => freezeSelection({ ...base, renderedKey: RENDERED_KEY, renderedPlan: plan(base.branchId, base.slots.slice(0, 2)) })).toThrowError(CollageError)
   })
 
-  it('refuses music, missing recipient, and note inconsistencies with typed reasons', () => {
+  it('refuses a song without a painted band, missing recipient, and note inconsistencies with typed reasons', () => {
     const base = {
       branchId: 'editorial-1+2-equal-1',
       styleId: 'press',
@@ -130,14 +132,14 @@ describe('creator freeze', () => {
       note: null as string | null,
       noteRegion: null as { x: number; y: number; width: number; height: number } | null,
       noteFits: true,
-      musicSelected: false,
+      track: null,
       ownerId: 'o',
       sessionGeneration: 1,
       recipient: { userId: 'u', keyBundleId: 'b', directoryVersion: 'd' } as { userId: string; keyBundleId: string; directoryVersion: string } | null,
       renderedKey: RENDERED_KEY,
       renderedPlan: plan('editorial-1+2-equal-1', slots()),
     }
-    expect(freezeSelection({ ...base, musicSelected: true })).toEqual({ ok: false, reason: 'music-not-supported' })
+    expect(freezeSelection({ ...base, track: TRACK })).toEqual({ ok: false, reason: 'music-mismatch' })
     expect(freezeSelection({ ...base, recipient: null })).toEqual({ ok: false, reason: 'no-recipient' })
     expect(() => freezeSelection({ ...base, senderHandle: '  ' })).toThrowError(CollageError)
     expect(
@@ -161,7 +163,7 @@ describe('creator freeze', () => {
       note: null as string | null,
       noteRegion: null as { x: number; y: number; width: number; height: number } | null,
       noteFits: true,
-      musicSelected: false,
+      track: null,
       ownerId: 'o',
       sessionGeneration: 1,
       recipient: { userId: 'u', keyBundleId: 'b', directoryVersion: 'd' },
@@ -185,7 +187,7 @@ describe('creator freeze', () => {
       note: 'Probe note text.',
       noteRegion: { x: 16, y: 573, width: 328, height: 30 },
       noteFits: true,
-      musicSelected: false,
+      track: null,
       ownerId: 'owner-1',
       sessionGeneration: 7,
       recipient: { userId: 'u-1', keyBundleId: 'b-1', directoryVersion: 'd-1' },
@@ -219,7 +221,7 @@ describe('creator freeze', () => {
         [(next) => (next.recipient = { userId: 'u-2', keyBundleId: 'b-1', directoryVersion: 'd-1' }), 'recipient changed'],
         [(next) => (next.senderHandle = 'ada'), 'sender changed'],
         [(next) => (next.senderHandle = null), 'sender changed'],
-        [(next) => (next.musicSelected = true), 'music selected'],
+        [(next) => (next.trackId = TRACK.trackId), 'music changed'],
       ] as Array<[(next: FreezeCurrent) => void, string]>
     ).forEach(([change, reason]) => mutate(change, reason))
   })
@@ -234,7 +236,7 @@ describe('creator freeze', () => {
       note: null,
       noteRegion: null,
       noteFits: true,
-      musicSelected: false,
+      track: null,
       ownerId: 'o',
       sessionGeneration: 1,
       recipient: { userId: 'u', keyBundleId: 'b', directoryVersion: 'd' },

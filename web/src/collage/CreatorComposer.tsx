@@ -13,6 +13,7 @@ import { paintScene, type PaintImage } from './paint'
 import type { TextMeasurer } from './prepare'
 import { styleById } from './styles'
 import type { SessionStore } from '../session/session'
+import type { TrackSnapshot } from '../create/music'
 import type { Grammar5Measure } from './planGrammar5'
 import './creatorComposer.css'
 
@@ -36,7 +37,8 @@ export interface CreatorComposerRecipient {
 export interface CreatorComposerProps {
   photos: CreatorComposerPhoto[]
   note: string | null
-  musicSelected: boolean
+  /** The chosen song, painted as a text band and sealed with the layout. */
+  track: TrackSnapshot | null
   styleId?: string
   recipient: CreatorComposerRecipient | null
   /** Explicit sender handle (same owner). Falls back to the live session handle. */
@@ -67,7 +69,6 @@ interface Copy {
   freeze: string
   preparing: string
   frozen: (branch: string) => string
-  musicUnsupported: string
   noRecipient: string
   noSender: string
   noteOverflow: string
@@ -98,7 +99,6 @@ const copy: Record<CreatorLang, Copy> = {
     freeze: 'Choose this layout',
     preparing: 'Preparing preview…',
     frozen: () => 'Layout selected. Editing it will clear the selection.',
-    musicUnsupported: 'Music cannot be sent with this composition yet. Remove the song to choose a layout.',
     noRecipient: 'Confirm a recipient to choose a layout.',
     noSender: 'Confirm a sender to compose.',
     noteOverflow: 'The note does not fit this layout. Shorten it or choose another.',
@@ -126,7 +126,6 @@ const copy: Record<CreatorLang, Copy> = {
     freeze: 'Выбрать эту композицию',
     preparing: 'Готовим предпросмотр…',
     frozen: () => 'Композиция выбрана. После изменения её нужно выбрать снова.',
-    musicUnsupported: 'Музыку пока нельзя отправить с этой композицией. Уберите песню, чтобы выбрать вариант.',
     noRecipient: 'Подтвердите получателя, чтобы выбрать композицию.',
     noSender: 'Подтвердите отправителя для композиции.',
     noteOverflow: 'Текст не помещается в эту композицию. Сократите его или выберите другую.',
@@ -154,7 +153,6 @@ const copy: Record<CreatorLang, Copy> = {
     freeze: 'Вибрати цю композицію',
     preparing: 'Готуємо попередній перегляд…',
     frozen: () => 'Композицію вибрано. Після зміни її потрібно вибрати знову.',
-    musicUnsupported: 'Музику поки не можна надіслати з цією композицією. Приберіть пісню, щоб вибрати варіант.',
     noRecipient: 'Підтвердіть одержувача, щоб вибрати композицію.',
     noSender: 'Підтвердіть відправника для композиції.',
     noteOverflow: 'Текст не вміщується в цю композицію. Скоротіть його або виберіть іншу.',
@@ -229,8 +227,8 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const inputKey = useMemo(() => {
     const photosKey = JSON.stringify(props.photos.map((photo) => [photo.contentId, photo.width, photo.height, photo.contentHash]))
     const transformsKey = JSON.stringify(transforms)
-    return JSON.stringify([photosKey, props.note, transformsKey, styleId, senderHandle, props.musicSelected])
-  }, [props.photos, props.note, transforms, styleId, senderHandle, props.musicSelected])
+    return JSON.stringify([photosKey, props.note, transformsKey, styleId, senderHandle, props.track])
+  }, [props.photos, props.note, transforms, styleId, senderHandle, props.track])
 
   // Fonts gate: the ONLY async step. Required bundled faces load first;
   // its own epoch, never shared with paint (paint is synchronous after
@@ -252,6 +250,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         await Promise.all([
           document.fonts.load('400 27px StudySerif'),
           document.fonts.load(`${style.note.weight} ${style.note.size}px ${style.note.font}`),
+          document.fonts.load(`${style.music.italic ? 'italic ' : ''}${style.music.weight} ${style.music.size}px ${style.music.font}`),
           document.fonts.load('400 64px StudySerif'),
           document.fonts.load('italic 400 20px StudySerif'),
         ])
@@ -288,6 +287,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
             contentHash: photo.contentHash,
           })),
           note: props.note && props.note.trim() !== '' ? props.note : null,
+          music: props.track === null ? null : { artwork: false },
         },
         new Map(Object.entries(transforms)),
         planner,
@@ -296,7 +296,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
     }
-  }, [tornDown, fontsReady, inputKey, props.measurer, props.photos, props.note, transforms, senderHandle])
+  }, [tornDown, fontsReady, inputKey, props.measurer, props.photos, props.note, props.track, transforms, senderHandle])
 
   const views = planned !== null && 'views' in planned ? planned.views : null
   const planError = fontsError ?? (planned !== null && 'error' in planned ? planned.error : null)
@@ -323,9 +323,9 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         props.recipient === null
           ? null
           : [props.recipient.userId, props.recipient.keyBundleId, props.recipient.directoryVersion],
-      musicSelected: props.musicSelected,
+      track: props.track,
     })
-  }, [props.measurer, view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.musicSelected])
+  }, [props.measurer, view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.track])
 
   const currentFreeze: FreezeCurrent | null = useMemo(() => {
     if (view === null) return null
@@ -334,7 +334,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       styleId,
       styleVersion: styleById(styleId)?.version ?? '',
       senderHandle,
-      musicSelected: props.musicSelected,
+      trackId: props.track?.trackId ?? null,
       renderedKey,
       slots: view.slots.map((slot, index) => {
         const meta = props.photos.find((photo) => photo.contentId === slot.photoId)
@@ -359,7 +359,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
               directoryVersion: props.recipient.directoryVersion,
             },
     }
-  }, [view, styleId, senderHandle, props.musicSelected, renderedKey, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
+  }, [view, styleId, senderHandle, props.track, renderedKey, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
 
   const signature = renderedKey
 
@@ -439,6 +439,8 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         senderHandle,
         noteText: props.note && props.note.trim() !== '' ? props.note : null,
         photos: new Map(props.photos.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
+        track: props.track === null ? null : { title: props.track.title, artistDisplay: props.track.artistDisplay },
+        measurer: props.measurer,
       })
       // One shared wrapped layout drives BOTH the region (via the same
       // wrap in `plannerFromTextMeasurer`) and the painted rows. The base
@@ -516,7 +518,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       renderedRef.current = null
       setReadySig(null)
     }
-  }, [view, props.photos, props.note, props.measurer, styleId, tornDown, senderHandle, signature])
+  }, [view, props.photos, props.note, props.track, props.measurer, styleId, tornDown, senderHandle, signature])
 
   // Unmount: release the parent snapshot. Paint is synchronous, so no
   // async fence is needed here; the fonts gate owns its own epoch.
@@ -575,7 +577,6 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
 
   const freezeBlocked: { disabled: boolean; reason: string | null } = (() => {
     if (senderHandle === null) return { disabled: true, reason: t.noSender }
-    if (props.musicSelected) return { disabled: true, reason: t.musicUnsupported }
     if (props.recipient === null) return { disabled: true, reason: t.noRecipient }
     if (view.note !== null && (props.note === null || props.note.trim() === '')) return { disabled: true, reason: t.noteMissing }
     if (!noteFits) return { disabled: true, reason: t.noteOverflow }
@@ -629,7 +630,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       note: props.note && props.note.trim() !== '' ? props.note : null,
       noteRegion: view.note === null ? null : { ...view.note.region },
       noteFits,
-      musicSelected: props.musicSelected,
+      track: props.track,
       ownerId: props.ownerId,
       sessionGeneration: live.generation,
       recipient:

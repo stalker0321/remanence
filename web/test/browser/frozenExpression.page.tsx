@@ -140,7 +140,7 @@ function App(props: {
     <CreatorComposer
       photos={props.photos}
       note={props.note}
-      musicSelected={false}
+      track={null}
       styleId="press"
       recipient={RECIPIENT}
       ownerId={ACCOUNT}

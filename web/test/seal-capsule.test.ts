@@ -127,7 +127,7 @@ function buildFreeze(photos: readonly DraftPhoto[], note: string | null, session
     note,
     noteRegion: scene.note ? { ...scene.note.region } : null,
     noteFits: true,
-    musicSelected: false,
+    track: null,
     ownerId: SENDER_ID,
     sessionGeneration,
     recipient: { userId: RECIPIENT_ID, keyBundleId: RECIPIENT_BUNDLE, directoryVersion: DIRECTORY_VERSION },

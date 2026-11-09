@@ -34,6 +34,11 @@ const digests = new Map<string, Promise<Uint8Array>>()
 
 export const PALETTE_VERSION = 1
 
+/** Android `AllFamilyV4Adapter.textType`: a style role as a sealed text type, line = ceil(size * 1.12). */
+export function roleTextType(role: TextRole): { family: string; size: number; weight: number; italic: boolean; line: number } {
+  return { family: role.font, size: role.size, weight: role.weight, italic: role.italic, line: Math.ceil(role.size * 1.12) }
+}
+
 export function styleById(id: string): CollageStyle | null {
   return styles.get(id) ?? null
 }

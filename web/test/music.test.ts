@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { AuthError } from '../src/auth/errors'
 import type { ApiRequest, ApiResult, ApiTransport } from '../src/auth/http'
-import { MusicDraft, musicCoverKey, musicLine, searchMusic } from '../src/create/music'
+import { MusicDraft, musicLine, searchMusic } from '../src/create/music'
 import { SessionStore } from '../src/session/session'
 
 const ACCOUNT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
@@ -80,11 +80,9 @@ describe('music search', () => {
     expect(line).toBe('Night — Ada, Bea (live)')
     expect(line).not.toContain(MBID)
     expect(JSON.stringify(line)).not.toContain('http')
-    expect(musicCoverKey(found.hits[0]!)).toBe('musicCoverLater')
     const quiet = await searchMusic(session, scripted(() => ({ status: 200, body: page([hit(OTHER, null)]) })).transport, '🙂'.repeat(100))
     if (quiet.kind !== 'page') throw new Error('expected a page')
     expect(quiet.hits[0]?.recordingMbid).toBeNull()
-    expect(musicCoverKey({ ...quiet.hits[0]!, artworkAvailable: false })).toBe('musicNoCover')
     const empty = await searchMusic(session, scripted(() => ({ status: 200, body: page([]) })).transport, 'none')
     expect(empty).toEqual({ kind: 'page', hits: [], total: 0 })
   })

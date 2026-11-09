@@ -105,7 +105,7 @@ export async function buildFreeze(photos: readonly DraftPhoto[], note: string, g
       const spec = byId.get(slot.photoId)!
       return { contentId: slot.photoId, ordinal: index, contentHash: spec.contentHash, widthPx: spec.width, heightPx: spec.height, crop: { ...slot.crop } }
     }),
-    note, noteRegion: scene.note ? { ...scene.note.region } : null, noteFits: true, musicSelected: false,
+    note, noteRegion: scene.note ? { ...scene.note.region } : null, noteFits: true, track: null,
     ownerId: SENDER_ID, sessionGeneration: generation,
     recipient: { userId: RECIPIENT_ID, keyBundleId: RECIPIENT_BUNDLE, directoryVersion: '0'.repeat(16) },
     renderedKey: 'rk-1', renderedPlan, createdAtMs: 1,

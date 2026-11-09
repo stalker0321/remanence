@@ -131,7 +131,7 @@ function buildFreeze(photos: readonly DraftPhoto[], note: string | null, session
     note,
     noteRegion: scene.note ? { ...scene.note.region } : null,
     noteFits: true,
-    musicSelected: false,
+    track: null,
     ownerId: SENDER_ID,
     sessionGeneration,
     recipient: { userId: RECIPIENT_ID, keyBundleId: RECIPIENT_BUNDLE, directoryVersion: DIRECTORY_VERSION },
@@ -197,7 +197,7 @@ async function buildVisit() {
     recipient: RECIPIENT_SNAPSHOT,
     photos,
     noteText: NOTE,
-    musicSelected: false,
+    trackId: null,
     freeze,
     still,
     fingerprint,
@@ -207,7 +207,7 @@ async function buildVisit() {
     recipient: RecipientSnapshot
     photos: DraftPhoto[]
     noteText: string
-    musicSelected: boolean
+    trackId: string | null
     freeze: CreatorFreeze
     still: FrontStill
     fingerprint: FrontFingerprintValue
@@ -216,7 +216,7 @@ async function buildVisit() {
     recipient: RECIPIENT_SNAPSHOT,
     photos: photos.slice(),
     noteText: NOTE,
-    musicSelected: false,
+    trackId: null,
     freeze,
     still,
     fingerprint,
@@ -231,7 +231,7 @@ async function buildVisit() {
     recipientCurrent: () => current.recipient,
     photosCurrent: () => current.photos,
     noteTextCurrent: () => current.noteText,
-    musicSelectedCurrent: () => current.musicSelected,
+    trackIdCurrent: () => current.trackId,
     freezeCurrent: () => current.freeze,
     stillCurrent: () => current.still,
     fingerprintCurrent: () => current.fingerprint,
@@ -287,7 +287,7 @@ describe('sendPreflight', () => {
     // values. An invalid captured freeze (wrong grammar) is a local refusal.
     const badFreeze = { ...visit.freeze, grammarId: 'g4' } as unknown as CreatorFreeze
     expect(sendPreflight({ ...visit, freeze: badFreeze }, ports)).toEqual({ ok: false, reason: 'freeze' })
-    expect(sendPreflight({ ...visit, musicSelected: true }, ports)).toEqual({ ok: false, reason: 'music' })
+    expect(sendPreflight({ ...visit, trackId: '0198f0a0-1111-7000-8000-000000000001' }, ports)).toEqual({ ok: false, reason: 'music' })
     // As in the app, a postcard needs no words.
     expect(sendPreflight({ ...visit, noteText: '' }, ports)).toEqual({ ok: true })
     expect(sendPreflight({ ...visit, photos: visit.photos.slice(0, 2) }, ports)).toEqual({ ok: false, reason: 'photos' })

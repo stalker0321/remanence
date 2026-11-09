@@ -53,7 +53,8 @@ export interface SendVisit {
   recipient: RecipientSnapshot
   photos: readonly DraftPhoto[]
   noteText: string
-  musicSelected: boolean
+  /** Id of the chosen song, or null; must be the song the freeze sealed. */
+  trackId: string | null
   freeze: CreatorFreeze
   still: FrontStill
   fingerprint: FrontFingerprintValue
@@ -109,7 +110,7 @@ function visitCurrent(visit: SendVisit, ports: SendPortsFull): boolean {
       recipient.directoryVersion !== visit.recipient.directoryVersion) return false
   if (photoSignature(ports.photosCurrent()) !== photoSignature(visit.photos)) return false
   if (ports.noteTextCurrent() !== visit.noteText) return false
-  if (ports.musicSelectedCurrent() !== visit.musicSelected) return false
+  if (ports.trackIdCurrent() !== visit.trackId) return false
   if (ports.freezeCurrent() !== visit.freeze) return false
   if (ports.stillCurrent() !== visit.still) return false
   if (ports.fingerprintCurrent() !== visit.fingerprint) return false
@@ -126,7 +127,7 @@ export interface SendCurrentAccessors {
   recipientCurrent(): RecipientSnapshot | null
   photosCurrent(): readonly DraftPhoto[]
   noteTextCurrent(): string
-  musicSelectedCurrent(): boolean
+  trackIdCurrent(): string | null
   freezeCurrent(): CreatorFreeze | null
   stillCurrent(): FrontStill | null
   fingerprintCurrent(): FrontFingerprintValue | null
@@ -150,7 +151,7 @@ export function sendPreflight(visit: SendVisit, ports: SendPortsFull): SendPrefl
     return { ok: false, reason: 'recipient' }
   }
   if (visit.photos.length < 3 || visit.photos.length > 5) return { ok: false, reason: 'photos' }
-  if (visit.musicSelected) return { ok: false, reason: 'music' }
+  if (visit.trackId !== (visit.freeze.track?.trackId ?? null)) return { ok: false, reason: 'music' }
   if (visit.freeze.grammarId !== 'g5') return { ok: false, reason: 'freeze' }
   if (visit.still.bytes.length === 0) return { ok: false, reason: 'still' }
   if (visit.fingerprint.wire.length === 0) return { ok: false, reason: 'fingerprint' }

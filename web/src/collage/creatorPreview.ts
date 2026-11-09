@@ -8,12 +8,12 @@ import {
   type CropWindowInts,
 } from './crop'
 import type { PhotoShape, Rect } from './model'
-import { sourceRect, type TextMeasurer } from './prepare'
+import { musicLayers, sourceRect, type TextMeasurer, type TrackWords } from './prepare'
 import { grammar5Plans, type Grammar5Input, type Grammar5Measure, type Grammar5Plan } from './planGrammar5'
 import { markLine } from './model'
 import { mountRect } from './mount'
 import { wrapNoteLines } from './creatorNote'
-import { opaqueColor, styleById } from './styles'
+import { opaqueColor, roleTextType, styleById } from './styles'
 import type { Scene } from './prepare'
 
 /**
@@ -51,6 +51,11 @@ export interface CreatorNoteView {
   state: string
 }
 
+export interface CreatorMusicView {
+  region: Rect
+  mode: 'text' | 'thumbnail'
+}
+
 export interface CreatorProvenanceView {
   kind: 'brand' | 'sender'
   text: string
@@ -68,6 +73,7 @@ export interface CreatorCandidateView {
   branch: string
   slots: CreatorSlotView[]
   note: CreatorNoteView | null
+  music: CreatorMusicView | null
   provenance: CreatorProvenanceView[]
 }
 
@@ -139,6 +145,8 @@ export interface PreviewInput {
   sender: string
   photos: CreatorPhoto[]
   note: string | null
+  /** A chosen song; `artwork` only when its cover is held for the sheet. */
+  music?: { artwork: boolean } | null
 }
 
 /** Effective face for the creator's rendered note (family/weight/italic). */
@@ -200,6 +208,7 @@ function planInput(input: PreviewInput): Grammar5Input {
     sender: input.sender,
     photos: input.photos.map((photo) => ({ id: photo.contentId, width: photo.width, height: photo.height })),
     note: input.note,
+    music: input.music ?? null,
   }
 }
 
@@ -246,9 +255,13 @@ export function previewCandidate(
     plan.note === null
       ? null
       : mountRect({ x: plan.note.rect.x, y: plan.note.rect.y, width: plan.note.rect.width, height: plan.note.rect.height })
+  const music: CreatorMusicView | null = plan.music === null
+    ? null
+    : { region: mountRect({ x: plan.music.rect.x, y: plan.music.rect.y, width: plan.music.rect.width, height: plan.music.rect.height }), mode: plan.music.mode }
   return {
     branch: plan.branch,
     slots,
+    music,
     note:
       plan.note === null || noteRegion === null
         ? null
@@ -277,6 +290,10 @@ export interface CreatorSceneInput {
   senderHandle: string
   noteText: string | null
   photos: ReadonlyMap<string, { width: number; height: number }>
+  /** The chosen song's words; required exactly when the view has a song band. */
+  track?: TrackWords | null
+  /** Measures the song words against the band; required with `track`. */
+  measurer?: TextMeasurer
 }
 
 /**
@@ -322,6 +339,20 @@ export function creatorScene(input: CreatorSceneInput): Scene {
           color: opaqueColor(style.palette.ink),
         }
       : null
+  const track = input.track ?? null
+  if ((track === null) !== (input.view.music === null)) fail('creator song band and chosen song must match')
+  let music: Scene['music'] = null
+  let artwork: Scene['artwork'] = null
+  if (track !== null && input.view.music !== null) {
+    if (!input.measurer) fail('creator song needs a measurer')
+    // Without a held cover the band is drawn as text, the same as the
+    // recipient will see it when the cover cannot be checked.
+    const region = { ...input.view.music.region, mode: input.view.music.mode, type: roleTextType(style.music), artwork: null }
+    const layers = musicLayers(region, 'g5', style, true, false, track, input.measurer)
+    if (typeof layers === 'string') fail(layers)
+    music = layers.music
+    artwork = layers.artwork
+  }
   return {
     canvasWidth: 360,
     canvasHeight: 640,
@@ -333,8 +364,8 @@ export function creatorScene(input: CreatorSceneInput): Scene {
     soundInk: opaqueColor(style.palette.soundInk),
     photos,
     note,
-    music: null,
-    artwork: null,
+    music,
+    artwork,
     provenance: input.view.provenance.map((mark) => ({
       kind: mark.kind,
       text: mark.kind === 'brand' ? 'Remanence' : `From ${input.senderHandle}`,

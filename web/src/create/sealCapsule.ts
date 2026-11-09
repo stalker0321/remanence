@@ -302,7 +302,7 @@ export async function sealCapsule(input: SealCapsuleInput): Promise<SealedCapsul
       built.expression.input.photos.map((photo): [string, Uint8Array] => [photo.contentId, uuidToBytes(tagBlobId(capsuleBytes, PHOTO_BLOB_TAG_BASE + photo.ordinal))]),
     )
     fresh()
-    const content = await encodeContentManifest({ expression: built.expression, capsuleId: capsuleBytes, candidateId, blobIdByContentId })
+    const content = await encodeContentManifest({ expression: built.expression, capsuleId: capsuleBytes, candidateId, blobIdByContentId, track: ownedFreeze.track })
     if (content.ok) owned.push(content.bytes) // own before the post-await fence/validation
     fresh()
     if (!content.ok) throw new SealCapsuleError('content')

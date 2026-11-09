@@ -37,11 +37,19 @@ function photos(count = 3) {
   }))
 }
 
-function frozenFor(note: string | null, count = 3) {
+const TRACK = {
+  trackId: '0198f0a0-1111-7000-8000-000000000001',
+  title: 'Probe song',
+  artistDisplay: 'Probe singer',
+  version: 'live',
+  durationMs: 201_000,
+}
+
+function frozenFor(note: string | null, count = 3, track: typeof TRACK | null = null) {
   const source = photos(count)
   const style = styleById('press')!
   const view = previewCandidates(
-    { id: 'creator', sender: SENDER, photos: source, note },
+    { id: 'creator', sender: SENDER, photos: source, note, music: track === null ? null : { artwork: false } },
     undefined,
     plannerFromTextMeasurer(measurer, 640, 640, style.note),
   )[0]!
@@ -51,6 +59,8 @@ function frozenFor(note: string | null, count = 3) {
     senderHandle: SENDER,
     noteText: note,
     photos: new Map(source.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
+    track: track === null ? null : { title: track.title, artistDisplay: track.artistDisplay },
+    measurer,
   })
   const noteLayout = scene.note
     ? layoutCreatorNote(
@@ -88,7 +98,7 @@ function frozenFor(note: string | null, count = 3) {
     note,
     noteRegion: scene.note ? { ...scene.note.region } : null,
     noteFits: true,
-    musicSelected: false,
+    track,
     ownerId: 'owner-1',
     sessionGeneration: 7,
     recipient: RECIPIENT,
@@ -100,8 +110,8 @@ function frozenFor(note: string | null, count = 3) {
   return result.frozen
 }
 
-async function expressionFor(note: string | null, count = 3): Promise<ResolvedExpression> {
-  const built = await buildFrozenExpression(frozenFor(note, count), 17n)
+async function expressionFor(note: string | null, count = 3, track: typeof TRACK | null = null): Promise<ResolvedExpression> {
+  const built = await buildFrozenExpression(frozenFor(note, count, track), 17n)
   if (!built.ok) throw new Error(`adapter failed: ${built.reason}`)
   return built.expression
 }
@@ -245,6 +255,38 @@ describe('content manifest encoder', () => {
     expect(await refusalReason(fractional, CAPSULE, CANDIDATE, blobs)).toBe('fraction')
   })
 
+  it('seals a chosen song as a text band the recipient can open', async () => {
+    const expression = await expressionFor('Probe note text.', 3, TRACK)
+    expect(expression.musicRegion).toMatchObject({ x: 16, width: 328, height: 48, mode: 'text', artwork: null })
+    expect(expression.input.music).toEqual({ trackId: TRACK.trackId, artworkId: null })
+    const blobs = blobsFor(expression)
+    const encoded = await encodeContentManifest({ expression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobs, track: TRACK })
+    if (!encoded.ok) throw new Error(`encode failed: ${encoded.reason} ${encoded.detail ?? ''}`)
+    const parsed = await parseContentManifest(encoded.bytes)
+    expect(parsed.track).toEqual({ title: TRACK.title, artistDisplay: TRACK.artistDisplay })
+    expect(parsed.expression.musicRegion).toEqual(expression.musicRegion)
+    const sources = new Map(expression.input.photos.map((photo) => [photo.contentId, { width: photo.widthPx, height: photo.heightPx }]))
+    const scene = await prepare(parsed.expression, parsed.note, parsed.track, sources, measurer)
+    if (scene.kind !== 'ready') throw new Error(`prepare refused: ${scene.reason}`)
+    expect(scene.scene.music).toMatchObject({ title: TRACK.title, artist: TRACK.artistDisplay, mode: 'text' })
+    // The song band lifts the photo field: the last row ends 8 px above it.
+    const bottom = Math.max(...expression.placements.map((placement) => placement.y + placement.height))
+    expect(bottom).toBeLessThanOrEqual(expression.musicRegion!.y - 8)
+  })
+
+  it('refuses a song band and a track snapshot that disagree', async () => {
+    const plain = await expressionFor('Probe note text.')
+    const withSong = await expressionFor('Probe note text.', 3, TRACK)
+    const blobs = blobsFor(plain)
+    const encode = (expression: ResolvedExpression, track: typeof TRACK | null) =>
+      encodeContentManifest({ expression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobsFor(expression), track })
+    expect(await encode(plain, TRACK)).toMatchObject({ ok: false, reason: 'music' })
+    expect(await encode(withSong, null)).toMatchObject({ ok: false, reason: 'music' })
+    expect(await encode(withSong, { ...TRACK, trackId: '0198f0a0-1111-7000-8000-000000000002' })).toMatchObject({ ok: false, reason: 'music' })
+    expect(await encode(withSong, { ...TRACK, title: 'x'.repeat(101) })).toMatchObject({ ok: false, reason: 'music' })
+    expect(blobs.size).toBe(3)
+  })
+
   it('refuses a non-V4 / music expression', async () => {
     const expression = await expressionFor('Probe note text.')
     const blobs = blobsFor(expression)
@@ -253,7 +295,7 @@ describe('content manifest encoder', () => {
     expect(await refusalReason(v3, CAPSULE, CANDIDATE, blobs)).toBe('unsupported')
     const music = clone(expression)
     music.musicRegion = { x: 16, y: 480, width: 328, height: 64, mode: 'text', type: music.noteType!, artwork: null }
-    expect(await refusalReason(music, CAPSULE, CANDIDATE, blobs)).toBe('unsupported')
+    expect(await refusalReason(music, CAPSULE, CANDIDATE, blobs)).toBe('music')
   })
 
   it('snapshots caller inputs before the async digest (mutation during await cannot desync)', async () => {

@@ -20,11 +20,8 @@ import reference from './g5-plans-reference.txt?raw'
  * is computed by the port under test. Note text is the reference's
  * `"Probe note text."` with the line-height-stub measurement model.
  *
- * In-scope cases (music none, 3–5 photos, note 0/1) are compared
- * tile-by-tile against every recorded plan. Reference cases with music
- * text/cover are a documented coverage gap: applicability must still
- * match, but geometry needs closing-with-music and the port refuses
- * music input with a typed error instead of inventing it.
+ * Every case (music none/text/cover, 3–5 photos, note 0/1) is compared
+ * tile-by-tile against every recorded plan, the song band included.
  */
 
 const TOL = 1e-5
@@ -72,6 +69,7 @@ interface PlanSpec {
   branch: string
   tiles: RefTile[]
   note: RefNote | null
+  music: RefNote | null
   prov: RefMark[]
   decor: RefDecor[]
 }
@@ -155,8 +153,12 @@ function loadFixture(): Fixture {
         const parts = fields[6].split(':')
         return { state: parts[0], rect: rect(parts[1]) }
       })()
+      const music = fields[8] === '-' ? null : (() => {
+        const parts = fields[8].split(':')
+        return { state: parts[0], rect: rect(parts[1]) }
+      })()
       const list = plans.get(current) ?? []
-      list.push({ branch: fields[2], tiles: parseTiles(fields[4]), note, prov: parseProv(fields[10] ?? ''), decor: parseDecor(fields[12] ?? '') })
+      list.push({ branch: fields[2], tiles: parseTiles(fields[4]), note, music, prov: parseProv(fields[10] ?? ''), decor: parseDecor(fields[12] ?? '') })
       plans.set(current, list)
     }
   }
@@ -198,7 +200,12 @@ function checkPlan(expected: PlanSpec, actual: Grammar5Plan, label: string): voi
     expect(actual.note?.state, `${label} note.state`).toBe(expected.note.state)
     checkRect(actual.note?.rect ?? { x: NaN, y: NaN, width: NaN, height: NaN }, expected.note.rect, `${label} note`)
   }
-  expect(actual.music, `${label} music must be null`).toBeNull()
+  if (expected.music === null) {
+    expect(actual.music, `${label} music must be null`).toBeNull()
+  } else {
+    expect(actual.music?.mode, `${label} music.mode`).toBe(expected.music.state)
+    checkRect(actual.music?.rect ?? { x: NaN, y: NaN, width: NaN, height: NaN }, expected.music.rect, `${label} music`)
+  }
   expect(actual.provenance.length, `${label} prov count`).toBe(expected.prov.length)
   expected.prov.forEach((mark, j) => {
     const got = actual.provenance[j]
@@ -231,7 +238,6 @@ describe('grammar-5 geometry golden parity', () => {
     expect(fx.cases.length).toBe(30)
     let parityCases = 0
     let parityPlans = 0
-    let refusedCases = 0
     for (const spec of fx.cases) {
       const app = fx.apps.get(`${spec.id}:5`)
       expect(app, `APP 5 for ${spec.id}`).toEqual({ ok: true })
@@ -239,11 +245,6 @@ describe('grammar-5 geometry golden parity', () => {
       const actualApp = grammar5Applicability(input)
       expect(actualApp.ok, `applicability ${spec.id}`).toBe(true)
       expect(actualApp.reasons, `reasons ${spec.id}`).toEqual([])
-      if (spec.music !== 'none') {
-        rejected(input)
-        refusedCases += 1
-        continue
-      }
       const state = grammar5NoteState(input, stubTextMeasure)
       const actual = grammar5Plans(input, state)
       const expected = fx.plans.get(spec.id) ?? []
@@ -269,9 +270,8 @@ describe('grammar-5 geometry golden parity', () => {
       parityCases += 1
       parityPlans += expected.length
     }
-    expect(parityCases).toBe(10)
-    expect(refusedCases).toBe(20)
-    expect(parityPlans).toBeGreaterThan(100)
+    expect(parityCases).toBe(30)
+    expect(parityPlans).toBeGreaterThan(300)
   })
 
   it('is deterministic for the same input', () => {
@@ -285,7 +285,7 @@ describe('grammar-5 geometry golden parity', () => {
     }
   })
 
-  it('refuses unsupported photo counts, music, and dimensions with typed errors', () => {
+  it('refuses unsupported photo counts and dimensions with typed errors', () => {
     const base: Grammar5Input = {
       id: 'x',
       sender: 's',
@@ -303,8 +303,7 @@ describe('grammar-5 geometry golden parity', () => {
     rejected({ ...base, photos: base.photos.map((p, i) => (i === 1 ? { ...p, height: -4 } : p)) })
     rejected({ ...base, photos: base.photos.map((p, i) => (i === 2 ? { ...p, width: NaN } : p)) })
     rejected({ ...base, photos: base.photos.map((p, i) => (i === 0 ? { ...p, height: Infinity } : p)) })
-    rejected({ ...base, music: { artwork: false } })
-    rejected({ ...base, music: { artwork: true } })
+    rejected({ ...base, music: { artwork: 'yes' as unknown as boolean } })
     rejected({ ...base, id: '  ' })
     rejected({ ...base, sender: '' })
     rejected({ ...base, note: undefined as unknown as null })

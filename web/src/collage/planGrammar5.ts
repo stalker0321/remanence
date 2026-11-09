@@ -6,7 +6,7 @@ import { CollageError } from './errors'
  * Faithful TypeScript port of the Android `FrozenGrammarPlans`
  * grammar-5 subset only (`baseEditorial` + `closing`/`bands`/`recipes`/
  * `sourceOrderAssignment` + the grammar-5 `noteState`/`applicability`
- * rows). Supports 3–5 photos, music:none, present/absent note text —
+ * rows). Supports 3–5 photos, an optional song, present/absent note text —
  * the input cases covered by the frozen reference. Emits geometry plan
  * descriptors ONLY (tiles/text/provenance inputs + branch identity);
  * never a frozen V4 expression, never a full-source frozen crop, never
@@ -19,10 +19,9 @@ import { CollageError } from './errors'
  * `ref_plans.js` runtime (see that fixture header). The JS reference is
  * NOT real Android ciphertext and NOT a shipped-vector claim.
  *
- * Coverage gap (documented, not silent): reference cases with music
- * text/cover are applicability-checked only. Their geometry needs
- * `closing`-with-music, which shifts every tile rect and is out of
- * scope here; `grammar5Plans` refuses music input with a typed error.
+ * Music follows Android `closing`: a 48 px band above the note that
+ * shifts every tile rect up. Grammar 5 takes artwork, so a song with a
+ * cover gets `thumbnail` and one without gets `text`.
  */
 
 export interface Grammar5Photo {
@@ -36,7 +35,6 @@ export interface Grammar5Input {
   sender: string
   photos: Grammar5Photo[]
   note: string | null
-  /** Package scope is music:none; any non-null value is refused. */
   music?: { artwork: boolean } | null
 }
 
@@ -59,6 +57,11 @@ export interface Grammar5Note {
   state: string
 }
 
+export interface Grammar5Music {
+  rect: Grammar5Rect
+  mode: 'text' | 'thumbnail'
+}
+
 export interface Grammar5Mark {
   role: string
   rect: Grammar5Rect
@@ -74,7 +77,7 @@ export interface Grammar5Plan {
   branch: string
   tiles: Grammar5Tile[]
   note: Grammar5Note | null
-  music: null
+  music: Grammar5Music | null
   provenance: Grammar5Mark[]
   decor: never[]
 }
@@ -129,7 +132,7 @@ function fail(_message: string): never {
   throw new CollageError('REJECTED')
 }
 
-function checkedInput(input: Grammar5Input): { photos: Grammar5Photo[]; note: string | null } {
+function checkedInput(input: Grammar5Input): { photos: Grammar5Photo[]; note: string | null; music: { artwork: boolean } | null } {
   if (typeof input.id !== 'string' || input.id.trim() === '') fail('grammar5 input id must not be blank')
   if (typeof input.sender !== 'string' || input.sender.trim() === '') fail('grammar5 input sender must not be blank')
   const photos = input.photos
@@ -142,16 +145,16 @@ function checkedInput(input: Grammar5Input): { photos: Grammar5Photo[]; note: st
       fail(`grammar5 photos[${index}] dimensions must be finite and positive`)
     }
   })
-  if (input.music !== undefined && input.music !== null) fail('grammar5 geometry plans do not support music')
+  const music = input.music ?? null
+  if (music !== null && typeof music.artwork !== 'boolean') fail('grammar5 music artwork must be a boolean')
   if (input.note !== null && typeof input.note !== 'string') fail('grammar5 note must be a string or null')
-  return { photos, note: input.note }
+  return { photos, note: input.note, music }
 }
 
 /**
  * Android-faithful applicability for grammar 5 (`optional/optional/
  * optional`, counts 3/4/5). Counts are the only row that can refuse
- * grammar 5; music stays applicable here exactly as in Android and is
- * refused separately by the package-scope entry gate.
+ * grammar 5.
  */
 export function grammar5Applicability(input: Grammar5Input): Grammar5Applicability {
   const count = Array.isArray(input.photos) ? input.photos.length : 0
@@ -175,16 +178,21 @@ export function grammar5NoteState(input: Grammar5Input, measure: Grammar5Measure
 
 interface Closing {
   note: Grammar5Note | null
-  music: null
+  music: Grammar5Music | null
   end: number
 }
 
-function closing(note: Grammar5NoteState, end: number, x: number): Closing {
+/** Android `closing(d, g, n, end, x, w, mh)`: note at the bottom, the song band above it. */
+function closing(note: Grammar5NoteState, music: { artwork: boolean } | null, end: number, x: number, width: number, musicHeight: number): Closing {
   const noteOut = note.height > 0
     ? { rect: { x, y: end - note.height, width: note.width, height: note.height }, state: note.state }
     : null
-  const top = noteOut !== null ? noteOut.rect.y - 10 : end
-  return { note: noteOut, music: null, end: top }
+  let top = noteOut !== null ? noteOut.rect.y - 10 : end
+  const musicOut: Grammar5Music | null = music === null
+    ? null
+    : { rect: { x, y: top - musicHeight, width, height: musicHeight }, mode: music.artwork ? 'thumbnail' : 'text' }
+  if (musicOut !== null) top = musicOut.rect.y - 8
+  return { note: noteOut, music: musicOut, end: top }
 }
 
 function tile(photo: Grammar5Photo, rect: Grammar5Rect, shape = 'rect', zooms: number[] = [1]): Grammar5Tile {
@@ -266,7 +274,7 @@ export function grammar5Plans(input: Grammar5Input, note?: Grammar5NoteState, me
   const checked = checkedInput(input)
   const photos = checked.photos
   const state = note ?? grammar5NoteState({ ...input, note: checked.note }, measure)
-  const done = closing(state, 603, 16)
+  const done = closing(state, checked.music, 603, 16, 328, 48)
   const provenance = [
     brandMark({ x: 12, y: 4, width: 340, height: 75 }, 64, 'StudySerif'),
     senderMark({ x: 16, y: 613, width: 328, height: 23 }, 20, 'StudySerif', 'horizontal', true, 400, 'right'),
@@ -285,7 +293,7 @@ export function grammar5Plans(input: Grammar5Input, note?: Grammar5NoteState, me
           branch: `editorial-${rec.join('+')}-${power !== 0 ? 'proportional' : 'equal'}-${num(weights[0])}`,
           tiles: bands(photos, rec, region, { gap: 5, weights, power, zooms: [1.05, 1] }),
           note: done.note,
-          music: null,
+          music: done.music,
           provenance,
           decor: [],
         })

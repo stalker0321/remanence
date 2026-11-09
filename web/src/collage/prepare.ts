@@ -17,13 +17,14 @@ import {
   EXPRESSION_CONTRACT_V3,
   EXPRESSION_CONTRACT_V4,
   MUSIC_COVER_MODES_V4,
+  type MusicRegion,
   type PhotoShape,
   type ProvenanceMark,
   type Rect,
   type ResolvedExpression,
   validateResolved,
 } from './model'
-import { equalBytes, opaqueColor, PALETTE_VERSION, styleById, styleDigest } from './styles'
+import { equalBytes, opaqueColor, PALETTE_VERSION, styleById, styleDigest, type CollageStyle } from './styles'
 import { layoutCreatorNote, type CreatorNoteLayout } from './creatorNote'
 
 export interface SourcePhoto {
@@ -265,55 +266,12 @@ export async function prepare(
   let musicScene: SceneMusic | null = null
   let artworkScene: SceneArtwork | null = null
   if (musicRegion && track) {
-    const type = musicRegion.type
     const descriptor = musicRegion.artwork
     const verified = descriptor !== null && artwork !== null && artwork.width === descriptor.width && artwork.height === descriptor.height
-    const transparent = isV4 && isTransparentMusicBand(expression.grammarId, style.id)
-    const background = opaqueColor(transparent ? style.palette.paper : style.palette.sound)
-    const color = opaqueColor(transparent ? style.palette.ink : style.palette.soundInk)
-    if (verified && !isV4) {
-      artworkScene = { region: musicRegion, background: opaqueColor(style.palette.sound) }
-    } else if (isV4 && verified && MUSIC_COVER_MODES_V4.includes(musicRegion.mode as typeof MUSIC_COVER_MODES_V4[number])) {
-      const placement = musicLayout(musicRegion, expression.grammarId, musicRegion.mode, true)
-      if (!placement) return reject('music cover does not fit its sealed region')
-      const text = `${track.title}\n${track.artistDisplay}`
-      const measurement = measurer.measure({ ...measureOf(text, type), maxWidth: placement.copy.width, maxHeight: placement.copy.height })
-      if (!fits(measurement, placement.copy)) return reject('music does not fit its sealed region')
-      musicScene = musicLayer(track, text, musicRegion, type, background, color, transparent, musicRegion.mode, false, placement.copy, placement.play)
-      artworkScene = { region: musicRegion, background: opaqueColor(style.palette.sound) }
-    } else if (isV4 && musicRegion.mode === 'spine') {
-      const placement = musicLayout(musicRegion, expression.grammarId, musicRegion.mode, false)
-      if (!placement) return reject('music control does not fit its sealed region')
-      const band = bandLayout(expression.grammarId, 'spine', musicRegion.height)
-      const reading = Math.max(0, spineReadingBudget(musicRegion, band))
-      const cross = Math.max(0, spineCrossBudget(musicRegion, band))
-      const titleMeasurement = track.title.trim() === '' ? null : measurer.measure({
-        ...measureOf(track.title, type),
-        maxWidth: reading,
-        maxHeight: cross,
-        softWrap: false,
-      })
-      const artistMeasurement = track.artistDisplay.trim() === '' ? null : measurer.measure({
-        text: track.artistDisplay,
-        family: 'StudySans',
-        size: 11,
-        weight: 400,
-        italic: false,
-        line: 13,
-        maxWidth: reading,
-        maxHeight: cross,
-        softWrap: false,
-      })
-      if (!spineFits(musicRegion, band, titleMeasurement, artistMeasurement)) return reject('music does not fit its sealed region')
-      musicScene = musicLayer(track, `${track.title}\n${track.artistDisplay}`, musicRegion, type, background, color, transparent, musicRegion.mode, true, musicRegion, placement.play)
-    } else {
-      const placement = musicLayout(musicRegion, expression.grammarId, musicRegion.mode, false)
-      if (!placement) return reject('music control does not fit its sealed region')
-      const text = `${track.title}\n${track.artistDisplay}`
-      const measurement = measurer.measure({ ...measureOf(text, type), maxWidth: placement.copy.width, maxHeight: placement.copy.height })
-      if (!fits(measurement, placement.copy)) return reject('music does not fit its sealed region')
-      musicScene = musicLayer(track, text, musicRegion, type, background, color, transparent, musicRegion.mode, false, placement.copy, placement.play)
-    }
+    const layers = musicLayers(musicRegion, expression.grammarId, style, isV4, verified, track, measurer)
+    if (typeof layers === 'string') return reject(layers)
+    musicScene = layers.music
+    artworkScene = layers.artwork
   }
   const grammarNumber = expression.grammarId.replace(/^g/, '')
   const provenance: SceneProvenance[] = []
@@ -415,6 +373,78 @@ function spineFits(region: Rect, band: BandLayout, title: TextMeasurement | null
 
 function measureOf(text: string, type: { family: string; size: number; weight: number; italic: boolean; line: number }): Omit<TextMeasureRequest, 'maxWidth' | 'maxHeight'> {
   return { text, family: type.family, size: type.size, weight: type.weight, italic: type.italic, line: type.line }
+}
+
+/**
+ * The song band for a sealed or creator region: the same layout rules for the
+ * sender's preview and the recipient's sheet. Returns the refusal reason when
+ * the words or the cover do not fit.
+ */
+export function musicLayers(
+  musicRegion: MusicRegion,
+  grammarId: string,
+  style: CollageStyle,
+  isV4: boolean,
+  verified: boolean,
+  track: TrackWords,
+  measurer: TextMeasurer,
+): { music: SceneMusic | null; artwork: SceneArtwork | null } | string {
+  const type = musicRegion.type
+  const transparent = isV4 && isTransparentMusicBand(grammarId, style.id)
+  const background = opaqueColor(transparent ? style.palette.paper : style.palette.sound)
+  const color = opaqueColor(transparent ? style.palette.ink : style.palette.soundInk)
+  if (verified && !isV4) {
+    return { music: null, artwork: { region: musicRegion, background: opaqueColor(style.palette.sound) } }
+  }
+  if (isV4 && verified && MUSIC_COVER_MODES_V4.includes(musicRegion.mode as typeof MUSIC_COVER_MODES_V4[number])) {
+    const placement = musicLayout(musicRegion, grammarId, musicRegion.mode, true)
+    if (!placement) return 'music cover does not fit its sealed region'
+    const text = `${track.title}\n${track.artistDisplay}`
+    const measurement = measurer.measure({ ...measureOf(text, type), maxWidth: placement.copy.width, maxHeight: placement.copy.height })
+    if (!fits(measurement, placement.copy)) return 'music does not fit its sealed region'
+    return {
+      music: musicLayer(track, text, musicRegion, type, background, color, transparent, musicRegion.mode, false, placement.copy, placement.play),
+      artwork: { region: musicRegion, background: opaqueColor(style.palette.sound) },
+    }
+  }
+  if (isV4 && musicRegion.mode === 'spine') {
+    const placement = musicLayout(musicRegion, grammarId, musicRegion.mode, false)
+    if (!placement) return 'music control does not fit its sealed region'
+    const band = bandLayout(grammarId, 'spine', musicRegion.height)
+    const reading = Math.max(0, spineReadingBudget(musicRegion, band))
+    const cross = Math.max(0, spineCrossBudget(musicRegion, band))
+    const titleMeasurement = track.title.trim() === '' ? null : measurer.measure({
+      ...measureOf(track.title, type),
+      maxWidth: reading,
+      maxHeight: cross,
+      softWrap: false,
+    })
+    const artistMeasurement = track.artistDisplay.trim() === '' ? null : measurer.measure({
+      text: track.artistDisplay,
+      family: 'StudySans',
+      size: 11,
+      weight: 400,
+      italic: false,
+      line: 13,
+      maxWidth: reading,
+      maxHeight: cross,
+      softWrap: false,
+    })
+    if (!spineFits(musicRegion, band, titleMeasurement, artistMeasurement)) return 'music does not fit its sealed region'
+    return {
+      music: musicLayer(track, `${track.title}\n${track.artistDisplay}`, musicRegion, type, background, color, transparent, musicRegion.mode, true, musicRegion, placement.play),
+      artwork: null,
+    }
+  }
+  const placement = musicLayout(musicRegion, grammarId, musicRegion.mode, false)
+  if (!placement) return 'music control does not fit its sealed region'
+  const text = `${track.title}\n${track.artistDisplay}`
+  const measurement = measurer.measure({ ...measureOf(text, type), maxWidth: placement.copy.width, maxHeight: placement.copy.height })
+  if (!fits(measurement, placement.copy)) return 'music does not fit its sealed region'
+  return {
+    music: musicLayer(track, text, musicRegion, type, background, color, transparent, musicRegion.mode, false, placement.copy, placement.play),
+    artwork: null,
+  }
 }
 
 function textLayer(text: string, region: Rect, type: { family: string; size: number; weight: number; italic: boolean; line: number }, color: number): SceneText {

@@ -86,7 +86,7 @@ function makeFrozen(note: string | null, styleId = 'press') {
     note,
     noteRegion: scene.note ? { ...scene.note.region } : null,
     noteFits: true,
-    musicSelected: false,
+    track: null,
     ownerId: 'owner-1',
     sessionGeneration: 7,
     recipient: RECIPIENT,

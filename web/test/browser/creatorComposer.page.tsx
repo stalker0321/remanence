@@ -35,6 +35,8 @@ const assertions: CheckResult[] = []
 const failures: string[] = []
 const frozenLog: Array<{ frozen: boolean; branch: string | null; snapshot: CreatorFreeze | null }> = []
 
+const PAGE_SONG = { trackId: '0198f0a0-1111-7000-8000-000000000001', title: 'Probe song', artistDisplay: 'Probe singer', version: null, durationMs: null }
+
 function pass(name: string): void {
   assertions.push({ name, ok: true })
 }
@@ -287,6 +289,7 @@ function App(props: {
   onSetNote: (note: string | null) => void
 }): React.JSX.Element {
   const [musicSelected, setMusicSelected] = useState(false)
+  const PAGE_TRACK = PAGE_SONG
   // Held in state so toggling swaps the measurer prop WITHOUT remounting the
   // component (same root, same element position → state and canvas persist).
   const [measurer, setMeasurer] = useState<TextMeasurer>(props.measurerA)
@@ -337,7 +340,7 @@ function App(props: {
       <CreatorComposer
         photos={props.photos}
         note={props.noteOverride ?? (NOTES[props.noteIndex] ?? null)}
-        musicSelected={musicSelected}
+        track={musicSelected ? PAGE_TRACK : null}
         styleId="press"
         senderHandle={props.senderOverride}
         recipient={{ userId: ACCOUNT, keyBundleId: BUNDLE, directoryVersion: '0'.repeat(16), handle: RECIPIENT_HANDLE }}

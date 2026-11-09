@@ -3,6 +3,7 @@ import { ProtocolError } from '../protocol/errors'
 import { protoBytes, protoVarint, zigzag32 } from '../protocol/proto'
 import { projectionHash } from './codec'
 import { CollageError } from './errors'
+import type { TrackSnapshot } from '../create/music'
 import {
   EXPRESSION_CONTRACT_V4,
   type ProvenanceMark,
@@ -40,10 +41,13 @@ export interface ContentManifestInput {
   capsuleId: Uint8Array
   candidateId: string
   blobIdByContentId: ReadonlyMap<string, Uint8Array>
+  /** The chosen song (root field 7); required exactly when the expression has a song band. */
+  track?: TrackSnapshot | null
 }
 
 export type ContentManifestRefusal =
   | 'unsupported'
+  | 'music'
   | 'expression-invalid'
   | 'capsule-id'
   | 'candidate-id'
@@ -171,6 +175,51 @@ function provenanceMessage(mark: ProvenanceMark): Uint8Array {
   ])
 }
 
+function musicMessage(music: NonNullable<ResolvedExpression['musicRegion']>): Uint8Array {
+  const parts = [
+    sint(1, music.x),
+    sint(2, music.y),
+    sint(3, music.width),
+    sint(4, music.height),
+    protoBytes(5, utf8(music.mode)),
+    protoBytes(6, textTypeMessage(music.type)),
+  ]
+  if (music.artwork) {
+    parts.push(protoBytes(7, concat([
+      protoBytes(1, utf8(music.artwork.provider)),
+      protoBytes(2, utf8(music.artwork.url)),
+      protoBytes(3, music.artwork.sha256),
+      protoBytes(4, utf8(music.artwork.mimeType)),
+      protoVarint(5, music.artwork.width),
+      protoVarint(6, music.artwork.height),
+    ])))
+  }
+  return concat(parts)
+}
+
+/** `CapsuleTrackSnapshotV1`, snapshot_version 1. */
+function trackMessage(track: TrackSnapshot): Uint8Array {
+  const parts = [
+    protoVarint(1, 1),
+    protoBytes(2, utf8(track.trackId)),
+    protoBytes(3, utf8(track.title)),
+    protoBytes(4, utf8(track.artistDisplay)),
+  ]
+  if (track.version !== null) parts.push(protoBytes(5, utf8(track.version)))
+  if (track.durationMs !== null) parts.push(protoVarint(6, track.durationMs))
+  return concat(parts)
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+function trackValid(track: TrackSnapshot): boolean {
+  return UUID.test(track.trackId)
+    && track.title.trim() !== '' && track.title.length <= 100
+    && track.artistDisplay.trim() !== '' && track.artistDisplay.length <= 200
+    && (track.version === null || (track.version.trim() !== '' && track.version.length <= 100))
+    && (track.durationMs === null || (Number.isInteger(track.durationMs) && track.durationMs >= 1 && track.durationMs <= 86_400_000))
+}
+
 function decorMessage(plane: NonNullable<ResolvedExpression['decor']>[number]): Uint8Array {
   return concat([protoBytes(1, utf8(plane.kind)), sint(2, plane.x), sint(3, plane.y), sint(4, plane.width), sint(5, plane.height)])
 }
@@ -202,6 +251,7 @@ function expressionMessage(expression: ResolvedExpression, candidateId: string, 
   if (!style || !noteType) throw new ProtocolError('INVALID_ENCODING')
   parts.push(protoBytes(18, concat([protoBytes(1, utf8(style.styleId)), protoBytes(2, utf8(style.styleVersion)), protoBytes(3, style.digest)])))
   parts.push(protoBytes(19, textTypeMessage(noteType)))
+  if (expression.musicRegion) parts.push(protoBytes(20, musicMessage(expression.musicRegion)))
   for (const mark of expression.provenance ?? []) parts.push(protoBytes(21, provenanceMessage(mark)))
   for (const plane of expression.decor ?? []) parts.push(protoBytes(22, decorMessage(plane)))
   return concat(parts)
@@ -212,7 +262,10 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
   if (expression.expressionContractVersion !== EXPRESSION_CONTRACT_V4) {
     return refuse('unsupported', `only the V4/GENEX04 (artifact 3) manifest is supported, got ${expression.expressionContractVersion}`)
   }
-  if (expression.musicRegion !== null) return refuse('unsupported', 'music is out of scope for the frozen g5 manifest')
+  const track = input.track ?? null
+  if ((track === null) !== (expression.musicRegion === null)) return refuse('music', 'song band and track snapshot must match')
+  if ((track === null) !== (expression.input.music === null)) return refuse('music', 'generator input song and track snapshot must match')
+  if (track !== null && (!trackValid(track) || expression.input.music?.trackId !== track.trackId)) return refuse('music', 'track snapshot is invalid')
   // Manifest contract limits first (existing Android bounds), so a bad
   // dimension/note reports its own typed reason rather than a generic one.
   if (!(capsuleId instanceof Uint8Array) || capsuleId.length !== BLOB_ID_BYTES) return refuse('capsule-id', 'capsuleId must be a 16-byte array')
@@ -263,6 +316,7 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
     if (placement.maskId !== null && typeof placement.maskId !== 'string') return refuse('contract', 'mask id type')
   }
   if (expression.noteRegion && !intRect(expression.noteRegion)) return refuse('fraction', 'note region')
+  if (expression.musicRegion && (!intRect(expression.musicRegion) || !textTypeIntegral(expression.musicRegion.type))) return refuse('fraction', 'music region')
   for (const mark of expression.provenance ?? []) {
     if (!intRect(mark) || !textTypeIntegral(mark)) return refuse('fraction', `provenance ${mark.kind}`)
   }
@@ -274,6 +328,7 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
   // or alias the returned/output bytes.
   const snapshotExpression = structuredClone(expression)
   const snapshotCapsule = capsuleId.slice()
+  const snapshotTrack = track === null ? null : { ...track }
 
   let expressionHash: string
   try {
@@ -296,6 +351,7 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
     }
     if (note !== null) chunks.push(protoBytes(4, utf8(note)))
     chunks.push(protoBytes(6, expressionMessage(snapshotExpression, candidateId, expressionHash, snapshotBlobs)))
+    if (snapshotTrack !== null) chunks.push(protoBytes(7, trackMessage(snapshotTrack)))
     const bytes = concat(chunks)
     // Explicit plaintext-output bound: the existing parser's `MAX_BYTES` (and
     // the manifest contract) cap the FINAL manifest at 65536. The projection

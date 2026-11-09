@@ -223,7 +223,7 @@ describe('creator preview adapter', () => {
     const views = previewCandidates({ id: 'x', sender: 's', photos: photosFor([1, 1, 1]), note: null })
     expect(views.map((view) => view.branch)).toEqual(expected)
     for (const view of views) {
-      expect('music' in view).toBe(false)
+      expect(view.music).toBeNull()
       for (const slot of view.slots) expect('music' in slot).toBe(false)
     }
   })

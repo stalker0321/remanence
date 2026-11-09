@@ -73,6 +73,18 @@ export interface FrozenRenderedProvenance {
   readonly color: number
 }
 
+export interface FrozenRenderedMusic {
+  readonly region: FrozenRenderedRect
+  readonly mode: string
+  readonly family: string
+  readonly size: number
+  readonly weight: number
+  readonly italic: boolean
+  readonly line: number
+  readonly title: string
+  readonly artist: string
+}
+
 export interface FrozenRenderedDecor {
   readonly kind: 'carrier' | 'acid-ribbon' | 'print-plane'
   readonly region: FrozenRenderedRect
@@ -98,6 +110,8 @@ export interface FrozenRenderedPlan {
   readonly paletteVersion: number
   readonly slots: readonly FrozenRenderedSlot[]
   readonly note: FrozenRenderedNote | null
+  /** The song band that was painted (null iff no song). */
+  readonly music: FrozenRenderedMusic | null
   readonly provenance: readonly FrozenRenderedProvenance[]
   readonly decor: readonly FrozenRenderedDecor[]
 }
@@ -141,6 +155,8 @@ export function captureFrozenRenderedPlan(input: FrozenRenderedCaptureInput): Fr
   if (scene.grammarId !== 'g5') throw new CollageError('REJECTED')
   if (input.branchId.trim() === '' || input.styleId.trim() === '') throw new CollageError('REJECTED')
   if (scene.note !== null && input.noteLayout === null) throw new CollageError('REJECTED')
+  // The creator never holds a cover yet: a painted cover would be a band the sealed sheet cannot repeat.
+  if (scene.artwork !== null) throw new CollageError('REJECTED')
   const slots: FrozenRenderedSlot[] = scene.photos.map((photo, index) => ({
     contentId: photo.contentId,
     ordinal: index,
@@ -166,6 +182,20 @@ export function captureFrozenRenderedPlan(input: FrozenRenderedCaptureInput): Fr
             baseline: row.baseline,
             width: row.width,
           })),
+        }
+  const music: FrozenRenderedMusic | null =
+    scene.music === null
+      ? null
+      : {
+          region: rect(scene.music.region),
+          mode: scene.music.mode,
+          family: scene.music.family,
+          size: scene.music.size,
+          weight: scene.music.weight,
+          italic: scene.music.italic,
+          line: scene.music.line,
+          title: scene.music.title,
+          artist: scene.music.artist,
         }
   const provenance: FrozenRenderedProvenance[] = scene.provenance.map((mark) => ({
     kind: mark.kind,
@@ -205,6 +235,7 @@ export function captureFrozenRenderedPlan(input: FrozenRenderedCaptureInput): Fr
     paletteVersion: PALETTE_VERSION,
     slots,
     note,
+    music,
     provenance,
     decor,
   }

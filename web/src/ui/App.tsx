@@ -54,7 +54,7 @@ import { FrontStillError } from '../scan/frontStillProducer'
 import { browserPhotoCodec } from '../create/browserPhoto'
 import { PhotoIntake, PhotoNormalizer, type PhotoCodec, type IntakeFence, type IntakeOutcome } from '../create/normalize'
 import { PhotoIntakeActivity } from '../create/intakeActivity'
-import { MUSIC_QUERY_MAX_CODE_POINTS, MUSIC_SEARCH_DEBOUNCE_MS, musicCoverKey, musicLine, MusicDraft, searchMusic } from '../create/music'
+import { MUSIC_QUERY_MAX_CODE_POINTS, MUSIC_SEARCH_DEBOUNCE_MS, musicLine, MusicDraft, searchMusic, trackSnapshotOf } from '../create/music'
 import type { NoteDraft } from '../create/note'
 import { PHOTO_COUNT_MAX, type PhotoDraft } from '../create/photos'
 import { arrayBuffer } from '../protocol/bytes'
@@ -582,6 +582,11 @@ export function Scan({
   )
 }
 
+
+// Grammar 5 is the only layout the site can make, and its 48 px song band cannot hold the
+// two-line title and artist in any of its styles (the same check refuses it on Android).
+// The picker stays hidden until the site has a layout whose band fits; everything after
+// the picker already carries the song.
 const WEB_SENDS_MUSIC = false
 
 /** Exported for connected browser checks; production renders it via App. */
@@ -668,6 +673,8 @@ export function Create({
   const pending = open ? recipient.pending() : null
   const confirmed = open ? recipient.confirmed() : null
   const selectedMusic = confirmed ? music.selected() : null
+  // One stable snapshot per picked song, so the composer replans only when the song changes.
+  const selectedTrack = useMemo(() => (selectedMusic === null ? null : trackSnapshotOf(selectedMusic)), [selectedMusic])
   const bound = confirmed ? `${confirmed.userId}:${confirmed.keyBundleId}:${confirmed.directoryVersion}` : ''
   useEffect(() => {
     if (pending !== null && confirmed === null) recipientHeading.current?.focus()
@@ -695,7 +702,7 @@ export function Create({
     recipientCurrent: () => recipient.confirmed(),
     photosCurrent: () => photos.photos(),
     noteTextCurrent: () => note.accepted() ?? '',
-    musicSelectedCurrent: () => music.selected() !== null,
+    trackIdCurrent: () => music.selected()?.id ?? null,
     freezeCurrent: () => frozenRef.current,
     stillCurrent: () => front.current.still(),
     fingerprintCurrent: () => frontFp.current.current(),
@@ -726,7 +733,7 @@ export function Create({
     if (frozenRef.current === null) return false
     if (front.current.still() === null) return false
     if (frontFp.current.current() === null) return false
-    if (selectedMusic !== null) return false
+    if ((selectedMusic?.id ?? null) !== (frozenRef.current.track?.trackId ?? null)) return false
     if (photos.photos().length < 3 || photos.photos().length > PHOTO_COUNT_MAX) return false
     return true
   })()
@@ -1008,7 +1015,7 @@ export function Create({
       // Snapshot identity values; never alias the live PhotoDraft array.
       photos: photos.photos().slice(),
       noteText: acceptedNote,
-      musicSelected: selectedMusic !== null,
+      trackId: selectedMusic?.id ?? null,
       freeze,
       still,
       fingerprint,
@@ -1377,7 +1384,7 @@ export function Create({
                 <CreatorComposer
                   photos={creatorImages}
                   note={note.accepted()}
-                  musicSelected={selectedMusic !== null}
+                  track={selectedTrack}
                   recipient={composerRecipient}
                   ownerId={view.accountId ?? ''}
                   session={store}
@@ -1403,8 +1410,7 @@ export function Create({
           ) : null}
           <div className="workspace-next"><button type="button" className="quiet" onClick={() => showCreateStep('content')}>{t('createEditContent')}</button></div>
           </div>
-          {/* The song picker returns once the site can send a song: until then picking one blocked Send for good. */}
-          {WEB_SENDS_MUSIC ? <>
+          {WEB_SENDS_MUSIC ? (
           <details className="music-draft" open hidden={createStep !== 'content'}>
             <summary>{t('createMusicTitle')}</summary>
             <label className="handle-form">
@@ -1421,12 +1427,12 @@ export function Create({
             {selectedMusic ? (
               <div>
                 <p>{musicLine(selectedMusic)}</p>
-                <p>{t(musicCoverKey(selectedMusic))}</p>
+                <p className="field-hint">{t('musicTextOnly')}</p>
                 <button type="button" onClick={() => { invalidateSend(); music.remove(); setStamp((value) => value + 1) }}>{t('musicRemove')}</button>
               </div>
             ) : null}
             <ul>
-              {music.hits().map((hit) => (
+              {music.hits().filter((hit) => trackSnapshotOf(hit) !== null).map((hit) => (
                 <li key={hit.id}>
                   <button
                     type="button"
@@ -1439,13 +1445,11 @@ export function Create({
                   >
                     {musicLine(hit)}
                   </button>
-                  <p>{t(musicCoverKey(hit))}</p>
                 </li>
               ))}
             </ul>
-              {sendPhase === 'idle' ? <p>{t('musicNotSent')}</p> : null}
             </details>
-          </> : null}
+          ) : null}
           <div hidden={createStep !== 'content'} className="workspace-next"><p className="field-hint">{t('createContentHint')}</p><button type="button" className="primary" disabled={accepted === null || !noteFits || photoIntakePending || creatorImages === null || sendPhase !== 'idle'} onClick={() => showCreateStep('composition')}>{t('createChooseComposition')}<Icon name="arrow" /></button></div>
           <div hidden={createStep !== 'postcard'} className="postcard-workspace">
           <figure className={`chosen-design${designUrl ? ' is-ready' : ''}`}>

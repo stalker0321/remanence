@@ -1,5 +1,6 @@
 import { CollageError } from '../collage/errors'
 import type { FrozenRenderedPlan } from '../collage/frozenRenderedPlan'
+import type { TrackSnapshot } from './music'
 
 /**
  * Immutable LOCAL creator freeze — a snapshot of the creator's explicit
@@ -36,6 +37,8 @@ export interface CreatorFreeze {
   readonly senderHandle: string;
   readonly slots: readonly CreatorSlotFreeze[];
   readonly note: string | null;
+  /** The chosen song, sealed into the manifest with the painted band. */
+  readonly track: Readonly<TrackSnapshot> | null;
   readonly noteRegion: { x: number; y: number; width: number; height: number } | null;
   readonly ownerId: string;
   readonly sessionGeneration: number;
@@ -51,7 +54,7 @@ export interface CreatorFreeze {
 }
 
 export type FreezeRefusal =
-  | 'music-not-supported'
+  | 'music-mismatch'
   | 'no-recipient'
   | 'note-missing'
   | 'note-no-region'
@@ -68,7 +71,7 @@ export interface FreezeInput {
   note: string | null
   noteRegion: { x: number; y: number; width: number; height: number } | null
   noteFits: boolean
-  musicSelected: boolean
+  track: TrackSnapshot | null
   ownerId: string
   sessionGeneration: number
   recipient: CreatorFreezeRecipient | null
@@ -84,13 +87,16 @@ function refuse(reason: FreezeRefusal): FreezeResult {
 
 /**
  * Freeze the current explicit selection. Refuses (never silently
- * drops) when music is selected, when no confirmed recipient is
+ * drops) when the chosen song and the painted band disagree, when no confirmed recipient is
  * present, or when the note/measurement pair is inconsistent: a sealed
  * note region requires text, text requires a region, and an overflowing
  * measurement fails closed.
  */
 export function freezeSelection(input: FreezeInput): FreezeResult {
-  if (input.musicSelected) return refuse('music-not-supported')
+  const painted = input.renderedPlan.music
+  if ((input.track === null) !== (painted === null)) return refuse('music-mismatch')
+  if (input.track !== null && painted !== null
+    && (painted.title !== input.track.title || painted.artist !== input.track.artistDisplay)) return refuse('music-mismatch')
   if (input.recipient === null) return refuse('no-recipient')
   if (input.note !== null && input.noteRegion === null) return refuse('note-no-region')
   if (input.note === null && input.noteRegion !== null) return refuse('note-missing')
@@ -131,6 +137,7 @@ export function freezeSelection(input: FreezeInput): FreezeResult {
       }),
     ),
     note: input.note,
+    track: input.track === null ? null : Object.freeze({ ...input.track }),
     noteRegion: input.noteRegion === null ? null : Object.freeze({ ...input.noteRegion }),
     ownerId: input.ownerId,
     sessionGeneration: input.sessionGeneration,
@@ -147,7 +154,8 @@ export interface FreezeCurrent {
   styleId: string
   styleVersion: string
   senderHandle: string | null
-  musicSelected: boolean
+  /** Id of the chosen song, or null. */
+  trackId: string | null
   /** T247: signature of the exact rendered geometry/inputs (null when no view). */
   renderedKey: string | null
   slots: CreatorSlotFreeze[]
@@ -176,7 +184,7 @@ export function freezeValid(frozen: CreatorFreeze, current: FreezeCurrent): { ok
   // the frozen render even if the photo count/branch are unchanged.
   if (current.renderedKey !== frozen.renderedKey) return bad('render changed')
   if (current.senderHandle !== frozen.senderHandle) return bad('sender changed')
-  if (current.musicSelected) return bad('music selected')
+  if (current.trackId !== (frozen.track?.trackId ?? null)) return bad('music changed')
   if (current.note !== frozen.note) return bad('note changed')
   if (current.ownerId !== frozen.ownerId) return bad('owner changed')
   if (current.sessionGeneration !== frozen.sessionGeneration) return bad('session changed')

@@ -15,7 +15,7 @@ import {
   validateResolved,
 } from './model'
 import { sourceRect } from './prepare'
-import { PALETTE_VERSION, styleById, styleDigest, type CollageStyle } from './styles'
+import { PALETTE_VERSION, roleTextType, styleById, styleDigest, type CollageStyle } from './styles'
 
 /**
  * T255 — pure local adapter: ONE frozen creator snapshot -> the EXISTING V4
@@ -48,6 +48,7 @@ export type FrozenExpressionRefusal =
   | 'fraction'
   | 'source-mismatch'
   | 'note-mismatch'
+  | 'music-mismatch'
   | 'contract'
 
 export interface FrozenExpressionOk {
@@ -90,13 +91,7 @@ function copyRect(rect: FrozenRenderedRect): { x: number; y: number; width: numb
  * `noteRegion`/`input.note` stay null and nothing is painted from it.
  */
 function absentNoteType(style: CollageStyle): TextType {
-  return {
-    family: style.note.font,
-    size: style.note.size,
-    weight: style.note.weight,
-    italic: style.note.italic,
-    line: Math.ceil(style.note.size * 1.12),
-  }
+  return roleTextType(style.note)
 }
 
 export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint): Promise<FrozenExpressionResult> {
@@ -231,6 +226,26 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
     noteType = absentNoteType(style)
   }
 
+  const frozenMusic = frozen.renderedPlan.music
+  let musicRegion: ResolvedExpression['musicRegion'] = null
+  if ((frozen.track === null) !== (frozenMusic === null)) return refuse('music-mismatch', 'song without a painted band, or a band without a song')
+  if (frozen.track !== null && frozenMusic !== null) {
+    if (frozenMusic.title !== frozen.track.title || frozenMusic.artist !== frozen.track.artistDisplay) {
+      return refuse('music-mismatch', 'painted song words differ from the chosen song')
+    }
+    if (frozenMusic.mode !== 'text') return refuse('unsupported', `song band mode ${frozenMusic.mode}`)
+    if (!intRect(frozenMusic.region)) return refuse('fraction', 'song band region is not integral')
+    // Android seals the style's music role, the same type the band was painted in.
+    const type = roleTextType(style.music)
+    if (
+      type.family !== frozenMusic.family || type.size !== frozenMusic.size || type.weight !== frozenMusic.weight
+      || type.italic !== frozenMusic.italic || type.line !== frozenMusic.line
+    ) {
+      return refuse('music-mismatch', 'painted song face differs from the style')
+    }
+    musicRegion = { ...copyRect(frozenMusic.region), mode: frozenMusic.mode, type, artwork: null }
+  }
+
   if (frozen.renderedPlan.provenance.length === 0) return refuse('unsupported', 'provenance is empty')
   if (frozen.renderedPlan.provenance.some((mark) => !intRect(mark.region))) {
     return refuse('fraction', 'provenance region is not integral')
@@ -260,7 +275,7 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
     epoch,
     photos,
     note: frozen.note,
-    music: null,
+    music: frozen.track === null ? null : { trackId: frozen.track.trackId, artworkId: null },
   }
 
   const expression: ResolvedExpression = {
@@ -278,7 +293,7 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
     noteRegion,
     style: { styleId: frozen.styleId, styleVersion: frozen.styleVersion, digest: digest.slice() },
     noteType,
-    musicRegion: null,
+    musicRegion,
     provenance,
     decor: null,
   }

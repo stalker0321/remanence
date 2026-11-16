@@ -236,6 +236,13 @@ class CreatePendingRouteStepTest {
 
     @Test
     fun frozenPendingCarriesCompositionToCompose() {
+        // goToCompose takes a frozen pending route as the binding only in a
+        // pending build; run with -Premanence.pending.enabled=true
+        // -Premanence.recovery.enabled=true.
+        org.junit.Assume.assumeTrue(
+            "pending journey is off in this build",
+            dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled(),
+        )
         val vm = viewModel()
         vm.onPendingRouteFrozen(pendingIdentity())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)

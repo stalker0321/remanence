@@ -13,7 +13,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { extname, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
-const requireTool = createRequire('/srv/remanence/tools/browser-smoke/package.json')
+const requireTool = createRequire(process.env.BROWSER_SMOKE_PACKAGE ?? '/srv/remanence/tools/browser-smoke/package.json')
 const { chromium } = requireTool('playwright-core')
 const [webDir, outDir] = process.argv.slice(2)
 if (!webDir || !outDir) throw new Error('usage: installShellCheck.mjs <webDir> <outDir>')
@@ -60,7 +60,7 @@ await buildTest('/test-prefix/', prefixOut, 'test-prefix')
 const rootHtml = await readFile(join(rootOut, 'index.html'), 'utf8')
 const prefixHtml = await readFile(join(prefixOut, 'index.html'), 'utf8')
 
-const executable = '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
+const executable = process.env.BROWSER_SMOKE_CHROMIUM ?? '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
 assert.ok(existsSync(executable), 'pinned chromium missing')
 report.executableSha256 = createHash('sha256').update(await readFile(executable)).digest('hex')
 assert.equal(report.executableSha256, '4fa61f0ba0b4f89b7bec242c32ca16d3bccf69dbfef0651924a9ba8fede5f9d6')

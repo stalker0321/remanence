@@ -10,9 +10,9 @@ import { join, resolve, extname } from 'node:path'
 
 const [webPath, proof] = process.argv.slice(2), web = resolve(webPath)
 await mkdir(proof, { recursive: true })
-const requireTool = createRequire('/srv/remanence/tools/browser-smoke/package.json')
+const requireTool = createRequire(process.env.BROWSER_SMOKE_PACKAGE ?? '/srv/remanence/tools/browser-smoke/package.json')
 const { chromium } = requireTool('playwright-core')
-const executable = '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
+const executable = process.env.BROWSER_SMOKE_CHROMIUM ?? '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
 const executableSha256 = createHash('sha256').update(await readFile(executable)).digest('hex')
 assert.equal(executableSha256, '4fa61f0ba0b4f89b7bec242c32ca16d3bccf69dbfef0651924a9ba8fede5f9d6')
 assert.deepEqual(JSON.parse(await readFile(join(web, 'dist/app-config.json'), 'utf8')), { version: 1, atomicRegistration: false })

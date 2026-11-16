@@ -32,10 +32,10 @@ function host(combined) {
 const clean = host(false), combined = host(true)
 for (const server of [clean, combined]) await new Promise(ok => server.listen(0, '127.0.0.1', ok))
 const origin = server => `http://127.0.0.1:${server.address().port}`
-const executable = '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
+const executable = process.env.BROWSER_SMOKE_CHROMIUM ?? '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
 const executableSha256 = createHash('sha256').update(await readFile(executable)).digest('hex')
 assert.equal(executableSha256, '4fa61f0ba0b4f89b7bec242c32ca16d3bccf69dbfef0651924a9ba8fede5f9d6')
-const { chromium } = createRequire('/srv/remanence/tools/browser-smoke/package.json')('playwright-core')
+const { chromium } = createRequire(process.env.BROWSER_SMOKE_PACKAGE ?? '/srv/remanence/tools/browser-smoke/package.json')('playwright-core')
 const browser = await chromium.launch({ executablePath: executable, headless: true })
 const context = await browser.newContext({ viewport: { width: 320, height: 900 } })
 context.on('page', page => page.on('pageerror', error => errors.push(String(error))))

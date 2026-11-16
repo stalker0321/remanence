@@ -17,8 +17,8 @@ const web = resolve(webDir)
 await mkdir(outDir, { recursive: true })
 const work = await mkdtemp(join(tmpdir(), 't359-shell-'))
 const { shellArtifacts } = await import(pathToFileURL(join(web, 'tools/static-shell.mjs')))
-const { chromium } = createRequire('/srv/remanence/tools/browser-smoke/package.json')('playwright-core')
-const executable = '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
+const { chromium } = createRequire(process.env.BROWSER_SMOKE_PACKAGE ?? '/srv/remanence/tools/browser-smoke/package.json')('playwright-core')
+const executable = process.env.BROWSER_SMOKE_CHROMIUM ?? '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
 const report = { checks: [], requests: [], pageErrors: [], console: [], builds: [], cacheSnapshots: [], pass: false }
 report.executableSha256 = digest(await readFile(executable))

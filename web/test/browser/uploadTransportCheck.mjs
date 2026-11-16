@@ -19,7 +19,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { extname, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
-const requireTool = createRequire('/srv/remanence/tools/browser-smoke/package.json')
+const requireTool = createRequire(process.env.BROWSER_SMOKE_PACKAGE ?? '/srv/remanence/tools/browser-smoke/package.json')
 const { chromium } = requireTool('playwright-core')
 
 const [webDir, outDir] = process.argv.slice(2)
@@ -32,6 +32,7 @@ const CAPSULE = 'b0b1b2b3-b4b5-b6b7-b8b9-babbbcbdbebf'
 const BLOB = '00000000-0000-0000-0000-0000000000e5'
 
 const candidates = [
+  ...(process.env.BROWSER_SMOKE_CHROMIUM ? [process.env.BROWSER_SMOKE_CHROMIUM] : []),
   '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell',
   chromium.executablePath(),
 ]

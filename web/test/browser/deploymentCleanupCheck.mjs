@@ -11,8 +11,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { resolve, join, extname } from 'node:path'
 const [root, oldRoot, previousRoot, testRoot, proof] = process.argv.slice(2).map(value => resolve(value))
 await mkdir(proof, { recursive: true })
-const { chromium } = createRequire('/srv/remanence/tools/browser-smoke/package.json')('playwright-core')
-const executable = '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
+const { chromium } = createRequire(process.env.BROWSER_SMOKE_PACKAGE ?? '/srv/remanence/tools/browser-smoke/package.json')('playwright-core')
+const executable = process.env.BROWSER_SMOKE_CHROMIUM ?? '/srv/remanence/cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell'
 const sha = value => createHash('sha256').update(value).digest('hex')
 assert.equal(sha(await readFile(executable)), '4fa61f0ba0b4f89b7bec242c32ca16d3bccf69dbfef0651924a9ba8fede5f9d6')
 const manifest = JSON.parse(await readFile(join(root, 'shell-manifest.json')))

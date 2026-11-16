@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.core.model.GeneratorExpression as G
+import dev.hryshyn.remanence.ui.collage.StyleRegistry
 import dev.hryshyn.remanence.ui.hold.HoldTheme
 import java.io.File
 import kotlinx.coroutines.runBlocking
@@ -39,9 +40,25 @@ class CapsuleLetterRenderTest {
         "There is a small white church at the top and a bench beside it; we sat there for an hour and nobody " +
         "said a word.\n\nI will tell you the rest when we are home. Keep the card on the fridge until then."
 
-    private fun loaded(letter: String?): CollagePresentationState {
+    private fun plain(): G.ResolvedExpression {
         val base = mediaExpression(3, hasTrack = false)
-        val expression = base.copy(input = base.input.copy(note = front), noteRegion = G.NoteRegion(16, 240, 328, 60))
+        return base.copy(input = base.input.copy(note = front), noteRegion = G.NoteRegion(16, 240, 328, 60))
+    }
+
+    /** "proof": dark paper, and a light mount that carries the photos and the note in dark ink. */
+    private fun mounted(): G.ResolvedExpression {
+        val base = mediaExpression(4, hasTrack = false)
+        val style = requireNotNull(StyleRegistry.style("proof"))
+        return base.copy(
+            grammarId = "18",
+            input = base.input.copy(note = front),
+            noteRegion = G.NoteRegion(16, 240, 328, 60),
+            style = G.StyleBinding(style.id, style.version, requireNotNull(StyleRegistry.digest(style.id))),
+            decor = listOf(G.SceneDecor(G.DecorKind.CARRIER, 6, 5, 349, 627)),
+        )
+    }
+
+    private fun loaded(letter: String?, expression: G.ResolvedExpression = plain()): CollagePresentationState {
         val photos = expression.input.photos.associate { p ->
             p.contentId to mediaPng(p.widthPx, p.heightPx, mediaPhotoColors[p.ordinal])
         }
@@ -96,6 +113,29 @@ class CapsuleLetterRenderTest {
         File(output(), "letter-facts.txt").writeText(
             "sheet=$sheet scale=$scale\nnote=$note\narrow=$left,$top..$right,$bottom changed=$changed\n",
         )
+    }
+
+    @Test
+    fun aNoteOnAMountTurnsToThatMountNotToThePaperBehindIt() {
+        val paper = 0xFF333633.toInt()
+        val mount = 0xFFF8F7EF.toInt()
+        val ink = 0xFF202621.toInt()
+        rule.setContent { HoldTheme { CollagePresentationHost(loaded(whole, mounted()), "Synthetic postcard", {}) } }
+        val sheet = rule.onNodeWithTag("capsule_sheet").fetchSemanticsNode().boundsInRoot
+        val front = shot("letter-mount-front")
+        assertTrue("the front shows the paper around its mount", count(front, paper) > 100)
+        assertTrue("and the note's ink on the mount", count(front, ink) > 30)
+
+        rule.onNodeWithTag("capsule_letter_mark").performClick()
+        rule.onNodeWithTag("capsule_letter_text").assertTextEquals(whole)
+        val back = shot("letter-mount-back")
+        val inside = Bitmap.createBitmap(
+            back, sheet.left.toInt() + 2, sheet.top.toInt() + 2, sheet.width.toInt() - 4, sheet.height.toInt() - 4,
+        )
+        // Dark ink on the dark paper would be unreadable; the back is the mount the note was written on.
+        assertEquals("no dark paper on the back", 0, count(inside, paper))
+        assertTrue("the back is the mount", count(inside, mount) > inside.width * inside.height / 2)
+        assertTrue("in the note's ink", count(inside, ink) > 100)
     }
 
     private fun count(bitmap: Bitmap, color: Int): Int {

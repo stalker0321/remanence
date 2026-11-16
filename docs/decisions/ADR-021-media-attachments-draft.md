@@ -47,10 +47,16 @@ the whole text in the handwriting font.
   whenever the manifest has a letter, a small turn arrow sits right after the
   note's last word, in the note's ink, and the whole note is the button
   (its accessible name is "continued on the back"). Tapping it turns the card
-  over in place; the back is the card's own paper with the whole text in the
-  note's face, and "the front ↺" turns it back. No grammar or contract
-  change, so older receivers open the front (ending in its first sentences)
-  and, in builds that have it, the old letter button.
+  over in place; the back is the paper the note is written on with the whole
+  text in the note's face, and "the front ↺" turns it back. That paper is the
+  last decor plane painted under the middle of the note (a mount, a printed
+  panel) and the card's paper where there is none: one style writes dark ink
+  on a light mount over dark paper, and on the card's paper its back read at
+  1.3:1. Site `noteGround`, Android `noteGround`, the same tests; in the 21
+  layouts the site's composer proof walks (three photos and a note), the back
+  reads at 5.7:1 or better. No grammar or contract change, so older receivers
+  open the front (ending in its first sentences) and, in builds that have it,
+  the old letter button.
   "Save picture" still saves the front.
 - Why an arrow and not the words (16 November): the first version wrote
   "continued on the back ↻" under the note. The layouts leave 7 to 17 px
@@ -58,8 +64,8 @@ the whole text in the handwriting font.
   signature or a photo (checked on all 1599 reference plans with a note).
   The note region is the only place that is always free, so the mark lives
   inside it: 12 to 18 px, after the last word. When the last line is full,
-  it takes the end of that line on a patch of paper. Site `letterMarkPlace`,
-  Android `letterMarkPlace`, the same tests.
+  it takes the end of that line on a patch of the note's paper. Site
+  `letterMarkPlace`, Android `letterMarkPlace`, the same tests.
 - Writing a long text stays behind `remanence.letter.enabled` on Android and
   `VITE_SENDS_LETTER` on the site until the owner turns it on.
 

@@ -55,7 +55,7 @@ import kotlin.math.roundToInt
 /**
  * The letter is the back of the card (ADR-021 §2). The front keeps the start
  * of the text and a small turn mark at the end of the note; tapping the note turns the card over
- * to the whole text on the same paper, in the note's own face. Nothing here is
+ * to the whole text on the paper the note is written on, in the note's own face. Nothing here is
  * sealed: a receiver draws the mark and the back whenever the manifest carries
  * a letter, so older receivers simply see the front. The site's `CardBack.tsx`
  * is the same card.
@@ -110,6 +110,24 @@ internal fun letterMarkPlace(
     return LetterMarkPlace(x, y, size, backed)
 }
 
+/**
+ * The colour the note is written on. Some layouts lay the note on a plane of
+ * their own (a mount, a printed panel), painted over the paper; the last such
+ * plane under the middle of the note is its ground. The site's `noteGround`
+ * is the same rule.
+ */
+internal fun noteGround(scene: CollageRenderer.Scene): Int {
+    val region = scene.note?.region ?: return scene.paper
+    val x = region.x + region.width / 2f
+    val y = region.y + region.height / 2f
+    var ground = scene.paper
+    for (decor in scene.decor) {
+        val plane = decor.region
+        if (x >= plane.x && x < plane.x + plane.width && y >= plane.y && y < plane.y + plane.height) ground = decor.background
+    }
+    return ground
+}
+
 /** The whole note turns the card; the small arrow at its end says so. */
 @Composable
 internal fun LetterMark(scene: CollageRenderer.Scene, measurer: CollageTextMeasurer, onTurn: () -> Unit) {
@@ -120,7 +138,7 @@ internal fun LetterMark(scene: CollageRenderer.Scene, measurer: CollageTextMeasu
         val last = (layout.lineCount - 1 downTo 0).firstOrNull { layout.getLineEnd(it, visibleEnd = true) > layout.getLineStart(it) }
         letterMarkPlace(note.region, note.size, last?.let { layout.getLineRight(it) }, last?.let { layout.getLineBaseline(it) })
     }
-    val paper = Color(scene.paper)
+    val paper = Color(noteGround(scene))
     val ink = Color(note.color)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val scale = minOf(maxWidth.value / scene.canvasWidth, maxHeight.value / scene.canvasHeight)
@@ -167,7 +185,7 @@ internal fun CardBack(scene: CollageRenderer.Scene, letter: String, onTurn: () -
         FontFamily(Font(it.fontResourceId, FontWeight(it.weight), if (it.italic) FontStyle.Italic else FontStyle.Normal))
     } ?: FontFamily(Font(R.font.nimbus_roman_regular))
     val frontLabel = stringResource(R.string.capsule_letter_front)
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color(scene.paper)).testTag("capsule_letter_back")) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color(noteGround(scene))).testTag("capsule_letter_back")) {
         val unit = maxWidth.value / 100f
         Column(Modifier.fillMaxSize().padding(start = (7 * unit).dp, end = (7 * unit).dp, top = (8 * unit).dp, bottom = (4 * unit).dp)) {
             Text(

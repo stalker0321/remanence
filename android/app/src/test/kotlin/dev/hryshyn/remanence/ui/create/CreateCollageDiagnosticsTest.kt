@@ -475,13 +475,12 @@ class CreateCollageDiagnosticsTest {
         val state = vm.generatorPreview.value
         assertTrue("expected Ready, got $state", state is GeneratorPreviewState.Ready)
         val ready = state as GeneratorPreviewState.Ready
-        // Round-one partial retains were cleared as stale, parked u3 never
-        // retained, and round two retained fully: exactly two builds.
-        assertEquals("builds=$seenSizes", 2, seenSizes.size)
-        assertEquals(3, seenSizes.first().size)
-        assertEquals(3, seenSizes.last().size)
+        // Round one parked mid-load and never reached a build; its partial
+        // retains were cleared as stale and the parked u3 never retained.
+        // Round two retained fully: one build, holding exactly its own photos.
+        assertEquals("builds=$seenSizes", 1, seenSizes.size)
         val readyIds = ready.expression.input.photos.map { it.contentId }
-        assertEquals(readyIds.toSet(), seenSizes.last().keys)
+        assertEquals(readyIds.toSet(), seenSizes.single().keys)
         assertTrue(vm.collageChoices.candidates.isEmpty())
     }
 

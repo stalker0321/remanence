@@ -1855,13 +1855,22 @@ class CreateViewModel(
         dropGeneratorBound { bridge, context, sessionId ->
             bridge.onPhotoEdit(context, sessionId)
         }
-        // Fresh selection supersedes all retained originals: clear BEFORE the
-        // toggles below, whose inline refreshes may already retain anew.
+        // Fresh selection supersedes all retained originals.
         clearCollageDiagnostics()
         clearCropState()
         photoSelection.clear()
         _pickedPhotoIds.value = ids.distinct().take(PhotoSelectionState.MAX_PHOTOS)
-        _pickedPhotoIds.value.forEach { id -> photoSelection.toggle(id) }
+        // One picker result is one edit. The per-toggle hook repeats what this
+        // method does itself and would start a preview per photo; where that
+        // preview finishes at once, the refresh below became a second attempt
+        // after a failed first one.
+        val editHook = photoSelection.onEdit
+        photoSelection.onEdit = null
+        try {
+            _pickedPhotoIds.value.forEach { id -> photoSelection.toggle(id) }
+        } finally {
+            photoSelection.onEdit = editHook
+        }
         refreshPickedThumbnails()
         refreshGeneratorPreview()
     }

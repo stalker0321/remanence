@@ -8,6 +8,9 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
+import dev.hryshyn.remanence.ui.capsule.CardBack
+import dev.hryshyn.remanence.ui.capsule.CardSides
+import dev.hryshyn.remanence.ui.capsule.LetterMark
 import dev.hryshyn.remanence.ui.hold.HoldColors
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -90,6 +93,8 @@ internal fun CollageChoiceHost(
     candidateBuilder: (suspend (CollageTextMeasurer) -> List<CollageCandidate>?)? = null,
     showSelectInNavigation: Boolean = true,
     onShown: (Int) -> Unit = {},
+    /** The whole text when the note is only its start: the preview then turns over like the opened card. */
+    letter: String? = null,
     contentWrapper: @Composable (CanvasParcel, NavParcel) -> Unit = { canvas, nav ->
         nav()
         canvas()
@@ -210,13 +215,28 @@ internal fun CollageChoiceHost(
                                 runCatching { currentOnShown(renderedIndex) }
                             }
                         }
-                        if (onSlotTap == null) {
-                            CollageCanvas(result.scene, images, stringResource(R.string.media_collage_description), canvas, measurer, artworkBitmap,
-                                onMusicClick = onMusicClick, musicActionLabel = musicActionLabel)
+                        val front: @Composable () -> Unit = {
+                            if (onSlotTap == null) {
+                                CollageCanvas(result.scene, images, stringResource(R.string.media_collage_description), canvas, measurer, artworkBitmap,
+                                    onMusicClick = onMusicClick, musicActionLabel = musicActionLabel)
+                            } else {
+                                CollageHotspotCanvas(result.scene, images, displayed.expression.placements,
+                                    onSlotTap, canvas, measurer, artworkBitmap,
+                                    onMusicClick = onMusicClick, musicActionLabel = musicActionLabel)
+                            }
+                        }
+                        val back = letter?.takeIf { it.isNotBlank() && result.scene.note != null }
+                        if (back == null) {
+                            front()
                         } else {
-                            CollageHotspotCanvas(result.scene, images, displayed.expression.placements,
-                                onSlotTap, canvas, measurer, artworkBitmap,
-                                onMusicClick = onMusicClick, musicActionLabel = musicActionLabel)
+                            // Another layout, another crop or style is another front: it is shown first.
+                            var turned by remember(renderedBuild, renderedIndex, displayed) { mutableStateOf(false) }
+                            CardSides(turned, Modifier.size(width, width / ratio), front = {
+                                front()
+                                if (!turned) LetterMark(result.scene, measurer, onTurn = { turned = true })
+                            }, back = {
+                                CardBack(result.scene, back, onTurn = { turned = false })
+                            })
                         }
                     }
                 } else {

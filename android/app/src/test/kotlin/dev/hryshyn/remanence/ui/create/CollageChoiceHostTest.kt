@@ -20,6 +20,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
@@ -148,6 +149,53 @@ class CollageChoiceHostTest {
         composeRule.onNodeWithTag("collage_frozen").assertDoesNotExist()
         assertEquals(0, session.displayIndex)
         assertTrue(session.selectedIndex == null)
+    }
+
+    @Test
+    fun aLetterGivesThePreviewItsMarkAndItsBack() {
+        val front = "Mum, we made it to the sea at last."
+        val whole = "$front\n\nWe took the long road through the hills, the one you always wanted to see."
+        val session = CollageChoiceSession()
+        val input = input().copy(note = front)
+        val sources = sources()
+        val crops = cropSource()
+        val layouts: suspend (CollageTextMeasurer) -> List<CollageCandidate>? = { measurer ->
+            (CollageCandidateProvider(crops, measurer).candidates(input, front, null, null)
+                as? CollageProviderResult.Candidates)?.candidates?.map {
+                it.copy(expression = it.expression.copy(grammarId = "${it.expression.grammarId}-${it.styleId}"))
+            }
+        }
+        var letter by mutableStateOf<String?>(null)
+        val tapped = mutableListOf<String>()
+        composeRule.setContent {
+            CollageChoiceHost(session, input, sources, front, null, crops, candidateBuilder = layouts,
+                onSlotTap = { tapped += it }, letter = letter)
+        }
+        awaitCandidates(session)
+        assertTrue("the pager needs a second layout", session.browseCount > 1)
+        // A note that is the whole text has no back to turn to.
+        composeRule.onNodeWithTag("collage_canvas").assertExists()
+        composeRule.onNodeWithTag("capsule_letter_mark").assertDoesNotExist()
+
+        composeRule.runOnIdle { letter = whole }
+        composeRule.onNodeWithTag("capsule_letter_mark").performClick()
+        composeRule.onNodeWithTag("capsule_letter_text").assertTextEquals(whole)
+        // The back takes the taps: no photo under it opens its crop.
+        composeRule.onNodeWithTag("capsule_letter_back").performClick()
+        assertTrue(tapped.isEmpty())
+        composeRule.onNodeWithTag("capsule_letter_front").performClick()
+        composeRule.onNodeWithTag("capsule_letter_back").assertDoesNotExist()
+        composeRule.onNodeWithTag("crop_hotspot_0").performClick()
+        assertEquals(listOf(contentIds[0]), tapped)
+
+        // Another layout is another front: the pager shows it, not the back.
+        composeRule.onNodeWithTag("capsule_letter_mark").performClick()
+        composeRule.onNodeWithTag("capsule_letter_back").assertExists()
+        composeRule.onNodeWithTag("collage_next").performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, session.displayIndex)
+        composeRule.onNodeWithTag("capsule_letter_back").assertDoesNotExist()
+        composeRule.onNodeWithTag("capsule_letter_mark").assertExists()
     }
 
     @Test

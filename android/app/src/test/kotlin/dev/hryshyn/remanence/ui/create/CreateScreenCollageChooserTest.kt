@@ -440,6 +440,46 @@ class CreateScreenCollageChooserTest {
         }, true).also { driveToContent(it, ids) }
     }
 
+    @Test
+    fun aLongTextComposesItsFrontAndTurnsToTheWholeLetter() {
+        // Only a letter build splits the field; run with -Premanence.letter.enabled=true.
+        org.junit.Assume.assumeTrue("the letter is off in this build", dev.hryshyn.remanence.BuildConfig.REMANENCE_LETTER_ENABLED)
+        val front = "Mum, we made it to the sea at last. The water is cold and the kids will not leave it."
+        val whole = "$front\n\nWe took the long road through the hills, the one you always wanted to see. " +
+            "There is a small white church at the top and a bench beside it; we sat there for an hour and nobody " +
+            "said a word.\n\nI will tell you the rest when we are home. Keep the card on the fridge until then."
+        val vm = fixtureVm()
+        // Typed with a trailing line break: the front and the back are the trimmed text.
+        vm.noteEditor.onChange("$whole\n")
+        assertEquals(front, vm.noteSides().front)
+        composeRule.setContent { CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false) }
+        driveToComposeCandidates(vm)
+        composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing }
+        composeRule.waitForIdle()
+
+        // The layouts are built and drawn for the front's note, not rejected for the whole text.
+        composeRule.onNodeWithTag("collage_notice").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_canvas").assertIsDisplayed()
+        assertEquals(front, vm.collageChoices.displayed?.expression?.input?.note)
+
+        composeRule.onNodeWithTag("capsule_letter_mark").performClick()
+        composeRule.onNodeWithTag("capsule_letter_text").assertTextContains(whole)
+        composeRule.onNodeWithTag("capsule_letter_front").performClick()
+        composeRule.onNodeWithTag("capsule_letter_back").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("collage_select").assertIsEnabled().performClick()
+        assertEquals(front, vm.frozenCollageSelection?.expression?.input?.note)
+
+        // A short text typed with a space after it is its own front, and has no back.
+        composeRule.runOnIdle { vm.noteEditor.onChange("A short note ") }
+        composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing && vm.collageChoices.candidates.isNotEmpty() }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("collage_notice").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_canvas").assertIsDisplayed()
+        composeRule.onNodeWithTag("capsule_letter_mark").assertDoesNotExist()
+        vm.endSession()
+    }
+
     private fun authorSecondCandidate(vm: CreateViewModel) {
         composeRule.onNodeWithTag("collage_next").performClick()
         assertEquals(1, vm.collageChoices.displayIndex)

@@ -930,9 +930,11 @@ private fun CollageStepChooser(
         else -> emptyList()
     }
     if (input != null && sources.isNotEmpty()) {
+        val sides = viewModel.noteSides()
         CollageChoiceHost(
             session = viewModel.collageChoices, input = input, sources = sources,
-            note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
+            // The front's note, as sealed: a long text prints only its start, the rest is the back.
+            note = sides.front.takeIf { it.isNotEmpty() }, letter = sides.letter,
             track = track,
             cropSource = viewModel.collageCropSource ?: remember { dev.hryshyn.remanence.ui.collage.CollageCropSource { null } },
             artwork = artwork, artworkBitmap = artworkBitmap,

@@ -277,7 +277,7 @@ class CreateSmallViewportTest {
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
         vm.onPhotosPicked(listOf("a", "b", "c"))
-        vm.noteEditor.onChange("x".repeat(NoteEditorState.MAX_NOTE_BYTES + 1))
+        vm.noteEditor.onChange("x".repeat(vm.noteEditor.maxBytes + 1))
 
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         composeRule.setContent {

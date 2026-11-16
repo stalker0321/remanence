@@ -392,7 +392,7 @@ class CreateContentPublishRecoveryTest {
         }
         // Oversized candidate is REJECTED whole and the error becomes visible.
         composeRule.runOnIdle {
-            assertFalse(vm.noteEditor.onChange("x".repeat(NoteEditorState.MAX_NOTE_BYTES + 1)))
+            assertFalse(vm.noteEditor.onChange("x".repeat(vm.noteEditor.maxBytes + 1)))
         }
         composeRule.waitForIdle()
         val editable = composeRule.onNodeWithTag("create_note_input")

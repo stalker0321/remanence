@@ -12,7 +12,7 @@ import androidx.compose.runtime.setValue
  * FIX-STATE-06: text and the limit flag are Compose-observable so typed
  * input and the visible limit error always recompose.
  */
-class NoteEditorState(private val maxBytes: Int = MAX_NOTE_BYTES) {
+class NoteEditorState(val maxBytes: Int = MAX_NOTE_BYTES) {
 
     /**
      * C2 invalidation hook: invoked when an [onChange] candidate is

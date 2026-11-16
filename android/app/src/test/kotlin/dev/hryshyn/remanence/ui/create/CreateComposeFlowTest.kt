@@ -426,9 +426,10 @@ class CreateComposeFlowTest {
     fun overlongNoteIsRefusedAtKeystrokeAndFormStaysSubmittable() {
         val vm = newViewModel()
         driveToContent(vm)
-        // The 1000-byte limit rejects whole input at keystroke: nothing is
-        // truncated into the form, and the ready form still reaches COMPOSE.
-        assertFalse(vm.noteEditor.onChange("x".repeat(1001)))
+        // The field's limit (1000 bytes; the letter's 8000 in a letter build) rejects
+        // whole input at keystroke: nothing is truncated into the form, and the ready
+        // form still reaches COMPOSE.
+        assertFalse(vm.noteEditor.onChange("x".repeat(vm.noteEditor.maxBytes + 1)))
         assertTrue(vm.noteEditor.limitReached)
         assertEquals("", vm.noteEditor.text)
 

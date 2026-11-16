@@ -172,6 +172,14 @@ later option is a video of the card with the circle playing in it.
 ## 8. Still open
 
 - 60 s voice and 30 s circle: right lengths?
-- The minimum size of the circle's square tile.
+- The minimum size of the circle's square tile. Measured on the 3083
+  reference plans (16 November), taking in each plan the tile with the
+  longest short side, the one a square would be cut from. Every kind of card
+  (3 to 5 tiles, with or without a song or a note) is offered 7 to 13
+  layouts today and keeps at least 6 of them at a 140 px minimum, at least 6
+  at 160 px and at least 5 at 180 px. With no planner change at all, at
+  least 3 layouts per kind of card already have a tile that is square within
+  5% and 140 px or larger. Layout 11 already draws round tiles (70 to
+  348 px).
 - Is 8000 bytes enough for the letter?
 - Can a circle travel with a song? Both make sound when the card is open.

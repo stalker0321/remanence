@@ -382,6 +382,10 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
   stroke-linejoin: round;
 }
 
+/* The site's button hover paints a panel; over the card it would cover the note. */
+.card-sides button.letter-mark:hover,
+.card-sides button.card-back-turn:hover { background: transparent; }
+
 .card-back {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
@@ -407,6 +411,7 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
   background: transparent;
   box-shadow: none;
   font: italic 400 3.6cqw/1.2 StudySerif, serif;
+  gap: 1cqw;
   min-height: 0;
   cursor: pointer;
 }

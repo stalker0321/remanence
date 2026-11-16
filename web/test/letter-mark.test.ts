@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { letterMarkPlace } from '../src/collage/CardBack'
-import type { SceneText } from '../src/collage/prepare'
+import { letterMarkPlace, noteGround } from '../src/collage/CardBack'
+import type { Scene, SceneDecor, SceneText } from '../src/collage/prepare'
 
 function note(region: { x: number; y: number; width: number; height: number }, size: number, line: number, widths: number[]): SceneText {
   return {
@@ -78,5 +78,37 @@ describe('letter mark place', () => {
       }
     }
     expect(checked).toBeGreaterThan(1000)
+  })
+})
+
+describe('note ground', () => {
+  const PAPER = 0xff333633
+  const MOUNT = 0xfff8f7ef
+  const PANEL = 0xffe6bb4b
+  const region = { x: 40, y: 480, width: 280, height: 60 }
+  const plane = (x: number, y: number, width: number, height: number, background: number): SceneDecor =>
+    ({ kind: 'carrier', region: { x, y, width, height }, background, border: null, shadow: false, borderWidth: 1 })
+  const scene = (decor: SceneDecor[], withNote = true): Scene => ({
+    canvasWidth: 360, canvasHeight: 640, styleId: 'press', grammarId: 'g23',
+    paper: PAPER, ink: 0xfff0f0f0, sound: 0xff000000, soundInk: 0xffffffff,
+    photos: [], note: withNote ? note(region, 20, 26, [200]) : null, music: null, artwork: null, provenance: [], decor,
+  })
+
+  it('is the paper when nothing lies under the note', () => {
+    expect(noteGround(scene([]))).toBe(PAPER)
+    expect(noteGround(scene([plane(20, 20, 320, 400, MOUNT)]))).toBe(PAPER)
+  })
+
+  it('is the plane the note is written on', () => {
+    expect(noteGround(scene([plane(20, 20, 320, 600, MOUNT)]))).toBe(MOUNT)
+  })
+
+  it('is the last plane painted under the note', () => {
+    expect(noteGround(scene([plane(20, 20, 320, 600, MOUNT), plane(30, 470, 300, 80, PANEL)]))).toBe(PANEL)
+    expect(noteGround(scene([plane(30, 470, 300, 80, PANEL), plane(20, 20, 320, 600, MOUNT)]))).toBe(MOUNT)
+  })
+
+  it('is the paper for a card without a note', () => {
+    expect(noteGround(scene([plane(0, 0, 360, 640, MOUNT)], false))).toBe(PAPER)
   })
 })

@@ -464,6 +464,13 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     if (view !== null && activeSlot >= view.slots.length) setActiveSlot(0)
   }, [view, activeSlot])
 
+  // The pager and the crop controls change the front, so they show it. A text
+  // that got short and long again also starts on the front.
+  const hasLetter = !!props.letter
+  useEffect(() => {
+    setTurned(false)
+  }, [planIndex, activeSlot, transforms, hasLetter])
+
   // Preview paint: real scene → real paint, fully synchronous after
   // the fonts gate. A painted `ready` for the current inputs arms the
   // ready gate that Freeze requires; refused/failed paint clears it.

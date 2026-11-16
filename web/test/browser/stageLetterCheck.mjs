@@ -23,7 +23,7 @@ const [webDir, outDir] = process.argv.slice(2)
 if (!webDir || !outDir) throw new Error('usage: stageLetterCheck.mjs <webDir> <outDir>')
 const web = resolve(webDir)
 await mkdir(outDir, { recursive: true, mode: 0o750 })
-const report = { synthetic: true, pages: {}, console: [], errors: [] }
+const report = { synthetic: true, pages: {}, console: [], errors: [], hover: {} }
 
 const candidates = [
   ...(process.env.BROWSER_SMOKE_CHROMIUM ? [process.env.BROWSER_SMOKE_CHROMIUM] : []),
@@ -101,6 +101,24 @@ try {
       }, side, { timeout: 120000 })
       if ((await page.textContent('#stage-letter-status')) !== 'pose:' + side) break
       await page.locator('.stage .card-sides').screenshot({ path: join(outDir, 'stage-letter-' + side + '.png') })
+      // Under a real pointer the control keeps the card's own look: the site's button hover must not reach it.
+      const control = '.stage .card-sides ' + (side === 'front' ? 'button.letter-mark' : 'button.card-back-turn')
+      await page.hover(control)
+      await page.waitForTimeout(250)
+      report.hover[side] = await page.evaluate((selector) => {
+        const style = getComputedStyle(document.querySelector(selector))
+        return { matches: document.querySelector(selector).matches(':hover'), background: style.backgroundColor, border: style.borderTopWidth }
+      }, control)
+      if (side === 'front') {
+        // The same for a photo: under the pointer it stays a photo.
+        await page.hover('.stage .sheet-front button.hit')
+        await page.waitForTimeout(250)
+        report.hover.photo = await page.evaluate(() => {
+          const hit = document.querySelector('.stage .sheet-front button.hit')
+          return { matches: hit.matches(':hover'), background: getComputedStyle(hit).backgroundColor, border: getComputedStyle(hit).borderTopWidth }
+        })
+      }
+      await page.mouse.move(1, 1)
       await page.evaluate((name) => { window.__stageLetterShot = name }, side)
     }
     await page.waitForFunction(() => {
@@ -122,6 +140,9 @@ try {
       assert.deepEqual(result.failures, [])
       assert.equal(result.report?.pass, true, 'report.pass must be true')
       assert.equal(result.report?.downloads, 1, 'one saved picture')
+      for (const side of ['front', 'back', 'photo']) {
+        assert.deepEqual(report.hover[side], { matches: true, background: 'rgba(0, 0, 0, 0)', border: '0px' }, 'hovered ' + side + ' control keeps the card\'s look')
+      }
       assert.deepEqual(report.errors, [], 'no page/route/runtime errors')
       assert.deepEqual(report.console.filter((item) => item.type === 'error'), [], 'no console errors')
     } catch (error) {

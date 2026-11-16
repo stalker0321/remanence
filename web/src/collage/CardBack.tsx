@@ -3,8 +3,8 @@ import { css } from './paint'
 import type { Scene, SceneText } from './prepare'
 
 /**
- * The letter on the back of the card (ADR-021 §2). The back is the same paper
- * as the front, in the note's own face, and holds the whole text; the front
+ * The letter on the back of the card (ADR-021 §2). The back is the paper the
+ * note is written on, in the note's own face, and holds the whole text; the front
  * keeps its start and a small turn mark at the end of the note. Nothing here
  * is sealed: a receiver draws the mark and the back whenever the manifest
  * carries a letter, so older receivers simply see the front.
@@ -40,6 +40,25 @@ export function letterMarkPlace(note: SceneText): LetterMarkPlace {
   return { x, y, size, backed }
 }
 
+/**
+ * The colour the note is written on. Some layouts lay the note on a plane of
+ * their own (a mount, a printed panel), painted over the paper; the last such
+ * plane under the middle of the note is its ground. Android's `noteGround` is
+ * the same rule.
+ */
+export function noteGround(scene: Scene): number {
+  const region = scene.note?.region
+  if (!region) return scene.paper
+  const x = region.x + region.width / 2
+  const y = region.y + region.height / 2
+  let ground = scene.paper
+  for (const decor of scene.decor) {
+    const plane = decor.region
+    if (x >= plane.x && x < plane.x + plane.width && y >= plane.y && y < plane.y + plane.height) ground = decor.background
+  }
+  return ground
+}
+
 /** The whole note turns the card; the mark at its end says so. */
 export function LetterMark({ scene, label, onTurn }: { scene: Scene; label: string; onTurn: () => void }) {
   const note = scene.note
@@ -58,8 +77,8 @@ export function LetterMark({ scene, label, onTurn }: { scene: Scene; label: stri
     top: `${((place.y - region.y) / region.height) * 100}%`,
     width: `${(place.size / region.width) * 100}%`,
     height: `${(place.size / region.height) * 100}%`,
-    background: place.backed ? css(scene.paper) : undefined,
-    boxShadow: place.backed ? `-0.9cqw 0 0.9cqw 0.5cqw ${css(scene.paper)}` : undefined,
+    background: place.backed ? css(noteGround(scene)) : undefined,
+    boxShadow: place.backed ? `-0.9cqw 0 0.9cqw 0.5cqw ${css(noteGround(scene))}` : undefined,
   }
   return (
     <button type="button" className="letter-mark" style={hit} aria-label={label} title={label} onClick={onTurn}>
@@ -74,7 +93,7 @@ export function LetterMark({ scene, label, onTurn }: { scene: Scene; label: stri
 export function CardBack({ scene, letter, title, frontLabel, onTurn }: { scene: Scene; letter: string; title: string; frontLabel: string; onTurn: () => void }) {
   const face = scene.note
   const style: CSSProperties = {
-    background: css(scene.paper),
+    background: css(noteGround(scene)),
     color: css(face?.color ?? scene.ink),
     fontFamily: face ? `${face.family}, serif` : 'StudySerif, serif',
     fontStyle: face?.italic ? 'italic' : 'normal',

@@ -120,12 +120,14 @@ class CollagePresentationHostTest {
         track: CapsuleTrackSnapshotV1? = null,
         decoder: Ber1PhotoDecoder = okDecoder(),
         artworkFetcher: ArtworkFetcher? = null,
+        letter: String? = null,
     ): CollagePresentationState {
         val state = CollagePresentationState(
             expression = expression,
             loadPhoto = { contentId -> contentId.toByteArray() },
             note = note,
             track = track,
+            letter = letter,
             decoder = decoder,
             artworkFetcher = artworkFetcher,
         )
@@ -173,6 +175,33 @@ class CollagePresentationHostTest {
         composeRule.onNodeWithTag("capsule_photo_dialog").assertDoesNotExist()
         composeRule.onNodeWithTag("collage_canvas").assertExists()
         assertTrue(state.status is CollagePresentationState.Status.Ready)
+    }
+
+    @Test
+    fun letterTurnsTheCardOverAndBack() {
+        val front = "Hello, mum."
+        val whole = "Hello, mum.\n\nThe rest of the letter."
+        val expression = expressionV3(note = front, noteRegion = GeneratorExpression.NoteRegion(0, 400, 360, 200))
+        val state = loadedState(expression, note = front, letter = whole)
+        composeRule.setContent { CollagePresentationHost(state, "collage", onClose = {}) }
+        composeRule.onNodeWithTag("capsule_letter_back").assertDoesNotExist()
+        composeRule.onNodeWithTag("capsule_letter_mark").performClick()
+        composeRule.onNodeWithTag("capsule_letter_text").assertTextEquals(whole)
+        composeRule.onNodeWithTag("capsule_letter_mark").assertDoesNotExist()
+        // The front stays composed under the back, so "save picture" still has it.
+        composeRule.onNodeWithTag("collage_canvas").assertExists()
+        composeRule.onNodeWithTag("capsule_letter_front").performClick()
+        composeRule.onNodeWithTag("capsule_letter_back").assertDoesNotExist()
+        composeRule.onNodeWithTag("capsule_letter_mark").assertExists()
+    }
+
+    @Test
+    fun cardWithoutLetterHasNoTurnMark() {
+        val expression = expressionV3(note = "Hello, mum.", noteRegion = GeneratorExpression.NoteRegion(0, 400, 360, 200))
+        val state = loadedState(expression, note = "Hello, mum.")
+        composeRule.setContent { CollagePresentationHost(state, "collage", onClose = {}) }
+        composeRule.onNodeWithTag("collage_canvas").assertExists()
+        composeRule.onNodeWithTag("capsule_letter_mark").assertDoesNotExist()
     }
 
     @Test

@@ -35,13 +35,33 @@ the whole text in the handwriting font.
 - Wire: `ContentManifest.letter = 8`, v2 only, 1..8000 UTF-8 bytes, not blank.
   It rides inside the AEAD-sealed manifest, so there is no new artifact kind
   and no server change. This part is built.
-- To change: the separate letter field and the "read the letter" button that
-  were built on 9 November go. The note field becomes the one text field; the
-  layouts take the first part and mark the rest. The mark is drawn by the
-  layout, so it is a grammar change, and older receivers open the front
-  without the mark or the back.
-- Writing a letter stays behind `remanence.letter.enabled` on Android and
-  `VITE_SENDS_LETTER` on the site until the back of the card is built.
+- Built (9 November, evening): the separate letter field and the "read the
+  letter" button are gone. The note field is the one text field, up to the
+  letter's 8000 bytes. A text up to 240 characters in up to 4 lines (and
+  within the note's 1000 bytes) is just the note. A longer one is sealed whole
+  as the letter, and the note (the front) is its start: whole sentences of the
+  first paragraph up to 160 characters, or whole words and an ellipsis when
+  the first sentence is longer. Site `splitLetter`, Android `LetterSplit`,
+  the same tests on both.
+- The mark and the back are drawn by the receiver, not sealed in the layout:
+  whenever the manifest has a letter, a small turn arrow sits right after the
+  note's last word, in the note's ink, and the whole note is the button
+  (its accessible name is "continued on the back"). Tapping it turns the card
+  over in place; the back is the card's own paper with the whole text in the
+  note's face, and "the front ↺" turns it back. No grammar or contract
+  change, so older receivers open the front (ending in its first sentences)
+  and, in builds that have it, the old letter button.
+  "Save picture" still saves the front.
+- Why an arrow and not the words (16 November): the first version wrote
+  "continued on the back ↻" under the note. The layouts leave 7 to 17 px
+  between their elements, so in 11 of the 14 layouts the words ran over the
+  signature or a photo (checked on all 1599 reference plans with a note).
+  The note region is the only place that is always free, so the mark lives
+  inside it: 12 to 18 px, after the last word. When the last line is full,
+  it takes the end of that line on a patch of paper. Site `letterMarkPlace`,
+  Android `letterMarkPlace`, the same tests.
+- Writing a long text stays behind `remanence.letter.enabled` on Android and
+  `VITE_SENDS_LETTER` on the site until the owner turns it on.
 
 ## 3. Media on the wire
 

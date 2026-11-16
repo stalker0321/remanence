@@ -261,6 +261,9 @@ internal fun CollagePresentationHost(
             when (result) {
                 is CollageRenderer.SceneResult.Ready -> {
                     var originalPhoto by remember(state, images) { mutableStateOf<String?>(null) }
+                    // The card turned over to the letter on its back; another card opens on its front.
+                    var turned by remember(state, state.letter) { mutableStateOf(false) }
+                    val letter = state.letter?.takeIf { it.isNotBlank() }
                     val photoLabel = stringResource(R.string.capsule_view_original)
                     val export = exportFactory(validateExport)
                     val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
@@ -273,8 +276,14 @@ internal fun CollagePresentationHost(
                     CapsuleSheetFrame(export, enabled = state.status is CollagePresentationState.Status.Ready,
                         ratio = result.scene.canvasWidth.toFloat() / result.scene.canvasHeight,
                         onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_collage_close",
-                        actions = { CapsuleListenAction(state.track, musicAction); CapsuleLetterAction(state.letter) },
-                        overlay = { CapsuleMusicCue(result.scene, images) }) { sheetModifier ->
+                        actions = { CapsuleListenAction(state.track, musicAction) },
+                        overlay = {
+                            if (!turned) {
+                                CapsuleMusicCue(result.scene, images)
+                                if (letter != null) LetterMark(result.scene, measurer, onTurn = { turned = true })
+                            }
+                        }) { sheetModifier ->
+                    CardSides(turned && letter != null, Modifier.fillMaxSize(), front = {
                     CollageCanvas(
                         scene = contentScene,
                         images = images,
@@ -293,6 +302,9 @@ internal fun CollagePresentationHost(
                         },
                         photoActionLabel = photoLabel,
                     )
+                    }, back = {
+                        if (letter != null) CardBack(result.scene, letter, onTurn = { turned = false })
+                    })
                     }
                     originalPhoto?.let { id ->
                         CapsulePhotoDialog(

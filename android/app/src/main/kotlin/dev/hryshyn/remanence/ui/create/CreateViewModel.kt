@@ -365,25 +365,31 @@ class CreateViewModel(
     // deselected tile can be selected again without reopening the system picker.
     private val _pickedPhotoIds = MutableStateFlow<List<String>>(emptyList())
     val pickedPhotoIds: StateFlow<List<String>> = _pickedPhotoIds.asStateFlow()
-    val noteEditor = NoteEditorState().also { it.onEdit = { invalidateGeneratorForNoteEdit() } }
-
     /**
-     * The long note ("letter") read beside the sheet. It is not drawn on the
-     * layout, so editing it never invalidates the chosen collage.
+     * The one text field. With the letter on it holds the whole letter and the
+     * layouts print its start ([noteSides]); otherwise it is the note, as before.
      */
-    private val _letter = MutableStateFlow("")
-    val letter: StateFlow<String> = _letter.asStateFlow()
+    val noteEditor = NoteEditorState(
+        if (dev.hryshyn.remanence.BuildConfig.REMANENCE_LETTER_ENABLED) {
+            dev.hryshyn.remanence.core.model.CapsuleLetter.MAX_UTF8_BYTES
+        } else {
+            NoteEditorState.MAX_NOTE_BYTES
+        },
+    ).also { it.onEdit = { invalidateGeneratorForNoteEdit() } }
 
-    /** Keeps at most [CapsuleLetter.MAX_UTF8_BYTES] of UTF-8, cut on a character boundary. */
-    fun setLetter(text: String) {
-        _letter.value = dev.hryshyn.remanence.ui.create.LetterBounds.clip(text)
-    }
+    /** The field's two sides: the front the layout prints, and the whole text for the back or null. */
+    internal fun noteSides(): LetterSplit.Sides =
+        if (dev.hryshyn.remanence.BuildConfig.REMANENCE_LETTER_ENABLED) {
+            LetterSplit.split(noteEditor.text)
+        } else {
+            LetterSplit.Sides(noteEditor.text, null)
+        }
 
-    private fun currentLetter(): String? {
-        if (!dev.hryshyn.remanence.BuildConfig.REMANENCE_LETTER_ENABLED) return null
-        val text = _letter.value
-        return text.takeIf { dev.hryshyn.remanence.core.model.CapsuleLetter.valid(it) }
-    }
+    /** The front's note, or null when the field is empty. */
+    private fun frontNote(): String? = noteSides().front.takeIf { it.isNotEmpty() }
+
+    private fun currentLetter(): String? =
+        noteSides().letter?.takeIf { dev.hryshyn.remanence.core.model.CapsuleLetter.valid(it) }
 
     /**
      * S2b-sender: the picker selection that becomes the sealed
@@ -547,7 +553,7 @@ class CreateViewModel(
      * note/music/crop state. Unknown (never reported) is NOT eligible.
      */
     internal fun prepareInputs(): PrepareInputs = PrepareInputs(
-        note = noteEditor.text.takeIf { it.isNotEmpty() },
+        note = frontNote(),
         trackId = collageChooserTrackFor(_musicSelection.value)?.trackId?.toString(),
         artworkSize = _musicArtworkBitmap.value?.let { "${it.width}x${it.height}" },
         artwork = _musicArtwork.value,
@@ -1477,7 +1483,6 @@ class CreateViewModel(
         _pickedPhotoIds.value = emptyList()
         clearPickedThumbnails()
         noteEditor.reset()
-        _letter.value = ""
         // S2b-sender: a picker selection belongs to exactly one
         // session; a new epoch/owner must never inherit it (placed after
         // the same-epoch early return above, so rotation keeps it).
@@ -2157,7 +2162,7 @@ class CreateViewModel(
             capsuleId = capsuleId,
             owner = owner,
             recipient = boundRecipient,
-            noteText = if (noteEditor.isEmpty) null else noteEditor.text,
+            noteText = frontNote(),
             frontFingerprintId = requireNotNull(frontFingerprintId),
             photoIds = photoSelection.selectedIds.toList(),
             trackSnapshot = trackSnapshot,
@@ -2391,7 +2396,7 @@ class CreateViewModel(
         _generatorPreview.value = GeneratorPreviewState.Loading
         val ownerId = sessionOwner?.toRestString()
         val epoch = generatorSessionEpoch ?: 0L
-        val note = if (noteEditor.isEmpty) null else noteEditor.text
+        val note = frontNote()
         previewJob = viewModelScope.launch {
             try {
             val result = generatorPreviewCoordinator.compute(ownerId, epoch, ids, note)
@@ -3268,7 +3273,6 @@ class CreateViewModel(
         _pickedPhotoIds.value = emptyList()
         clearPickedThumbnails()
         noteEditor.reset()
-        _letter.value = ""
         // S2b-sender: leaving the surface drops the picker selection
         // with every other content state (see beginSession for the rationale).
         _musicSelection.value = null

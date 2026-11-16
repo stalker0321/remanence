@@ -599,7 +599,7 @@ private fun ContentStepContent(
                 onValueChange = viewModel.noteEditor::onChange,
                 label = { Text(stringResource(R.string.hold_note), style = MaterialTheme.typography.bodySmall) },
                 textStyle = MaterialTheme.typography.bodySmall,
-                minLines = 3,
+                minLines = if (dev.hryshyn.remanence.BuildConfig.REMANENCE_LETTER_ENABLED) 5 else 3,
                 isError = viewModel.noteEditor.limitReached || !viewModel.noteEditor.canIncludeInCapsule,
                 modifier = Modifier.fillMaxWidth().testTag("create_note_input"),
             )
@@ -607,19 +607,9 @@ private fun ContentStepContent(
                 Text(stringResource(R.string.create_note_too_long), color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.testTag("create_note_limit_error"))
             }
-            if (dev.hryshyn.remanence.BuildConfig.REMANENCE_LETTER_ENABLED) {
-                val letter by viewModel.letter.collectAsStateWithLifecycle()
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = letter,
-                    onValueChange = viewModel::setLetter,
-                    label = { Text(stringResource(R.string.create_letter_label), style = MaterialTheme.typography.bodySmall) },
-                    textStyle = MaterialTheme.typography.bodySmall,
-                    minLines = 4,
-                    modifier = Modifier.fillMaxWidth().testTag("create_letter_input"),
-                )
+            if (viewModel.noteSides().letter != null) {
                 Text(stringResource(R.string.create_letter_hint), color = HoldColors.Muted,
-                    style = MaterialTheme.typography.bodySmall)
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("create_letter_hint"))
             }
             Spacer(Modifier.height(12.dp))
             MusicPickerContent(

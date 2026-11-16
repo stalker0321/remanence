@@ -15,7 +15,8 @@ import type { CollageAnalysis } from './analysis/cropSolver'
 import type { ArtworkRef } from './model'
 import { bytesToHex } from '../protocol/bytes'
 import { paintScene, type PaintImage } from './paint'
-import type { TextMeasurer } from './prepare'
+import { CardBack, LetterMark } from './CardBack'
+import type { Scene, TextMeasurer } from './prepare'
 import { styleById } from './styles'
 import type { SessionStore } from '../session/session'
 import type { TrackSnapshot } from '../create/music'
@@ -41,6 +42,8 @@ export interface CreatorComposerRecipient {
 export interface CreatorComposerProps {
   photos: CreatorComposerPhoto[]
   note: string | null
+  /** The whole text when it continues on the back; the preview shows the mark and turns over. */
+  letter?: string | null
   /** The chosen song, painted in its band and sealed with the layout. */
   track: TrackSnapshot | null
   /** The song's checked cover and its decoded image; null keeps the band as text. */
@@ -83,6 +86,9 @@ interface Copy {
   noteOverflow: string
   noteMissing: string
   noFit: string
+  letterMark: string
+  letterTitle: string
+  letterFront: string
   notReady: string
   locked: string
   empty: string
@@ -114,6 +120,9 @@ const copy: Record<CreatorLang, Copy> = {
     noteOverflow: 'The note does not fit this layout. Shorten it or choose another.',
     noteMissing: 'Add a note for this layout, or choose one without text.',
     noFit: 'No layout fits these words and photos. Shorten the note or change the photos.',
+    letterMark: 'continued on the back',
+    letterTitle: 'the back of the postcard',
+    letterFront: 'the front',
     notReady: 'Wait for the preview before choosing this layout.',
     locked: 'Locked — preview cleared.',
     empty: 'Add 3–5 photos to compose.',
@@ -142,6 +151,9 @@ const copy: Record<CreatorLang, Copy> = {
     noteOverflow: 'Текст не помещается в эту композицию. Сократите его или выберите другую.',
     noteMissing: 'Добавьте заметку для этой композиции или выберите вариант без текста.',
     noFit: 'Ни один вариант не вмещает этот текст и фото. Сократите заметку или поменяйте фото.',
+    letterMark: 'продолжение на обороте',
+    letterTitle: 'оборот открытки',
+    letterFront: 'лицевая сторона',
     notReady: 'Дождитесь предпросмотра, прежде чем выбирать композицию.',
     locked: 'Заблокировано — предпросмотр очищен.',
     empty: 'Добавьте 3–5 фото для композиции.',
@@ -170,6 +182,9 @@ const copy: Record<CreatorLang, Copy> = {
     noteOverflow: 'Текст не вміщується в цю композицію. Скоротіть його або виберіть іншу.',
     noteMissing: 'Додайте нотатку для цієї композиції або виберіть варіант без тексту.',
     noFit: 'Жоден варіант не вміщує цей текст і фото. Скоротіть нотатку або змініть фото.',
+    letterMark: 'продовження на звороті',
+    letterTitle: 'зворот листівки',
+    letterFront: 'лицьовий бік',
     notReady: 'Дочекайтеся попереднього перегляду, перш ніж вибирати композицію.',
     locked: 'Заблоковано — попередній перегляд очищено.',
     empty: 'Додайте 3–5 фото для композиції.',
@@ -209,6 +224,8 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const snap = useSyncExternalStore(props.session.subscribe, props.session.getSnapshot)
   const [planIndex, setPlanIndex] = useState(0)
   const [activeSlot, setActiveSlot] = useState(0)
+  const [paintedScene, setPaintedScene] = useState<Scene | null>(null)
+  const [turned, setTurned] = useState(false)
   const [transforms, setTransforms] = useState<Record<string, CropTransform>>({})
   const [fontsReady, setFontsReady] = useState(false)
   const [fontsError, setFontsError] = useState<string | null>(null)
@@ -510,6 +527,8 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         ? { source: cover.image, width: cover.ref.width, height: cover.ref.height }
         : null
       const painted = paintScene(context, { ...scene, note: null }, images, coverImage)
+      // The card's mark sits after the note's last painted word, so the scene keeps the rows.
+      setPaintedScene(!painted ? null : scene.note !== null && noteLayout !== null ? { ...scene, note: { ...scene.note, noteLayout } } : scene)
       if (painted && scene.note !== null && noteLayout !== null && noteFace !== null) {
         paintCreatorNote(context, noteLayout, noteFace, scene.note.region, scene.note.color)
       }
@@ -722,7 +741,17 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       <p className="creator-branch visually-hidden" aria-hidden="true" data-testid="creator-branch">
         {t.branch(view.branch)}
       </p>
-      <canvas ref={canvasRef} data-testid="creator-canvas" role="img" aria-label={t.preview} width={360} height={640} />
+      <div className="card-sides creator-sides" data-turned={turned && props.letter ? 'true' : undefined}>
+        <div className="sheet-front" inert={turned && !!props.letter}>
+          <canvas ref={canvasRef} data-testid="creator-canvas" role="img" aria-label={t.preview} width={360} height={640} />
+          {props.letter && paintedScene !== null ? <LetterMark scene={paintedScene} label={t.letterMark} onTurn={() => setTurned(true)} /> : null}
+        </div>
+        {props.letter && paintedScene !== null ? (
+          <div className="sheet-back" inert={!turned}>
+            <CardBack scene={paintedScene} letter={props.letter} title={t.letterTitle} frontLabel={t.letterFront} onTurn={() => setTurned(false)} />
+          </div>
+        ) : null}
+      </div>
       </div>
       <div className="creator-controls">
       <details className="creator-adjust">

@@ -347,8 +347,8 @@
   "createLinkedFor": "листівка буде для",
   "createLinkedSelf": "листівка буде для вас",
   "createChosenDesign": "ваш макет",
-  "letterOpen": "читати лист",
-  "letterTitle": "лист",
-  "createLetterLabel": "лист",
-  "createLetterHint": "довші слова, їх прочитають поруч із листівкою"
+  "letterTitle": "зворот листівки",
+  "createLetterHint": "початок буде на листівці, весь текст — на звороті",
+  "letterMark": "продовження на звороті",
+  "letterFront": "лицьовий бік"
 }

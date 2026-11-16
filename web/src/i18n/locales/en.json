@@ -347,8 +347,8 @@
   "createLinkedFor": "this one will be for",
   "createLinkedSelf": "this one will be for you",
   "createChosenDesign": "your layout",
-  "letterOpen": "read the letter",
-  "letterTitle": "letter",
-  "createLetterLabel": "a letter",
-  "createLetterHint": "longer words, read beside the postcard"
+  "letterTitle": "the back of the postcard",
+  "createLetterHint": "the start goes on the postcard, the whole text on its back",
+  "letterMark": "continued on the back",
+  "letterFront": "the front"
 }

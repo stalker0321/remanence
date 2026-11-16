@@ -373,7 +373,7 @@ function rotated(context: CanvasRenderingContext2D, x: number, y: number, draw: 
   context.restore()
 }
 
-function css(color: number): string {
+export function css(color: number): string {
   const value = color >>> 0
   return `rgba(${(value >>> 16) & 255}, ${(value >>> 8) & 255}, ${value & 255}, ${((value >>> 24) & 255) / 255})`
 }

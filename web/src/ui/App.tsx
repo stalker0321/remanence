@@ -56,7 +56,7 @@ import { FrontStillError } from '../scan/frontStillProducer'
 import { browserPhotoCodec } from '../create/browserPhoto'
 import { PhotoIntake, PhotoNormalizer, type PhotoCodec, type IntakeFence, type IntakeOutcome } from '../create/normalize'
 import { PhotoIntakeActivity } from '../create/intakeActivity'
-import { clipLetter } from '../create/letter'
+import { splitLetter, type LetterSplit } from '../create/letter'
 import { MUSIC_QUERY_MAX_CODE_POINTS, MUSIC_SEARCH_DEBOUNCE_MS, musicLine, MusicDraft, searchMusic, trackSnapshotOf } from '../create/music'
 import type { NoteDraft } from '../create/note'
 import { PHOTO_COUNT_MAX, type PhotoDraft } from '../create/photos'
@@ -587,8 +587,13 @@ export function Scan({
 
 
 
-// The long note beside the sheet: receiving one always works; sending waits for the owner's word.
-const WEB_SENDS_LETTER = import.meta.env.VITE_SENDS_LETTER === 'true'
+// The letter on the back of the card: receiving one always works; sending waits for the owner's word.
+export const WEB_SENDS_LETTER = import.meta.env.VITE_SENDS_LETTER === 'true'
+
+/** The one text field's two sides; without the letter the whole text is the note, as before. */
+function sides(text: string | null): LetterSplit {
+  return WEB_SENDS_LETTER ? splitLetter(text ?? '') : { front: text ?? '', letter: null }
+}
 
 /** Exported for connected browser checks; production renders it via App. */
 export function Create({
@@ -643,10 +648,6 @@ export function Create({
   const [busy, setBusy] = useState(false)
   const [stamp, setStamp] = useState(0)
   const [noteAtLimit, setNoteAtLimit] = useState(false)
-  // Held only while Create is mounted; never stored.
-  const [letterText, setLetterText] = useState('')
-  const letterRef = useRef('')
-  letterRef.current = letterText
   const [live, setLive] = useState(false)
   const [pictured, setPictured] = useState(false)
   const [cameraFailure, setCameraFailure] = useState<CameraFailure | null>(null)
@@ -727,8 +728,8 @@ export function Create({
     transport: transport as SendPortsFull['transport'],
     recipientCurrent: () => recipient.confirmed(),
     photosCurrent: () => photos.photos(),
-    noteTextCurrent: () => note.accepted() ?? '',
-    letterTextCurrent: () => (WEB_SENDS_LETTER ? letterRef.current : ''),
+    noteTextCurrent: () => sides(note.accepted()).front,
+    letterTextCurrent: () => sides(note.accepted()).letter ?? '',
     trackIdCurrent: () => music.selected()?.id ?? null,
     freezeCurrent: () => frozenRef.current,
     stillCurrent: () => front.current.still(),
@@ -1023,8 +1024,9 @@ export function Create({
     if (!controller || !sendReady || sendPhase !== 'idle') return
     // Match the existing send preflight before consuming this visit's attempt,
     // including an edit that has not committed a new React render yet.
-    const acceptedNote = note.accepted()
-    if (!acceptedNote?.trim()) return
+    const acceptedSides = sides(note.accepted())
+    const acceptedNote = acceptedSides.front
+    if (!acceptedNote.trim()) return
     const freeze = frozenRef.current
     const still = front.current.still()
     const fingerprint = frontFp.current.current()
@@ -1042,7 +1044,7 @@ export function Create({
       // Snapshot identity values; never alias the live PhotoDraft array.
       photos: photos.photos().slice(),
       noteText: acceptedNote,
-      letterText: WEB_SENDS_LETTER ? letterText : '',
+      letterText: acceptedSides.letter ?? '',
       trackId: selectedMusic?.id ?? null,
       freeze,
       still,
@@ -1389,7 +1391,7 @@ export function Create({
             {t('noteLabel')}
             <textarea
               value={note.text()}
-              rows={3}
+              rows={WEB_SENDS_LETTER ? 5 : 3}
               disabled={sendPhase === 'working'}
               onChange={(event) => {
                 invalidateSend()
@@ -1399,21 +1401,7 @@ export function Create({
             />
           </label>
           {noteAtLimit ? <p className="field-hint">{t('noteTooLong')}</p> : null}
-          {WEB_SENDS_LETTER ? (
-            <label className="handle-form letter-field">
-              {t('createLetterLabel')}
-              <textarea
-                value={letterText}
-                rows={5}
-                disabled={sendPhase === 'working'}
-                onChange={(event) => {
-                  invalidateSend()
-                  setLetterText(clipLetter(event.target.value))
-                }}
-              />
-              <span className="field-hint">{t('createLetterHint')}</span>
-            </label>
-          ) : null}
+          {!noteAtLimit && sides(note.text()).letter !== null ? <p className="field-hint">{t('createLetterHint')}</p> : null}
           </section>
           </div>
           <div hidden={createStep !== 'composition'} className="composition-workspace" ref={composition}>
@@ -1426,7 +1414,8 @@ export function Create({
               <div className="creator-connected">
                 <CreatorComposer
                   photos={creatorImages}
-                  note={note.accepted()}
+                  note={sides(note.accepted()).front || null}
+                  letter={sides(note.accepted()).letter}
                   track={selectedTrack}
                   cover={selectedCover}
                   recipient={composerRecipient}

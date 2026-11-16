@@ -347,8 +347,8 @@
   "createLinkedFor": "открытка будет для",
   "createLinkedSelf": "открытка будет для вас",
   "createChosenDesign": "ваш макет",
-  "letterOpen": "читать письмо",
-  "letterTitle": "письмо",
-  "createLetterLabel": "письмо",
-  "createLetterHint": "слова подлиннее, их прочтут рядом с открыткой"
+  "letterTitle": "оборот открытки",
+  "createLetterHint": "начало будет на открытке, весь текст — на обороте",
+  "letterMark": "продолжение на обороте",
+  "letterFront": "лицевая сторона"
 }

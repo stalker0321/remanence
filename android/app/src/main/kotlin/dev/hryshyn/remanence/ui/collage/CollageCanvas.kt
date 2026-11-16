@@ -831,7 +831,7 @@ private fun TextLayoutResult.asMeasurement() = CollageRenderer.TextMeasurement(
     hasVisualOverflow = hasVisualOverflow,
 )
 
-private fun CollageRenderer.SceneText.toMeasureRequest() = CollageRenderer.TextMeasureRequest(
+internal fun CollageRenderer.SceneText.toMeasureRequest() = CollageRenderer.TextMeasureRequest(
     text = text,
     family = family,
     size = size,

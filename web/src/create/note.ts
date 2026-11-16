@@ -12,6 +12,12 @@ export function noteUtf8Bytes(text: string): number {
 /** Editable note. Input past the byte limit is cut at the last whole character that fits. */
 export class NoteDraft {
   #text = ''
+  readonly #limit: number
+
+  /** @param limit the field's byte bound: the note's, or the letter's when the text can turn over to the back. */
+  constructor(limit: number = NOTE_MAX_UTF8_BYTES) {
+    this.#limit = limit
+  }
 
   text(): string {
     return this.#text
@@ -22,7 +28,7 @@ export class NoteDraft {
   }
 
   fits(): boolean {
-    return this.bytes() <= NOTE_MAX_UTF8_BYTES
+    return this.bytes() <= this.#limit
   }
 
   /** Empty is no note. Over the byte limit is not a note. */
@@ -33,7 +39,7 @@ export class NoteDraft {
 
   /** @returns true when the input was cut to fit the limit. */
   edit(text: string): boolean {
-    if (noteUtf8Bytes(text) <= NOTE_MAX_UTF8_BYTES) {
+    if (noteUtf8Bytes(text) <= this.#limit) {
       this.#text = text
       return false
     }
@@ -41,7 +47,7 @@ export class NoteDraft {
     let bytes = 0
     for (const character of text) {
       const size = noteUtf8Bytes(character)
-      if (bytes + size > NOTE_MAX_UTF8_BYTES) break
+      if (bytes + size > this.#limit) break
       kept += character
       bytes += size
     }

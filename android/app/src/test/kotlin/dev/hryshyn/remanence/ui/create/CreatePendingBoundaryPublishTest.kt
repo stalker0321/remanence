@@ -167,6 +167,14 @@ class CreatePendingBoundaryPublishTest {
 
     @Before
     fun setUp() {
+        // A frozen pending route binds composition only in a pending build
+        // (goToCompose reads PendingFeatureGate). The default build has the
+        // journey off, so this class is skipped there; run it with
+        // -Premanence.pending.enabled=true -Premanence.recovery.enabled=true.
+        org.junit.Assume.assumeTrue(
+            "pending journey is off in this build",
+            dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled(),
+        )
         testKekBoundary.createAes256GcmKey(testAlias)
         testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         Dispatchers.setMain(testDispatcher)
@@ -184,8 +192,8 @@ class CreatePendingBoundaryPublishTest {
         runBlocking { withTimeout(10_000) { owned.clearAndJoin() } }
         Dispatchers.resetMain()
         if (::database.isInitialized) database.close()
-        stagingDir.deleteRecursively()
-        outboxDir.deleteRecursively()
+        if (::stagingDir.isInitialized) stagingDir.deleteRecursively()
+        if (::outboxDir.isInitialized) outboxDir.deleteRecursively()
     }
 
     private fun senderIdentity() = SenderIdentitySnapshot(

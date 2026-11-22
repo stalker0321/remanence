@@ -146,7 +146,8 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
 .draft-recipient .recipient-line span { font-size:.75rem; }
 .draft-recipient button { font-size:.8rem; }
 .draft-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.2fr); gap:2rem; }
-.workspace-nav { display:flex; flex-wrap:wrap; gap:.35rem; margin-bottom:2rem; }
+.workspace-nav { container-type:inline-size; margin-bottom:2rem; }
+.workspace-steps { display:flex; flex-wrap:wrap; gap:.35rem; }
 .workspace-nav button { border:0; border-radius:.4rem; font-size:.83rem; padding:.6rem .85rem; }
 .workspace-nav button[aria-current] { background:var(--lilac); }
 .workspace-nav button span { color:var(--muted); font-size:.75rem; }
@@ -180,7 +181,7 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
 .music-draft ul { list-style:none; margin:.8rem 0; padding:0; display:grid; gap:.5rem; }
 .music-draft li button { text-align:start; }
 .music-draft p { font-size:.8rem; color:var(--muted); }
-.front-section { margin:1.5rem 0; padding:1.5rem; background:var(--bridge); border-radius:.8rem; }
+.front-section { margin:1.5rem 0; padding:1.5rem; background:var(--bridge); border-radius:.8rem; overflow-wrap:anywhere; }
 .front-section .preview { max-height:28rem; object-fit:contain; }
 .front-section .camera-feedback { background:var(--paper); }
 .send-block { display:grid; justify-items:start; gap:.7rem; padding:1.5rem 0; margin-top:1.5rem; border-top:1px solid var(--line); overflow-wrap:anywhere; }
@@ -573,7 +574,14 @@ label.photo-pick input[type="file"] { position:absolute; inset:0; opacity:0; wid
 /* Making a postcard, second pass: one centred column of steps on a desk,
    photos beside the words, the chosen layout beside the camera. */
 .create-page:not(.recipient-picker) { max-width:60rem; margin-inline:auto; }
-.workspace-nav { flex-wrap:nowrap; gap:.25rem; }
+.workspace-steps { flex-wrap:nowrap; gap:.25rem; }
+/* The row holds its three steps down to a 320 px phone. With enlarged text it
+   is narrower than that in rem, and the steps then take rows of their own
+   instead of running over one another and past the page's edge. */
+@container (max-width:17.7rem) {
+  .workspace-steps { flex-wrap:wrap; }
+  .workspace-nav button { white-space:normal; text-align:start; }
+}
 .workspace-nav button { flex:0 1 auto; min-width:0; white-space:nowrap; }
 .workspace-nav button span { margin-inline-end:.45rem; }
 .workspace-nav button:disabled { opacity:.5; }
@@ -582,13 +590,17 @@ label.photo-pick input[type="file"] { position:absolute; inset:0; opacity:0; wid
   .content-workspace .draft-section textarea { min-height:12rem; }
 }
 .postcard-workspace { display:grid; gap:1.5rem; }
-.chosen-design { display:flex; align-items:center; gap:1rem; margin:0; padding:.8rem; background:var(--surface); border:1px solid var(--line); border-radius:.8rem; }
+/* The caption stands beside the picture while it has 6rem there. With enlarged
+   text on a phone it has not, and goes under the picture instead of pushing
+   the page wider than the screen. */
+.chosen-design { display:flex; flex-wrap:wrap; align-items:center; gap:1rem; margin:0; padding:.8rem; background:var(--surface); border:1px solid var(--line); border-radius:.8rem; }
 .chosen-design img { width:4.5rem; height:auto; aspect-ratio:360/640; object-fit:cover; border-radius:.3rem; border:1px solid var(--line); }
-.chosen-design figcaption { display:grid; gap:.2rem; font-size:.85rem; color:var(--muted); }
+.chosen-design figcaption { flex:1 1 6rem; min-width:0; display:grid; gap:.2rem; font-size:.85rem; color:var(--muted); }
 .chosen-design figcaption button { justify-self:start; padding-inline:0; min-height:36px; }
 @media (min-width:900px) {
   .postcard-workspace { grid-template-columns:minmax(0,13rem) minmax(0,1fr); align-items:start; gap:2rem; }
-  .chosen-design { flex-direction:column; align-items:stretch; padding:1rem; }
+  .chosen-design { flex-direction:column; flex-wrap:nowrap; align-items:stretch; padding:1rem; }
+  .chosen-design figcaption { flex:none; }
   .chosen-design img { width:100%; }
   .postcard-workspace .front-section,.postcard-workspace .send-block { grid-column:2; margin:0; }
   .postcard-workspace .chosen-design { grid-row:1 / span 2; }

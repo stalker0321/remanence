@@ -144,7 +144,19 @@ export interface TextMeasurement {
   hasVisualOverflow: boolean
 }
 
+export interface TextFace {
+  family: string
+  weight: number
+  italic: boolean
+}
+
 export interface TextMeasurer {
+  /**
+   * Resolves once these faces measure as themselves. A browser measures a
+   * fallback face until the bundled one has loaded; a measurer with nothing
+   * to load leaves this out.
+   */
+  ready?(faces: readonly TextFace[]): Promise<void>
   measure(request: TextMeasureRequest): TextMeasurement
 }
 
@@ -231,6 +243,17 @@ export async function prepare(
   }
   if (photos.map((photo) => photo.contentId).join('\0') !== authored.join('\0')) {
     return reject('placements must match authored content order')
+  }
+  // The fit checks below are the sender's, so they need the sender's faces:
+  // a recipient who has drawn no card yet has none of them loaded, and a
+  // fallback's widths refuse a sheet that fits.
+  const faces: TextFace[] = [noteType]
+  if (musicRegion) faces.push(musicRegion.type, { family: 'StudySans', weight: 400, italic: false })
+  for (const mark of expression.provenance ?? []) faces.push(mark)
+  try {
+    await measurer.ready?.(faces.filter((face) => fontFile(face.family, face.weight, face.italic) !== null))
+  } catch {
+    return reject('font faces did not load')
   }
   let noteScene: SceneText | null = null
   if (noteText && expression.noteRegion) {

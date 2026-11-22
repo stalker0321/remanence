@@ -217,6 +217,39 @@ describe('frozen expression adapter', () => {
     }
   })
 
+  it('measures the sealed sheet only after its faces are ready, and refuses when they do not load', async () => {
+    const { frozen } = makeFrozen('Probe note text.')
+    const result = await buildFrozenExpression(frozen, 17n)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const receiver = { ...decodeExpression(result.bytes), noteRegion: result.expression.noteRegion } as ResolvedExpression
+    const order: string[] = []
+    const asked: string[] = []
+    const waiting: TextMeasurer = {
+      async ready(faces) {
+        asked.push(...faces.map((face) => `${face.family} ${face.weight}${face.italic ? ' italic' : ''}`))
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        order.push('ready')
+      },
+      measure(request) {
+        order.push('measure')
+        return measurer.measure(request)
+      },
+    }
+    const prepared = await prepare(receiver, receiver.input.note, null, sources, waiting)
+    expect(prepared.kind).toBe('ready')
+    expect(order[0]).toBe('ready')
+    expect(order).toContain('measure')
+    const noteType = result.expression.noteType!
+    expect(asked).toContain(`${noteType.family} ${noteType.weight}${noteType.italic ? ' italic' : ''}`)
+    for (const mark of result.expression.provenance!) {
+      expect(asked).toContain(`${mark.family} ${mark.weight}${mark.italic ? ' italic' : ''}`)
+    }
+
+    const failing: TextMeasurer = { ready: () => Promise.reject(new Error('offline')), measure: measurer.measure }
+    expect(await prepare(receiver, receiver.input.note, null, sources, failing)).toEqual({ kind: 'rejected', reason: 'font faces did not load' })
+  })
+
   it('uses the bundled style note type only for an absent note (null region/text)', async () => {
     const { frozen } = makeFrozen(null)
     const result = await buildFrozenExpression(frozen, 3n)

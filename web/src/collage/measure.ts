@@ -5,11 +5,18 @@ export function textHeight(lines: number, size: number, line: number): number {
   return size + Math.max(0, lines - 1) * line
 }
 
-/** Browser measurement. Widths are the browser's; heights follow Android. Overflow still rejects the sheet. */
+/** Browser measurement. Widths are the browser's, in the bundled faces once `ready` has loaded them; heights follow Android. Overflow still rejects the sheet. */
 export function canvasTextMeasurer(doc: Document): TextMeasurer {
   const canvas = doc.createElement('canvas')
   const context = canvas.getContext('2d')
   return {
+    async ready(faces) {
+      const specs = new Set(faces.map((face) => `${face.italic ? 'italic ' : ''}${face.weight} 20px ${face.family}`))
+      await Promise.all([...specs].map(async (spec) => {
+        // No face for a bundled family means the measurement would be a fallback's.
+        if ((await doc.fonts.load(spec)).length === 0) throw new Error(`face did not load: ${spec}`)
+      }))
+    },
     measure(request) {
       if (!context) {
         return { width: request.maxWidth + 1, height: request.maxHeight + 1, hasVisualOverflow: true }

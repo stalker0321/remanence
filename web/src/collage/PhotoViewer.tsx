@@ -2,6 +2,7 @@ import { useEffect, useRef, type TouchEvent } from "react"
 import type { MessageKey } from "../i18n/catalog"
 import type { HeldSheet } from "./memory"
 import { stepIndex, swipeStep } from "./viewerNavigation"
+import { Icon } from "../ui/Primitives"
 
 const FOCUSABLE = "button:not([disabled]), [href], [tabindex]:not([tabindex=\"-1\"])"
 
@@ -93,9 +94,11 @@ export function PhotoViewer({
         </div>
         <p className="viewer-counter" aria-live="polite">{t("photoViewer")} {index + 1} / {count}</p>
         <div className="viewer-actions">
-          <button type="button" disabled={index === 0} onClick={() => onIndex(stepIndex(index, count, -1))}>{t("previousPhoto")}</button>
-          <button type="button" disabled={index === count - 1} onClick={() => onIndex(stepIndex(index, count, 1))}>{t("nextPhoto")}</button>
-          <button ref={closeButton} type="button" className="primary" onClick={onClose}>{t("back")}</button>
+          <button type="button" className="icon-action" aria-label={t("previousPhoto")} title={t("previousPhoto")} disabled={index === 0}
+            onClick={() => onIndex(stepIndex(index, count, -1))}><Icon name="previous" /></button>
+          <button type="button" className="icon-action" aria-label={t("nextPhoto")} title={t("nextPhoto")} disabled={index === count - 1}
+            onClick={() => onIndex(stepIndex(index, count, 1))}><Icon name="next" /></button>
+          <button ref={closeButton} type="button" className="icon-action" aria-label={t("closeSheet")} title={t("closeSheet")} onClick={onClose}><Icon name="close" /></button>
         </div>
       </div>
     </div>

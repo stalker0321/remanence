@@ -188,8 +188,8 @@ try {
     check("viewer opens for the original photo", await page.locator(".viewer").count() === 1)
     await page.screenshot({ path: join(outDir, "viewer-modal-900x900.png"), fullPage: true })
     check("counter shows 1 / 3", (await page.locator(".viewer-counter").textContent())?.includes("1 / 3") === true)
-    await page.waitForFunction(() => document.activeElement?.textContent?.trim() === "back")
-    check("focus enters the modal close/back action", await page.evaluate(() => document.activeElement?.textContent?.trim()) === "back")
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "close")
+    check("focus enters the modal close/back action", await page.evaluate(() => document.activeElement?.getAttribute("aria-label")) === "close")
     check("underlying stage is inert", await page.locator(".stage-main").evaluate((element) => element.hasAttribute("inert")))
     const urls = await page.evaluate(() => window.__stageViewer.photoUrls())
     const firstImage = await page.locator(".viewer-image").evaluate((image) => ({
@@ -219,9 +219,9 @@ try {
     await page.waitForTimeout(80)
 
     await page.keyboard.press("Tab")
-    check("Tab from close wraps to the first enabled modal control", await page.evaluate(() => document.activeElement?.textContent?.trim()) === "next")
+    check("Tab from close wraps to the first enabled modal control", await page.evaluate(() => document.activeElement?.getAttribute("aria-label")) === "next")
     await page.keyboard.press("Shift+Tab")
-    check("Shift+Tab wraps back to close", await page.evaluate(() => document.activeElement?.textContent?.trim()) === "back")
+    check("Shift+Tab wraps back to close", await page.evaluate(() => document.activeElement?.getAttribute("aria-label")) === "close")
 
     await trustedClick(".viewer-actions button:nth-of-type(2)")
     await trustedClick(".viewer-actions button:nth-of-type(1)")

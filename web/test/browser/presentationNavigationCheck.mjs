@@ -97,7 +97,7 @@ try {
     })
     await scenario('explicit-close-reopen-no-extra-back', width, async (page) => {
       await page.locator('.stage .hit').last().click()
-      await page.locator('.viewer button.primary').click()
+      await page.locator('.viewer-actions button:last-child').click()
       await pause(page)
       await page.locator('.stage-chrome button').last().click()
       await pause(page)

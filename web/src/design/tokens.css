@@ -466,9 +466,27 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
 .viewer-actions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
   gap: 0.5rem;
 }
+
+/* Paging on the left, closing on the right, in tab order. */
+.viewer-actions .icon-action:last-child { margin-inline-start: auto; }
+
+/* Close, save, back and paging over a card or photo: an icon in a round
+   button, its word in the accessible name and the tooltip. */
+.icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.icon-action .ui-icon { width: 1.35rem; height: 1.35rem; }
 
 
 .stage button { box-shadow:none; }

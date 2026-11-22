@@ -6,6 +6,7 @@ import type { HeldSheet } from './memory'
 import type { Scene } from './prepare'
 import { PhotoViewer } from './PhotoViewer'
 import { CardBack, LetterMark } from './CardBack'
+import { Icon } from '../ui/Primitives'
 
 export interface StagePorts {
   loadImage(url: string): Promise<PaintImage>
@@ -251,10 +252,10 @@ export function CollageStage({
         <div className="stage-chrome">
           <p className="status" role="status" aria-live="polite">{status}</p>
           <div className="actions">
-            <button type="button" disabled={paintState !== 'ready' || exporting} onClick={exportSheet}>
-              {t('exportComposition')}
-            </button>
-            <button ref={closeButton} type="button" onClick={onClose}>{t('closeSheet')}</button>
+            <button type="button" className="icon-action" aria-label={t('exportComposition')} title={t('exportComposition')}
+              disabled={paintState !== 'ready' || exporting} onClick={exportSheet}><Icon name="download" /></button>
+            <button ref={closeButton} type="button" className="icon-action" aria-label={t('closeSheet')} title={t('closeSheet')}
+              onClick={onClose}><Icon name="close" /></button>
           </div>
         </div>
       </div>

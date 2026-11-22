@@ -131,7 +131,7 @@ const back = (): HTMLElement | null => document.querySelector('.stage .sheet-bac
 const mark = (): HTMLButtonElement | null => document.querySelector('.stage button.letter-mark')
 const stageCanvas = (): HTMLCanvasElement => document.querySelector('.stage canvas') as HTMLCanvasElement
 const exportButton = (): HTMLButtonElement =>
-  [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === t('exportComposition')) as HTMLButtonElement
+  [...document.querySelectorAll('button')].find((button) => button.getAttribute('aria-label') === t('exportComposition')) as HTMLButtonElement
 
 /**
  * The stage shows this sheet's own painting: the export gate is open and the

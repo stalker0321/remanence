@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -137,7 +139,7 @@ private fun MusicSearchDialog(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.music_picker_search_title), Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, color = HoldColors.Ink)
                     IconButton(onClick = onDismiss, modifier = Modifier.testTag("music_search_close").semantics { contentDescription = closeLabel }) {
-                        Text("×", Modifier.clearAndSetSemantics {}, style = MaterialTheme.typography.headlineSmall, color = HoldColors.Ink)
+                        Icon(painterResource(R.drawable.ic_close), contentDescription = null, tint = HoldColors.Ink)
                     }
                 }
                 Spacer(Modifier.height(16.dp))

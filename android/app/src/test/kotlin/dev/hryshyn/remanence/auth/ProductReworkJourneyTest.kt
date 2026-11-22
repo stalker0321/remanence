@@ -144,10 +144,7 @@ class ProductReworkJourneyTest {
     }
 
     private fun navigate(section: ProductSection) {
-        if (rule.onAllNodesWithTag("product_navigation_menu").fetchSemanticsNodes().isNotEmpty()) {
-            rule.onNodeWithTag("product_navigation_menu").performClick()
-            rule.onNodeWithTag("navigation_destination_" + section.name).performClick()
-        } else rule.onNodeWithTag(when (section) {
+        rule.onNodeWithTag(when (section) {
             ProductSection.HOME -> "root_home_button"
             ProductSection.SENT -> "root_history_button"
             ProductSection.SETTINGS -> "root_settings_button"

@@ -36,7 +36,7 @@ fun AccessPage(onBack: (() -> Unit)? = null, backEnabled: Boolean = true,
                 val back = stringResource(R.string.hold_back)
                 IconButton(onClick = onBack, enabled = backEnabled,
                     modifier = Modifier.size(48.dp).testTag("access_back").semantics { contentDescription = back }) {
-                    Text("←", Modifier.clearAndSetSemantics {}, style = MaterialTheme.typography.titleLarge)
+                    Icon(painterResource(R.drawable.ic_back), contentDescription = null)
                 }
             }
         }

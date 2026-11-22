@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -58,7 +59,7 @@ fun HoldFlowHeader(
             modifier = Modifier.size(48.dp).testTag("flow_back_$testKey")
                 .semantics { contentDescription = backLabel },
         ) {
-            Text("←", Modifier.clearAndSetSemantics {}, style = MaterialTheme.typography.titleLarge)
+            Icon(painterResource(R.drawable.ic_back), contentDescription = null)
         }
         Spacer(Modifier.weight(1f))
         IconButton(
@@ -66,7 +67,7 @@ fun HoldFlowHeader(
             modifier = Modifier.size(48.dp).testTag("flow_exit_$testKey")
                 .semantics { contentDescription = closeLabel },
         ) {
-            Text("×", Modifier.clearAndSetSemantics {}, style = MaterialTheme.typography.titleLarge)
+            Icon(painterResource(R.drawable.ic_close), contentDescription = null)
         }
     }
 }

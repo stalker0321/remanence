@@ -17,7 +17,6 @@
     <string name="rework_verify_key">check passkey</string>
     <string name="rework_verify_retry">trying again uses the same passkey, it won’t create a new one</string>
     <string name="rework_capability_title">this passkey can’t finish setup</string>
-    <string name="rework_navigation">navigation</string>
     <string name="rework_creation_unknown_title">let’s check what was saved</string>
     <string name="rework_creation_unknown_detail">your passkey may have been saved, but we didn’t get confirmation. check before continuing, and don’t create another one</string>
     <string name="rework_finishing_title">finishing your account</string>

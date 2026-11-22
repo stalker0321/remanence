@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
@@ -41,7 +42,7 @@ fun SettingsScreen(handle: String?, locale: AppLocale, onLocale: (AppLocale) -> 
         if (showHeader) Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = gutter), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack, modifier = Modifier.size(48.dp).testTag("settings_back")
                 .semantics { contentDescription = backLabel }) {
-                Text("←", Modifier.clearAndSetSemantics {}, style = MaterialTheme.typography.titleLarge)
+                Icon(painterResource(R.drawable.ic_back), contentDescription = null)
             }
         }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())

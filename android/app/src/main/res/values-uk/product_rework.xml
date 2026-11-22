@@ -17,7 +17,6 @@
     <string name="rework_verify_key">перевірити ключ</string>
     <string name="rework_verify_retry">повтор використовує той самий ключ, нового не буде</string>
     <string name="rework_capability_title">цей ключ не підходить для налаштування</string>
-    <string name="rework_navigation">навігація</string>
     <string name="rework_creation_unknown_title">перевіримо, що збереглося</string>
     <string name="rework_creation_unknown_detail">ключ міг зберегтися, але підтвердження не прийшло. перевірте, перш ніж продовжувати, і не створюйте ще один</string>
     <string name="rework_finishing_title">завершуємо налаштування</string>

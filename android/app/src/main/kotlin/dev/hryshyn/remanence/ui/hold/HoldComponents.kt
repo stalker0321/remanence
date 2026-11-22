@@ -72,6 +72,21 @@ fun HoldFlowHeader(
     }
 }
 
+/** A drawn icon in a 48 dp button; [label] is what TalkBack reads, as the site's tooltip does. */
+@Composable
+fun HoldIconButton(
+    icon: Int,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    tint: Color = HoldColors.Ink,
+) {
+    IconButton(onClick = onClick, enabled = enabled, modifier = modifier.size(48.dp).semantics { contentDescription = label }) {
+        Icon(painterResource(icon), contentDescription = null, tint = if (enabled) tint else tint.copy(alpha = .35f))
+    }
+}
+
 @Composable
 fun HoldButton(
     onClick: () -> Unit,

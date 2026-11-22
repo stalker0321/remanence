@@ -6,11 +6,14 @@ import android.content.Intent
 import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -19,9 +22,13 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.ui.hold.HoldColors
+import dev.hryshyn.remanence.ui.hold.HoldIconButton
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -142,6 +149,7 @@ internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boole
     // Not saved state. A cancelled document picker or disposed route clears the bytes.
     val pending = remember { mutableStateOf<ByteArray?>(null) }
     val title = stringResource(R.string.capsule_export_share)
+    val working = stringResource(R.string.capsule_export_working)
     DisposableEffect(export) { onDispose { pending.value?.fill(0); pending.value = null } }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
         val bytes = pending.value
@@ -193,10 +201,10 @@ internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boole
             finally { bytes?.fill(0); file?.delete() }
         }
     }
-    HoldTextButton(onClick = { menu = true }, enabled = enabled && !busy,
-        modifier = modifier.testTag("capsule_share")) {
-        Text(stringResource(if (busy) R.string.capsule_export_working else R.string.capsule_export_share))
-    }
+    if (busy) Box(modifier.size(48.dp).testTag("capsule_share")
+        .semantics { contentDescription = working }, contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+    } else HoldIconButton(R.drawable.ic_share, title, { menu = true }, modifier.testTag("capsule_share"), enabled = enabled)
     if (menu) AlertDialog(onDismissRequest = { menu = false },
         title = { Text(title) },
         text = { Column {

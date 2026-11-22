@@ -3,7 +3,6 @@ package dev.hryshyn.remanence.ui.capsule
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -14,7 +13,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.ui.hold.HoldColors
-import dev.hryshyn.remanence.ui.hold.HoldTextButton
+import dev.hryshyn.remanence.ui.hold.HoldIconButton
 
 /** Fit the complete authored sheet, not the surrounding phone viewport. */
 internal fun capsuleSheetSize(width: Dp, height: Dp, ratio: Float): Pair<Dp, Dp> {
@@ -34,9 +33,7 @@ internal fun CapsuleSheetFrame(export: CapsuleImageExport, enabled: Boolean, rat
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             CapsuleImageExportButton(export, enabled)
-            HoldTextButton(onClick = onClose, modifier = Modifier.testTag(closeTag)) {
-                Text(stringResource(R.string.hold_close))
-            }
+            HoldIconButton(R.drawable.ic_close, stringResource(R.string.hold_close), onClose, Modifier.testTag(closeTag))
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
             contentAlignment = Alignment.Center) {

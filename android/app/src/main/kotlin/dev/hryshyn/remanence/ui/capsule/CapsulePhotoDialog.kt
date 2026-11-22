@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Text
-import androidx.compose.material3.IconButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -17,7 +16,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
@@ -32,7 +30,7 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.window.SecureFlagPolicy
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.ui.hold.HoldColors
-import dev.hryshyn.remanence.ui.hold.HoldTextButton
+import dev.hryshyn.remanence.ui.hold.HoldIconButton
 import dev.hryshyn.remanence.ui.motion.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -134,10 +132,9 @@ private fun OriginalPhotoWindow(
             }.testTag("capsule_photo_dialog"), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                HoldTextButton(onClick = ::dismiss, modifier = Modifier.focusRequester(closeFocus)
-                    .focusProperties { canFocus = true }.testTag("capsule_photo_close")) {
-                    Text(stringResource(R.string.hold_close), color = HoldColors.Paper)
-                }
+                HoldIconButton(R.drawable.ic_close, stringResource(R.string.hold_close), ::dismiss,
+                    Modifier.focusRequester(closeFocus).focusProperties { canFocus = true }.testTag("capsule_photo_close"),
+                    tint = HoldColors.Paper)
             }
             // Whole available stage, no percentage constraint. Chrome never
             // covers an edge of the original, including tall images/landscape.
@@ -155,16 +152,12 @@ private fun OriginalPhotoWindow(
             }
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { move(-1) }, enabled = destination > 0,
-                    modifier = Modifier.testTag("capsule_photo_previous").semantics { contentDescription = previousLabel }) {
-                    Text("←", Modifier.clearAndSetSemantics {}, color = HoldColors.Paper.copy(alpha = if (destination > 0) 1f else .35f))
-                }
+                HoldIconButton(R.drawable.ic_previous, previousLabel, { move(-1) }, Modifier.testTag("capsule_photo_previous"),
+                    enabled = destination > 0, tint = HoldColors.Paper)
                 Text("${pager.settledPage + 1} / ${photoIds.size}", color = HoldColors.Paper,
                     modifier = Modifier.testTag("capsule_photo_page_count").semantics { contentDescription = positionLabel })
-                IconButton(onClick = { move(1) }, enabled = destination < photoIds.lastIndex,
-                    modifier = Modifier.testTag("capsule_photo_next").semantics { contentDescription = nextLabel }) {
-                    Text("→", Modifier.clearAndSetSemantics {}, color = HoldColors.Paper.copy(alpha = if (destination < photoIds.lastIndex) 1f else .35f))
-                }
+                HoldIconButton(R.drawable.ic_next, nextLabel, { move(1) }, Modifier.testTag("capsule_photo_next"),
+                    enabled = destination < photoIds.lastIndex, tint = HoldColors.Paper)
             }
         }
     }

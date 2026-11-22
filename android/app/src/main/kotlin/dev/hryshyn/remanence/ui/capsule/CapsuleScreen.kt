@@ -1,5 +1,10 @@
 package dev.hryshyn.remanence.ui.capsule
 
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import dev.hryshyn.remanence.R
 import androidx.compose.foundation.Image
@@ -12,14 +17,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
@@ -36,15 +38,14 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
 import dev.hryshyn.remanence.ui.hold.HoldColors
+import dev.hryshyn.remanence.ui.hold.HoldIconButton
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -367,8 +368,9 @@ fun CapsuleScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                HoldTextButton(onClick = { if (state.canRewind(currentIndex)) currentIndex-- },
-                    enabled = state.canRewind(currentIndex), modifier = Modifier.testTag("capsule_previous_button")) { Text(stringResource(R.string.hold_previous_photo)) }
+                HoldIconButton(R.drawable.ic_previous, stringResource(R.string.hold_previous_photo),
+                    { if (state.canRewind(currentIndex)) currentIndex-- },
+                    Modifier.testTag("capsule_previous_button"), enabled = state.canRewind(currentIndex))
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (underlayerEnabled) {
                         HoldTextButton(onClick = { reveal = if (reveal < .5f) 1f else 0f }, modifier = Modifier.testTag("capsule_reveal_button")) {
@@ -378,17 +380,18 @@ fun CapsuleScreen(
                     Text("${currentIndex + 1} / ${state.photoCount}", style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.testTag("capsule_page_indicator"))
                 }
-                HoldTextButton(onClick = { if (state.canAdvance(currentIndex)) currentIndex++ },
-                    enabled = state.canAdvance(currentIndex), modifier = Modifier.testTag("capsule_next_button")) { Text(stringResource(R.string.hold_next_photo)) }
+                HoldIconButton(R.drawable.ic_next, stringResource(R.string.hold_next_photo),
+                    { if (state.canAdvance(currentIndex)) currentIndex++ },
+                    Modifier.testTag("capsule_next_button"), enabled = state.canAdvance(currentIndex))
             }
         }
         CapsuleImageExportButton(export, enabled = pager.displayedBitmap != null && !dragging,
             modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
-        HoldTextButton(
-            onClick = { state.close(); onClose() },
-            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-                .background(HoldColors.Paper.copy(alpha = .92f), androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
+        HoldIconButton(
+            R.drawable.ic_close, stringResource(R.string.hold_close), { state.close(); onClose() },
+            Modifier.align(Alignment.TopEnd).padding(8.dp)
+                .background(HoldColors.Paper.copy(alpha = .92f), androidx.compose.foundation.shape.CircleShape)
                 .testTag("capsule_close_button"),
-        ) { Text(stringResource(R.string.hold_close)) }
+        )
     }
 }

@@ -493,11 +493,24 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
     padding:.35rem max(.5rem,env(safe-area-inset-right)) max(.35rem,env(safe-area-inset-bottom)) max(.5rem,env(safe-area-inset-left));
     background:var(--paper); border-top:1px solid var(--line);
   }
-  /* Same tabs as the Android app: text only, home/history/settings, signed in only. */
-  .main-nav a { flex:1 1 0; min-width:0; padding:.55rem .2rem; font-size:.8rem; text-align:center; justify-content:center; }
-  .main-nav a span { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:.25rem .9rem; border-radius:1rem; }
-  .main-nav a[aria-current] { background:transparent; }
-  .main-nav a[aria-current] span { background:var(--lilac); }
+  /* Same tabs as the Android app: home/history/settings, signed in only; an
+     icon on a pill that marks the current one, its word under it. */
+  .main-nav { container-type:inline-size; }
+  .main-nav a { flex:1 1 0; flex-direction:column; gap:.2rem; min-width:0; padding:.35rem .1rem; font-size:.8rem; text-align:center; justify-content:center; color:var(--muted); }
+  .main-nav a:hover { background:transparent; }
+  .main-nav a[aria-current] { background:transparent; color:var(--ink); }
+  .main-nav .ui-icon { display:block; width:min(1.5rem,30px); height:min(1.5rem,30px); padding:min(.3rem,6px) min(1.05rem,21px); border-radius:2rem; box-sizing:content-box; }
+  .main-nav a[aria-current] .ui-icon { background:var(--lilac); }
+  .main-nav a span { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+}
+/* When the longest word of the language no longer fits its third of the bar
+   (enlarged text, a narrow phone), every word goes at once and the icons
+   stay; the words still name the tabs to a screen reader. Widths are the
+   words in HoldSans at .8rem plus the tab's padding. */
+@container (max-width:10.5rem) { :lang(en) .main-nav a span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); } }
+@container (max-width:14.2rem) { :lang(ru) .main-nav a span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); } }
+@container (max-width:19.4rem) { :lang(uk) .main-nav a span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); } }
+@media (max-width:700px) {
   .main-nav .nav-phone { display:flex; }
   .main-nav .nav-wide { display:none; }
   .main-nav--signed-out { display:none; }

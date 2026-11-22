@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { follow } from './follow.mjs'
 const [web, proof] = process.argv.slice(2)
 const { fixtureHost } = await import(pathToFileURL(join(web, 'test/browser/fixtureHost.mjs')))
 const host = await fixtureHost(web, proof, 'candidateUsability.page.tsx')
@@ -53,7 +54,7 @@ try {
     }
     for (const route of ['scan', 'create']) {
       if (route === 'create') {
-        await page.locator('.main-nav a[href="/create"]').click()
+        await follow(page, '/create')
         await page.evaluate(() => window.candidateUI.unlock())
         await page.locator('form.handle-form input').fill('friend_qa')
         await page.locator('form.handle-form button[type=submit]').click()

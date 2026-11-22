@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fixtureHost } from './fixtureHost.mjs'
+import { follow } from './follow.mjs'
 
 const [web, proof] = process.argv.slice(2)
 const modes = (process.env.T364_MODES || 'gated,same-turn,queued,read-error,normalize-error,queued-error,cancel-intake,picker-cancel,recipient,owner,unmount').split(',')
@@ -39,7 +40,8 @@ async function capture(page, label) {
   facts.push({ mode, label, calls: [...calls],
     state: await page.evaluate(() => window.photoIntakeFixture.state()),
     send: await page.evaluate(() => window.sendFeedbackFixture.state()),
-    notice: await page.locator('main > .status[role=alert]').innerText(),
+    // Home, where the 'unmount' scenario is captured, carries no notice.
+    notice: await page.locator('main > .notice[role=alert]').count() ? await page.locator('main > .notice[role=alert]').innerText() : null,
   })
   await page.screenshot({ path: join(proof, `${mode}-${label}.png`), fullPage: true })
   if (await page.locator('.send-block').count()) await page.locator('.send-block').screenshot({ path: join(proof, `${mode}-${label}-send.png`) })
@@ -158,10 +160,10 @@ try {
           await chooseRecipient(page)
           await freshFront(page, 3)
         } else if (mode === 'unmount') {
-          await page.locator('.card a[href="/"]').last().click()
+          await follow(page, '/')
           await page.waitForFunction(() => document.querySelector('[data-testid=send_button]') === null)
           await capture(page, 'left')
-          await page.locator('a[href="/create"]').click()
+          await follow(page, '/create')
           await freshFront(page, 3)
         } else {
           await page.evaluate(() => window.photoIntakeFixture.replaceOwner())
@@ -182,7 +184,7 @@ try {
           const state = await page.evaluate(() => window.photoIntakeFixture.state())
           assert.equal(state.settledIntakes.find((work) => work.names.includes('intake-D.jpg')).added, 0)
           assert.equal(state.intakeBusy, 'true')
-          assert.equal(await page.locator('main > .status[role=alert]').innerText(), await page.evaluate(() => window.photoIntakeFixture.messages().photoLoading))
+          assert.equal(await page.locator('main > .notice[role=alert]').innerText(), await page.evaluate(() => window.photoIntakeFixture.messages().photoLoading))
           assert.equal(state.photoIds.length, mode === 'owner' ? 2 : 3)
           assert.equal(state.begins.length, 0)
           assert.equal(publicationCalls().length, 0)
@@ -221,7 +223,7 @@ try {
           assert.deepEqual(state.hashes, initial.hashes)
           assert.equal(state.frozen, initial.frozen)
           assert.equal(state.disabled, false)
-          if (mode !== 'cancel-intake') assert.equal(await page.locator('main > .status[role=alert]').innerText(),
+          if (mode !== 'cancel-intake') assert.equal(await page.locator('main > .notice[role=alert]').innerText(),
             await page.evaluate(() => window.photoIntakeFixture.messages().photoRejected))
         })
         await sendCurrent(page, unchanged ? 3 : 4, unchanged)

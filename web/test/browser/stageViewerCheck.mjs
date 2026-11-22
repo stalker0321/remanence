@@ -53,7 +53,9 @@ const server = createServer(async (req, res) => {
   const path = resolve(dist, "." + decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname))
   if (!path.startsWith(dist + sep)) { res.writeHead(403).end(); return }
   try {
-    res.writeHead(200, { "content-type": types[extname(path)] ?? "application/octet-stream", "cache-control": "no-store" }).end(await readFile(path))
+    // Read first: a missing file must reach the 404 below, not die on a second writeHead.
+    const found = await readFile(path)
+    res.writeHead(200, { "content-type": types[extname(path)] ?? "application/octet-stream", "cache-control": "no-store" }).end(found)
   } catch {
     res.writeHead(404).end()
   }

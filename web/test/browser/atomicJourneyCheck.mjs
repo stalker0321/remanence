@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fixtureHost } from './fixtureHost.mjs'
+import { follow } from './follow.mjs'
 const [web, proof] = process.argv.slice(2)
 const host = await fixtureHost(web, proof, 'atomicJourney.page.tsx')
 const checks = [], errors = [], check = (name, ok) => { assert.ok(ok, name); checks.push({ name, ok: true }) }
@@ -13,6 +14,8 @@ const call = (name, value) => page.evaluate(([name, value]) => window.atomic[nam
 const state = () => call('state')
 const button = async (key, language = 'en') => page.getByRole('button', { name: await page.evaluate(([key, language]) => window.atomic.messages[language][key], [key, language]), exact: true })
 const phase = (value) => page.waitForFunction((value) => window.atomic.state().setup === value && !document.querySelector('[aria-disabled=true]'), value)
+// A finished sign-in has no "ready" stop: it ends where the person was going, or at home.
+const ready = (path = '/') => page.waitForFunction((path) => window.atomic.state().keys === true && location.pathname === path, path)
 async function fresh() { await page.goto(`${host.url}#/account`); await page.reload(); await page.waitForFunction(() => window.atomic) }
 async function begin(language = 'en') { await (await button('continueGoogle', language)).click(); await phase('handle') }
 async function create(language = 'en', handle = 'ada', held = false) {
@@ -45,12 +48,13 @@ async function shot(name) {
   } else check(`${name}: no horizontal overflow`, geometry.scroll <= geometry.width)
 }
 try {
-  for (const [route, gate, next] of [['create', 'signInToMake', 'returnMake'], ['scan', 'signInToOpen', 'returnOpen'], ['history', 'signInToHistory', 'returnHistory']]) {
-    await fresh(); await page.locator(`.main-nav a[href="/${route}"]`).click()
+  for (const [route, gate] of [['create', 'signInToMake'], ['scan', 'signInToOpen'], ['history', 'signInToHistory']]) {
+    await fresh()
+    // A signed-out phone has no menu and its home offers "make" and "open" only: history is reached by its address.
+    if (route === 'history') { await page.goto(`${host.url}history`); await page.waitForFunction(() => window.atomic) } else await follow(page, `/${route}`)
     await page.getByRole('link', { name: await page.evaluate(key => window.atomic.messages.en[key], gate), exact: true }).click()
-    await begin(); await save(); await phase('ready')
-    const intended = page.getByRole('link', { name: await page.evaluate(key => window.atomic.messages.en[key], next), exact: true })
-    check(`${route}: successful onboarding retains original destination`, await intended.getAttribute('href') === `/${route}`)
+    await begin(); await save(); await ready(`/${route}`)
+    check(`${route}: successful onboarding ends at the original destination`, (await state()).keys === true && new URL(page.url()).pathname === `/${route}`)
   }
   for (const language of ['en', 'ru', 'uk']) {
     await fresh(); await call('language', language); await begin(language)
@@ -70,9 +74,10 @@ try {
   const trigger = await button('atomicVerify'); await trigger.focus(); await page.keyboard.press('Enter')
   await page.waitForFunction(() => window.atomic.reached() === 'passkey/get'); await page.keyboard.press('Enter')
   check('duplicate Enter does not repeat provider/commit', (await state()).creates === 1 && (await state()).assertions === 1 && (await state()).attempts === 0)
-  await call('release'); await phase('ready')
+  await call('release'); await ready()
   const saved = await call('saved'); check('same-document original key decrypts', await call('prove', saved.encrypted))
-  await page.reload(); await page.waitForFunction(() => window.atomic); await call('useSaved', saved.publicIntent)
+  // The finished sign-in went home; a new document at the account page signs in again.
+  await page.goto(`${host.url}account`); await page.waitForFunction(() => window.atomic); await call('useSaved', saved.publicIntent)
   await (await button('continueGoogle')).click(); await phase('existing')
   await (await button('openWithPasskey')).click(); await page.waitForFunction(() => window.atomic.state().keys)
   check('new document restores original key and decrypts prior ciphertext without generation', await call('prove', saved.encrypted) && (await state()).creates === 0 && (await state()).attempts === 0)
@@ -87,7 +92,7 @@ try {
     }
     await call('mode', { noPrf: false, cancelProvider: false, finalMode: 'ok' })
     if (config.noPrf) await (await button('atomicVerifyAgain')).click(); else await save('en', 'corrected')
-    await phase('ready')
+    await ready()
     check(`${expected}: retry reuses verified credential`, (await state()).creates === 1)
   }
   for (const mode of ['wrong-account', 'wrong-bundle', 'wrong-credential', 'wrong-anchor', 'corrupt', 'offline']) {

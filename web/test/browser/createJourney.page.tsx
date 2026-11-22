@@ -353,18 +353,19 @@ async function runChecks(h: Harness, files: File[], spare: File, status: HTMLEle
   await waitFor(() => canvasState() === 'ready', 'restored composer paint')
   assert('re-adding to 3 restores the composer', canvasState() === 'ready')
 
-  // 6. Music selected disables freeze (unsupported family) and drops any hold.
+  // 6. A song is part of the card: selecting one drops any hold, and the
+  //    card laid out with the song can be held like any other.
   await waitFor(() => !__disabled('creator-freeze'), 'freeze armed again')
   __click('creator-freeze')
   await waitFor(() => __textOf('creator-frozen').length > 0, 'freeze before music')
   assert('freeze before music', __textOf('creator-frozen').length > 0)
   h.setMusic(true)
-  await waitFor(() => __disabled('creator-freeze'), 'music disables freeze')
-  assert('music selection disables the unsupported-family freeze', __disabled('creator-freeze'))
   await waitFor(() => document.querySelector('[data-testid="creator-frozen"]') === null, 'music drops hold')
   assert('music selection drops the held selection', document.querySelector('[data-testid="creator-frozen"]') === null)
+  await waitFor(() => canvasState() === 'ready' && !__disabled('creator-freeze'), 'song layout can be held')
+  assert('a card with a song paints and can be held', canvasState() === 'ready' && !__disabled('creator-freeze'))
   h.setMusic(false)
-  await waitFor(() => !__disabled('creator-freeze'), 'music off re-arms')
+  await waitFor(() => canvasState() === 'ready' && !__disabled('creator-freeze'), 'music off re-arms')
 
   // 7. Reorder keeps a ready composer.
   h.move()

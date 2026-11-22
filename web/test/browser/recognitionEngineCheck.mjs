@@ -59,6 +59,8 @@ const dist = join(work, 'dist')
 const vendor = join(web, 'public', 'opencv')
 if (!existsSync(vendor)) throw new Error(`vendored opencv assets missing at ${vendor}`)
 await cp(vendor, join(dist, 'opencv'), { recursive: true })
+// The scan path also loads the frozen matcher's vocabulary and model from the same origin.
+await cp(join(web, 'public', 'frozen-matcher'), join(dist, 'frozen-matcher'), { recursive: true })
 
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.otf': 'font/otf', '.wasm': 'application/wasm' }
 const server = createServer(async (req, res) => {
@@ -71,7 +73,9 @@ const server = createServer(async (req, res) => {
       return
     }
     const file = path === dist ? join(dist, 'index.html') : path
-    res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(await readFile(file))
+    // Read first: a missing file must reach the 404 below, not die on a second writeHead.
+    const found = await readFile(file)
+    res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(found)
   } catch {
     res.writeHead(404).end('missing')
   }
@@ -115,7 +119,7 @@ try {
       assert.equal(status, 'done', `page status "${status}"`)
       assert.ok(result, 'window.__recognitionEngine missing')
       for (const item of result.assertions) assert.equal(item.ok, true, `recognition-engine :: ${item.name} ${item.detail ?? ''}`)
-      assert.ok(result.assertions.length >= 8, `expected >=8 assertions, got ${result.assertions.length}`)
+      assert.ok(result.assertions.length >= 13, `expected >=13 assertions, got ${result.assertions.length}`)
       assert.deepEqual(result.failures, [])
       assert.equal(result.report?.pass, true, 'report.pass must be true')
       assert.equal(result.report?.unique?.kind, 'one', 'unique result')

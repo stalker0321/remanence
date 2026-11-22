@@ -587,7 +587,9 @@ async function main(): Promise<void> {
         JSON.stringify(paintedDestination),
       )
 
-      const noteCalls = traces.fillText.filter((call) => call.font.includes('StudySans'))
+      // The brand mark may be set in the note's own family: a call is a note row unless it paints a frozen mark.
+      const paintsMark = (call: { text: string; font: string }): boolean => plan.provenance.some((mark) => mark.text === call.text && call.font.includes(mark.family))
+      const noteCalls = traces.fillText.filter((call) => call.font.includes('StudySans') && !paintsMark(call))
       if (plan.note === null) {
         assert(`${label}: absent note paints no rows`, noteCalls.length === 0, JSON.stringify(noteCalls))
       } else {
@@ -597,7 +599,7 @@ async function main(): Promise<void> {
         const words = noteCalls.map((call) => call.text).join(' ').split(/\s+/).filter((word) => word.length > 0)
         assert(`${label}: every note word present`, JSON.stringify(words) === JSON.stringify((snapshot.note ?? '').split(/\s+/).filter((word) => word.length > 0)), JSON.stringify(words))
       }
-      const provenanceTexts = traces.fillText.filter((call) => call.font.includes('StudySerif')).map((call) => call.text)
+      const provenanceTexts = traces.fillText.filter((call) => plan.provenance.some((mark) => call.font.includes(mark.family))).map((call) => call.text)
       assert(`${label}: receiver paints the frozen provenance text`, plan.provenance.every((mark) => provenanceTexts.includes(mark.text)), JSON.stringify(provenanceTexts))
     }
 
@@ -738,7 +740,9 @@ async function main(): Promise<void> {
             )
           })
           assert(`${label}: decrypted scene style = frozen style`, openedScene.styleId === snapshot.styleId, `${openedScene.styleId} vs ${snapshot.styleId}`)
-          const noteCalls = traces.fillText.filter((call) => call.font.includes('StudySans'))
+          // The brand mark may be set in the note's own family: a call is a note row unless it paints a frozen mark.
+          const paintsMark = (call: { text: string; font: string }): boolean => plan.provenance.some((mark) => mark.text === call.text && call.font.includes(mark.family))
+          const noteCalls = traces.fillText.filter((call) => call.font.includes('StudySans') && !paintsMark(call))
           if (plan.note === null) {
             assert(`${label}: decrypted-paint absent note paints no rows`, noteCalls.length === 0, JSON.stringify(noteCalls))
           } else {
@@ -746,7 +750,7 @@ async function main(): Promise<void> {
             const expectedRows = plan.note.rows.map((row) => ({ text: row.text, x: row.x, baseline: row.baseline }))
             assert(`${label}: decrypted-paint note rows/words/baselines = captured preview`, JSON.stringify(paintedRows) === JSON.stringify(expectedRows), JSON.stringify({ paintedRows, expectedRows }))
           }
-          const provenanceTexts = traces.fillText.filter((call) => call.font.includes('StudySerif')).map((call) => call.text)
+          const provenanceTexts = traces.fillText.filter((call) => plan.provenance.some((mark) => call.font.includes(mark.family))).map((call) => call.text)
           assert(`${label}: decrypted-paint provenance = captured preview`, plan.provenance.every((mark) => provenanceTexts.includes(mark.text)), JSON.stringify(provenanceTexts))
         } finally {
           for (const bitmap of decryptedBitmaps) bitmap.close()
@@ -883,7 +887,9 @@ async function main(): Promise<void> {
             )
           })
           assert(`${label}: production seal scene style = frozen style`, openedScene.styleId === snapshot.styleId, `${openedScene.styleId} vs ${snapshot.styleId}`)
-          const noteCalls = traces.fillText.filter((call) => call.font.includes('StudySans'))
+          // The brand mark may be set in the note's own family: a call is a note row unless it paints a frozen mark.
+          const paintsMark = (call: { text: string; font: string }): boolean => plan.provenance.some((mark) => mark.text === call.text && call.font.includes(mark.family))
+          const noteCalls = traces.fillText.filter((call) => call.font.includes('StudySans') && !paintsMark(call))
           if (plan.note === null) {
             assert(`${label}: production seal absent note paints no rows`, noteCalls.length === 0, JSON.stringify(noteCalls))
           } else {
@@ -891,7 +897,7 @@ async function main(): Promise<void> {
             const expectedRows = plan.note.rows.map((row) => ({ text: row.text, x: row.x, baseline: row.baseline }))
             assert(`${label}: production seal note rows/baselines = captured preview`, JSON.stringify(paintedRows) === JSON.stringify(expectedRows), JSON.stringify({ paintedRows, expectedRows }))
           }
-          const provenanceTexts = traces.fillText.filter((call) => call.font.includes('StudySerif')).map((call) => call.text)
+          const provenanceTexts = traces.fillText.filter((call) => plan.provenance.some((mark) => call.font.includes(mark.family))).map((call) => call.text)
           assert(`${label}: production seal provenance = captured preview`, plan.provenance.every((mark) => provenanceTexts.includes(mark.text)), JSON.stringify(provenanceTexts))
         } finally {
           for (const bitmap of decryptedBitmaps) bitmap.close()

@@ -290,6 +290,8 @@ function App(props: {
 }): React.JSX.Element {
   const [musicSelected, setMusicSelected] = useState(false)
   const PAGE_TRACK = PAGE_SONG
+  // One style has one layout; the pager is exercised with every style on offer.
+  const [everyStyle, setEveryStyle] = useState(false)
   // Held in state so toggling swaps the measurer prop WITHOUT remounting the
   // component (same root, same element position → state and canvas persist).
   const [measurer, setMeasurer] = useState<TextMeasurer>(props.measurerA)
@@ -298,6 +300,9 @@ function App(props: {
     <div>
       <button type="button" data-testid="page-music-toggle" onClick={() => setMusicSelected((value) => !value)}>
         music:{musicSelected ? 'on' : 'off'}
+      </button>
+      <button type="button" data-testid="page-style-toggle" onClick={() => setEveryStyle((value) => !value)}>
+        styles:{everyStyle ? 'every' : 'press'}
       </button>
       <button type="button" data-testid="page-photos-cycle" onClick={props.onCyclePhotos}>
         photos
@@ -341,7 +346,7 @@ function App(props: {
         photos={props.photos}
         note={props.noteOverride ?? (NOTES[props.noteIndex] ?? null)}
         track={musicSelected ? PAGE_TRACK : null}
-        styleId="press"
+        {...(everyStyle ? {} : { styleId: 'press' })}
         senderHandle={props.senderOverride}
         recipient={{ userId: ACCOUNT, keyBundleId: BUNDLE, directoryVersion: '0'.repeat(16), handle: RECIPIENT_HANDLE }}
         ownerId={ACCOUNT}
@@ -632,12 +637,19 @@ function lastFrozen(): { frozen: boolean; branch: string | null; snapshot: Creat
     const canvas = query<HTMLCanvasElement>('[data-testid="creator-canvas"]')
     assert('composer mounted with preview canvas', canvas.width === 360 && canvas.height === 640)
   })()
+  // In one style there is one layout and nothing to page through.
+  assert('one style offers one layout', query<HTMLButtonElement>('[data-testid="creator-next"]').disabled, textOf('creator-count'))
+  click('page-style-toggle')
+  await waitFor(() => canvasState() === 'ready' && !query<HTMLButtonElement>('[data-testid="creator-next"]').disabled, 'every style offers several layouts')
+  const firstBranch = textOf('creator-branch')
   click('creator-next')
   await waitFor(() => /\b2\b/.test(textOf('creator-count')), 'pager advance')
-  assert('pager next changes branch', textOf('creator-branch').length > 0)
+  assert('pager next changes branch', textOf('creator-branch').length > 0 && textOf('creator-branch') !== firstBranch, textOf('creator-branch'))
   click('creator-prev')
   await waitFor(() => /\b1\b/.test(textOf('creator-count')), 'pager return')
-  assert('pager prev returns', true)
+  assert('pager prev returns', textOf('creator-branch') === firstBranch, textOf('creator-branch'))
+  click('page-style-toggle')
+  await waitFor(() => canvasState() === 'ready' && query<HTMLButtonElement>('[data-testid="creator-next"]').disabled, 'back to one style')
   click('creator-slot-1')
   await waitFor(() => {
     try {
@@ -659,7 +671,7 @@ function lastFrozen(): { frozen: boolean; branch: string | null; snapshot: Creat
   await waitFor(() => sameReadout(readout(), [1.15, 3, 0]), 'zoomed pan applies')
   assert('stored transform accumulates pans inside the frozen domain', sameReadout(readout(), [1.15, 3, 0]))
   await waitFor(() => canvasState() === 'ready', 'zoomed pan repaints')
-  assert('repeated pans keep candidates and repaint honestly', document.querySelector('[data-testid="creator-empty"]') === null)
+  assert('repeated pans keep candidates and repaint honestly', document.querySelector('[data-testid="creator-empty"]') === null && document.querySelector('[data-testid="creator-no-fit"]') === null)
   click('creator-reset')
   await waitFor(() => sameReadout(readout(), IDENTITY_READOUT), 'reset repaint')
   await waitFor(() => canvasState() === 'ready', 'reset paint')
@@ -842,22 +854,21 @@ function lastFrozen(): { frozen: boolean; branch: string | null; snapshot: Creat
       return false
     }
   }, 'freeze again')
+  // A song is part of the card: choosing one drops the hold, the card is
+  // laid out again with the song's band, and that card can be held.
   click('page-music-toggle')
-  await waitFor(() => {
-    try {
-      return textOf('creator-freeze-blocked').length > 10
-    } catch {
-      return false
-    }
-  }, 'music notice')
-  assert('music shows the honest unsupported notice', true)
   await waitFor(() => document.querySelector('[data-testid="creator-frozen"]') === null, 'music invalidation')
   assert('music selection drops the held freeze', document.querySelector('[data-testid="creator-frozen"]') === null)
   assert('parent sees the music null', lastFrozen()?.frozen === false)
-  assert('freeze is disabled with music selected', query<HTMLButtonElement>('[data-testid="creator-freeze"]').disabled)
+  await waitFor(() => { try { return canvasState() === 'ready' && !query<HTMLButtonElement>('[data-testid="creator-freeze"]').disabled } catch { return false } }, 'song layout arms freeze')
+  const songTexts = ((window as unknown as { __fillTextCalls?: Array<{ text: string }> }).__fillTextCalls ?? []).map((call) => call.text)
+  assert('the song is written on the card', songTexts.some((text) => text.toLowerCase().includes(PAGE_SONG.title.toLowerCase())), JSON.stringify(songTexts.slice(-8)))
+  click('creator-freeze')
+  await waitFor(() => { try { return textOf('creator-frozen').length > 0 } catch { return false } }, 'freeze with the song')
+  assert('the hold carries the song', lastFrozen()?.snapshot?.track?.trackId === PAGE_SONG.trackId, JSON.stringify(lastFrozen()?.snapshot?.track ?? null))
   click('page-music-toggle')
-  await waitFor(() => document.querySelector('[data-testid="creator-freeze-blocked"]') === null, 'music off')
-  assert('music off does not resurrect a dropped freeze', lastFrozen()?.frozen === false)
+  await waitFor(() => document.querySelector('[data-testid="creator-frozen"]') === null, 'music off')
+  assert('music off drops the hold made with the song', lastFrozen()?.frozen === false)
   await waitFor(() => { try { return !(document.querySelector('[data-testid="creator-freeze"]') as HTMLButtonElement | null)?.disabled } catch { return false } }, 'freeze enabled');
   click('creator-freeze')
   await waitFor(() => {
@@ -901,8 +912,9 @@ function lastFrozen(): { frozen: boolean; branch: string | null; snapshot: Creat
   }, 'freeze swapped set')
   click('page-photos-trim')
   await waitFor(() => document.querySelector('[data-testid="creator-canvas"]') === null, 'two-photo unavailable')
-  assert('two photos refuse the plan honestly (no canvas, no stale paint)', document.querySelector('[data-testid="creator-empty"]') !== null)
-  assert('refused plan explains itself instead of a blank frame', document.querySelector('[data-testid="creator-paint-error"]') !== null)
+  // No layout takes two photos: the composer says none fits, in words, with nothing painted.
+  assert('two photos refuse the plan honestly (no canvas, no stale paint)', document.querySelector('[data-testid="creator-no-fit"]') !== null)
+  assert('refused plan explains itself instead of a blank frame', textOf('creator-no-fit').length > 10)
   assert('trim drops the held freeze', lastFrozen()?.frozen === false)
   click('page-photos-restore')
   await waitFor(() => canvasState() === 'ready', 'restored set paints')
@@ -971,12 +983,12 @@ function lastFrozen(): { frozen: boolean; branch: string | null; snapshot: Creat
   click('page-note-cycle')
   await waitFor(() => {
     try {
-      return query('[data-testid="creator-empty"]') !== null
+      return query('[data-testid="creator-no-fit"]') !== null
     } catch {
       return false
     }
   }, 'extreme note refuses the plan')
-  assert('unplannable note shows the honest empty state, not a stale preview', query('[data-testid="creator-paint-error"]') !== null)
+  assert('unplannable note shows the honest empty state, not a stale preview', textOf('creator-no-fit').length > 10)
   assert('extreme note drops the held freeze', lastFrozen()?.frozen === false)
   await waitFor(() => document.querySelector('[data-testid="creator-canvas"]') === null, 'plan refusal clears canvas')
   assert('plan refusal leaves no canvas behind', document.querySelector('[data-testid="creator-canvas"]') === null)
@@ -996,7 +1008,8 @@ function lastFrozen(): { frozen: boolean; branch: string | null; snapshot: Creat
 
   // --- r3: the creator note must PAINT every laid-out row/word ---
   const traced = (): FillTextCall[] => (window as unknown as { __fillTextCalls?: FillTextCall[] }).__fillTextCalls ?? []
-  const noteRows = (): FillTextCall[] => traced().filter((call) => call.font.includes('StudySans'))
+  // The house mark is set in the note's family; it is not one of the note's rows.
+  const noteRows = (): FillTextCall[] => traced().filter((call) => call.font.includes('StudySans') && call.text.toLowerCase() !== 'remanence')
   const armFreeze = async (label: string): Promise<void> => {
     await waitFor(() => {
       try {
@@ -1045,9 +1058,10 @@ function lastFrozen(): { frozen: boolean; branch: string | null; snapshot: Creat
   // One unbreakable over-wide token: refuse honestly, never clip as ready.
   traced().length = 0
   click('page-note-unbreakable')
-  await waitFor(() => canvasState() === 'refused-note', 'unbreakable note refuses')
-  assert('over-wide unbreakable note refuses instead of clipping', canvasState() === 'refused-note')
-  assert('unbreakable note disables freeze', query<HTMLButtonElement>('[data-testid="creator-freeze"]').disabled)
+  // A layout is offered only when its note fits, so none is: no canvas, nothing to hold.
+  await waitFor(() => document.querySelector('[data-testid="creator-no-fit"]') !== null, 'unbreakable note refuses')
+  assert('over-wide unbreakable note refuses instead of clipping', document.querySelector('[data-testid="creator-canvas"]') === null && textOf('creator-no-fit').length > 10)
+  assert('unbreakable note leaves nothing to freeze', document.querySelector('[data-testid="creator-freeze"]') === null)
 
   // Restore a normal short note.
   traced().length = 0

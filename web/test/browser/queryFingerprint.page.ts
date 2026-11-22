@@ -1,8 +1,11 @@
 /**
  * T343 identity-free receiving-query producer (Chromium-only, synthetic).
  *
- * A textured JPEG goes through the NEW shared query seam (plain StillCapture,
- * no recipient identity) and the unchanged sender wrapper. Both wires must be
+ * A textured JPEG goes through the shared query seam (plain StillCapture, no
+ * recipient identity) and the sender wrapper. In production both are the
+ * frozen postcard matcher (S3), where the two roles describe the card
+ * differently; the contour pipeline this gate was written for stays behind
+ * the `runtime` seam and is entered through it here. There both wires must be
  * byte-identical for the same source; the query output carries no owner fields.
  * The query wire then feeds the accepted connected single-side pipeline
  * (`matchSide` with the real pinned matcher/geometry) against the same-frame
@@ -14,7 +17,8 @@ import { produceQueryFingerprint } from '../../src/scan/queryFingerprint'
 import type { FrontStill } from '../../src/create/front'
 import type { StillCapture } from '../../src/scan/camera'
 import { matchSide } from '../../src/scan/sideMatcher'
-import { parseSiftFingerprint } from '../../src/scan/siftFingerprint'
+import { loadOpenCvRuntime } from '../../src/scan/opencvRuntime'
+import { parseSiftFingerprint, S3_FINGERPRINT_PROFILE_ID } from '../../src/scan/siftFingerprint'
 import { bytesToHex } from '../../src/protocol/bytes'
 
 interface CheckResult { name: string; ok: boolean; detail?: string }
@@ -93,8 +97,16 @@ async function main(): Promise<void> {
     const senderBytes = jpeg.slice()
     const queryBytes = jpeg.slice()
 
-    const query = await produceQueryFingerprint(plainStill(queryBytes, 640, 480), { fence: () => true })
-    const sender = await produceFrontStillFingerprint(senderStill(senderBytes, 640, 480), { fence: () => true })
+    // Production: both roles are the frozen matcher's, and the query stays identity-free.
+    const shipped = await produceQueryFingerprint(plainStill(jpeg.slice(), 640, 480), { fence: () => true })
+    const shippedSender = await produceFrontStillFingerprint(senderStill(jpeg.slice(), 640, 480), { fence: () => true })
+    assert('production query is the frozen matcher', shipped.profileId === S3_FINGERPRINT_PROFILE_ID, shipped.profileId)
+    assert('production sender is the frozen matcher', shippedSender.profileId === S3_FINGERPRINT_PROFILE_ID, shippedSender.profileId)
+    assert('production query output has no recipient field', !('recipient' in shipped))
+
+    const runtime = await loadOpenCvRuntime()
+    const query = await produceQueryFingerprint(plainStill(queryBytes, 640, 480), { fence: () => true, runtime })
+    const sender = await produceFrontStillFingerprint(senderStill(senderBytes, 640, 480), { fence: () => true, runtime })
 
     assert('query output has no recipient field', !('recipient' in query))
     assert(
@@ -107,7 +119,7 @@ async function main(): Promise<void> {
     assert('same JPEG yields the same crop provenance', JSON.stringify(query.provenance) === JSON.stringify(sender.provenance))
 
     const distinctJpeg = await texturedQuadJpeg(99, 640, 480)
-    const distinct = await produceQueryFingerprint(plainStill(distinctJpeg, 640, 480), { fence: () => true })
+    const distinct = await produceQueryFingerprint(plainStill(distinctJpeg, 640, 480), { fence: () => true, runtime })
     assert('distinct frame yields a distinct query wire', bytesToHex(distinct.wire) !== bytesToHex(query.wire))
     report.distinctWireHex = bytesToHex(distinct.wire)
 
@@ -133,8 +145,8 @@ async function main(): Promise<void> {
     // EXIF-once / decoded-bound semantics: a JPEG with orientation 6 decodes
     // upright exactly once for both entries, yielding the same wire.
     const exifJpeg = injectExifOrientation(jpeg, 6)
-    const exifQuery = await produceQueryFingerprint(plainStill(exifJpeg.slice(), 640, 480), { fence: () => true })
-    const exifSender = await produceFrontStillFingerprint(senderStill(exifJpeg.slice(), 640, 480), { fence: () => true })
+    const exifQuery = await produceQueryFingerprint(plainStill(exifJpeg.slice(), 640, 480), { fence: () => true, runtime })
+    const exifSender = await produceFrontStillFingerprint(senderStill(exifJpeg.slice(), 640, 480), { fence: () => true, runtime })
     assert('EXIF orientation is applied once for both entries', bytesToHex(exifQuery.wire) === bytesToHex(exifSender.wire))
     assert('EXIF query output stays identity-free', !('recipient' in exifQuery))
 

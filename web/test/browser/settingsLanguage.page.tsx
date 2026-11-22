@@ -159,7 +159,8 @@ async function run(): Promise<void> {
   assert('selecting RU writes the language preference', prefWrites.some((w) => w.key === 'remanence.language' && w.value === 'ru'))
   assert('selecting RU updates the session language', store.getSnapshot().language === 'ru')
   assert('selecting RU sets document.lang', document.documentElement.lang === 'ru')
-  assert('trigger now shows the Russian copy', trigger()!.textContent === catalog.ru.language)
+  // The header's trigger is compact: it shows the code and is named by the translated key.
+  assert('trigger now shows the Russian code under the Russian name', trigger()!.textContent === 'RU' && trigger()!.getAttribute('aria-label') === catalog.ru.language)
   assert('language selection did not change account/phase', store.getSnapshot().phase === phaseBefore && store.getSnapshot().accountId === accountBefore)
 
   // --- Escape closes + focus return --------------------------------------

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fixtureHost } from './fixtureHost.mjs'
+import { copy } from './copy.mjs'
 
 const [web, proof] = process.argv.slice(2)
+const en = await copy(web)
 const target = '33333333-4444-4555-8666-777777777777'
 const id = (i) => `${String(i).padStart(8, '0')}-bbbb-4ccc-8ddd-eeeeeeeeeeee`
 const time = '2026-10-20T12:00:00+00:00'
@@ -140,7 +142,7 @@ try {
     await openRow(page, `1:${id(1)}`)
     await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { window.copiedCode = text } } }))
     await click(page, 'historyCopy')
-    await page.getByText('Code copied.', { exact: true }).waitFor()
+    await page.getByText(en.historyCopied, { exact: true }).waitFor()
     check('copies only active public code', await page.evaluate(() => window.copiedCode === 'AB12Z'))
     await click(page, 'historyCancel')
     check('confirmation starts on non-destructive choice', await (await button(page, 'historyKeep')).evaluate((el) => document.activeElement === el))
@@ -148,7 +150,7 @@ try {
     await click(page, 'historyKeep')
     check('keep restores cancellation focus', await (await button(page, 'historyCancel')).evaluate((el) => document.activeElement === el))
     await click(page, 'historyCancel'); await click(page, 'historyConfirmCancel')
-    await page.getByText('Cancellation confirmed. Refreshing the history.', { exact: true }).waitFor()
+    await page.locator('[data-testid=history-result]').getByText(en.historyCancelled, { exact: true }).waitFor()
     await loaded(page)
     check('single existing revoke POST', posts().length === 1 && posts()[0].path.endsWith('/revoke'))
     const detail = await openRow(page, `1:${id(1)}`)
@@ -159,7 +161,7 @@ try {
     await page.locator(`[data-history-key="2:${id(6)}"]`).waitFor()
     await openRow(page, `2:${id(6)}`)
     await click(page, 'historyCancel'); await click(page, 'historyConfirmCancel')
-    await page.getByText('Cancellation confirmed. Refreshing the history.', { exact: true }).waitFor()
+    await page.locator('[data-testid=history-result]').getByText(en.historyCancelled, { exact: true }).waitFor()
     await loaded(page); await click(page, 'historyMore')
     const detail = await openRow(page, `2:${id(6)}`)
     check('pending uses actual v2 transport route', posts().length === 1 && posts()[0].path === `/v2/pending-deliveries/${id(106)}/cancel`)
@@ -169,7 +171,7 @@ try {
     await loaded(page); await openRow(page, `1:${id(1)}`)
     mode = state
     await click(page, 'historyCancel'); await click(page, 'historyConfirmCancel')
-    await page.locator('[data-testid=history-result]').filter({ hasText: state === 'conflict' ? 'no longer' : 'not confirmed' }).waitFor()
+    await page.locator('[data-testid=history-result]').filter({ hasText: state === 'conflict' ? en.historyConflict : en.historyUnknown }).waitFor()
     await loaded(page)
     check(`${state}: exactly one POST then refetch`, posts().length === 1 && requests.filter((r) => r.path === '/v1/capsules/outgoing').length === 2)
   })
@@ -177,7 +179,7 @@ try {
     await loaded(page); await openRow(page, `1:${id(1)}`)
     await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('synthetic refusal') } } }))
     await click(page, 'historyCopy')
-    await page.getByText('Could not copy. You can select the code instead.', { exact: true }).waitFor()
+    await page.getByText(en.historyCopyFailed, { exact: true }).waitFor()
     for (const failure of ['old-server', 'malformed']) {
       mode = failure; await click(page, 'historyRefresh')
       await page.getByText(await page.evaluate(() => window.sendFeedbackFixture.messages('en').historyUnavailable), { exact: true }).waitFor()
@@ -189,10 +191,10 @@ try {
     check('real empty response displayed', await page.locator('[data-history-key]').count() === 0)
   })
   await scenario('hold-history', async (page) => {
-    await page.getByText('Looking up your sends…', { exact: true }).waitFor()
+    await page.getByText(en.historyLoading, { exact: true }).waitFor()
     await page.evaluate(() => window.historyFixture.store.signOut())
     held.splice(0).forEach((release) => release())
-    await page.getByText('Sign in to see your sending history.', { exact: true }).waitFor()
+    await page.getByText(en.historyAuth, { exact: true }).waitFor()
     check('late logout response cannot reveal rows', await page.locator('[data-history-key]').count() === 0)
     await page.evaluate(() => window.historyFixture.switchOwner())
     await page.locator('[data-testid=history-empty]').waitFor()
@@ -202,7 +204,7 @@ try {
     await loaded(page); await openRow(page, `1:${id(1)}`)
     mode = 'hold-cancel'
     await click(page, 'historyCancel'); await click(page, 'historyConfirmCancel')
-    await page.getByText('Requesting cancellation…', { exact: true }).waitFor()
+    await page.locator('[data-testid=history-result]').getByText(en.historyCancelling, { exact: true }).waitFor()
     await page.evaluate(() => window.historyFixture.switchOwner())
     held.splice(0).forEach((release) => release())
     await page.locator('[data-testid=history-empty]').waitFor()
@@ -211,29 +213,29 @@ try {
   await scenario('recent-fresh-lookup-and-confirm', async (page) => {
     await recents(page)
     await page.getByRole('button', { name: '@recipient_qa', exact: true }).click()
-    await page.getByRole('button', { name: 'this is the person', exact: true }).waitFor()
+    await page.getByRole('button', { name: en.recipientConfirm, exact: true }).waitFor()
     check('recent performs fresh directory GET', requests.some((r) => r.path === '/v1/directory/handles/recipient_qa'))
     check('recent not automatically confirmed', await page.evaluate(() => window.historyFixture.recipient.confirmed() === null))
-    await page.getByRole('button', { name: 'this is the person', exact: true }).click()
+    await page.getByRole('button', { name: en.recipientConfirm, exact: true }).click()
     await page.locator('.photo-draft input').waitFor()
     check('normal composition remains reachable', await page.evaluate(() => window.historyFixture.recipient.confirmed()?.userId === '33333333-4444-4555-8666-777777777777'))
     check('selecting recent never sends', posts().length === 0)
   }, '')
   await scenario('recent-rebound-unavailable-empty', async (page) => {
     mode = 'old-server'; await recents(page)
-    await page.getByText('Recent recipients are unavailable.', { exact: false }).waitFor()
+    await page.getByText(en.recentUnavailable, { exact: false }).waitFor()
     mode = 'empty'; await click(page, 'historyRetry')
-    await page.getByText('No recent recipients available.', { exact: true }).waitFor()
+    await page.getByText(en.recentEmpty, { exact: true }).waitFor()
     await page.evaluate(() => { history.pushState(null, '', '/'); dispatchEvent(new Event('remanence:route')) })
     await page.locator('a[href="/history"]').waitFor()
     mode = 'rebound'; await recents(page)
     await page.getByRole('button', { name: '@recipient_qa', exact: true }).click()
-    await page.getByText('This handle no longer matches that recipient.', { exact: false }).waitFor()
+    await page.getByText(en.recentChanged, { exact: false }).waitFor()
     check('rebound identity cannot be confirmed', await page.evaluate(() => window.historyFixture.recipient.pending() === null && window.historyFixture.recipient.confirmed() === null))
   }, '')
   await scenario('hold-recent', async (page) => {
     await recents(page)
-    await page.getByText('Looking up recent recipients…', { exact: true }).waitFor()
+    await page.getByText(en.recentLoading, { exact: true }).waitFor()
     await page.evaluate(() => window.historyFixture.switchOwner())
     held.splice(0).forEach((release) => release())
     check('recent response cannot cross owner', await page.getByRole('button', { name: '@recipient_qa', exact: true }).count() === 0)

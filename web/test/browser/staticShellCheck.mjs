@@ -10,10 +10,12 @@ import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { extname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { copy } from './copy.mjs'
 
 const [webDir, outDir] = process.argv.slice(2)
 if (!webDir || !outDir) throw new Error('usage: staticShellCheck.mjs webDir outDir')
 const web = resolve(webDir)
+const en = await copy(web), ru = await copy(web, 'ru'), uk = await copy(web, 'uk')
 await mkdir(outDir, { recursive: true })
 const work = await mkdtemp(join(tmpdir(), 't359-shell-'))
 const { shellArtifacts } = await import(pathToFileURL(join(web, 'tools/static-shell.mjs')))
@@ -31,6 +33,9 @@ const types = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.otf': 'font/otf',
   '.webmanifest': 'application/manifest+json', '.json': 'application/json', '.wasm': 'application/wasm',
+  // The frozen matcher's model, vocabulary and their checksums; the cover font.
+  '.onnx': 'application/octet-stream', '.bin': 'application/octet-stream', '.woff2': 'font/woff2',
+  '.txt': 'text/plain', '.sha256': 'text/plain',
 }
 async function build(base, revision, tag) {
   const out = join(work, tag)
@@ -122,7 +127,8 @@ async function waitFor(page, predicate, arg) {
   }
 }
 async function ready(page, origin, version) {
-  await page.goto(`${origin}${version.base}#/settings`)
+  // The site's pages have root paths (/settings), so only a root build is entered at one; a prefix build has its base document.
+  await page.goto(`${origin}${version.base}${version.base === '/' ? '#/settings' : ''}`)
   await waitFor(page, async (base) => {
     const r = await navigator.serviceWorker.getRegistration(base)
     return r?.scope === new URL(base, location.origin).href && r.active?.state === 'activated'
@@ -200,7 +206,7 @@ try {
     await page.reload()
     await page.waitForSelector('.shell')
     check(`${label}: offline shell booted`, await page.getAttribute('html', 'data-remanence-boot'), 'ready')
-    check(`${label}: offline copy explains limits`, (await page.textContent('body')).includes('signing in, unlocking, scanning and sending need a connection'))
+    check(`${label}: offline copy explains limits`, (await page.textContent('body')).includes(en.shellOffline))
     check(`${label}: offline API fails honestly`, await page.evaluate(() => fetch('/v1/recovery/record', { cache: 'no-store' }).then(() => false, () => true)))
     check(`${label}: narrow no overflow`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1))
     await page.screenshot({ path: join(outDir, `${label}-offline-320.png`), fullPage: true })
@@ -242,7 +248,7 @@ try {
   sharedHost.state.versions = [root2, prefix1]
   check('root update installs and waits', await update(rootPage, '/'), 'installed')
   await waitFor(rootPage, async () => Boolean((await navigator.serviceWorker.getRegistration('/')).waiting))
-  await rootPage.waitForFunction(() => document.body.textContent.includes('An update is ready'))
+  await rootPage.waitForFunction((text) => document.body.textContent.includes(text), en.shellUpdate)
   check('update never reloads old tab or loses transient state', [rootLoads, await rootPage.evaluate(() => window.fixtureDraft)], [0, 'unsent synthetic draft'])
   check('old document keeps old revision', await rootPage.getAttribute('html', 'data-shell-revision'), 'v1')
   await cacheProof(rootPage, root1, 'old graph while waiting')
@@ -319,18 +325,18 @@ try {
     const page = await ctx.newPage()
     watch(page, mode)
     await page.goto(`${rootHost.origin}/#/settings`)
-    await page.waitForFunction((mode) => document.body.textContent.includes(mode === 'registration' ? 'could not be prepared' : 'cannot prepare an offline shell'), mode)
+    await page.waitForFunction((text) => document.body.textContent.includes(text), mode === 'registration' ? en.shellUnavailable : en.shellUnsupported)
     check(`${mode}: normal app remains usable`, await page.locator('.shell').count(), 1)
-    check(`${mode}: no dead install button`, await page.getByRole('button', { name: 'install Remanence', exact: true }).count(), 0)
+    check(`${mode}: no dead install button`, await page.getByRole('button', { name: en.shellInstall, exact: true }).count(), 0)
     await ctx.close()
   }
   rootHost.state.fault = null
   // Explicitly synthetic install-capability events exercise UI behavior only;
   // they do not claim native browser/OS installation.
   for (const [lang, label, unsupported] of [
-    ['en', 'install Remanence', 'cannot prepare an offline shell'],
-    ['ru', 'установить Remanence', 'не поддерживает автономную оболочку'],
-    ['uk', 'встановити Remanence', 'не підтримує автономну оболонку'],
+    ['en', en.shellInstall, en.shellUnsupported],
+    ['ru', ru.shellInstall, ru.shellUnsupported],
+    ['uk', uk.shellInstall, uk.shellUnsupported],
   ]) {
     const ctx = await browser.newContext({ viewport: { width: 320, height: 568 }, reducedMotion: 'reduce' })
     await ctx.addInitScript((language) => {

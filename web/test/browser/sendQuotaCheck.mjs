@@ -3,8 +3,11 @@ import { createHash } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fixtureHost } from './fixtureHost.mjs'
+import { follow } from './follow.mjs'
 const [web, proof] = process.argv.slice(2)
 const modes = ['limit-v1', 'limit-pending', 'unavailable-v1', 'unavailable-pending', 'malformed', 'wrong-status', 'lost', 'success']
+// After a terminal result the three steps are off and the note is on a step that is not shown.
+const locked = async (page) => await page.locator('.workspace-nav button').evaluateAll((steps) => steps.length === 3 && steps.every((step) => step.disabled)) && !await page.locator('textarea').isVisible()
 let mode, calls
 const problem = (status, shape) => {
   const code = status === 409 ? 'SEND_LIMIT_REACHED' : 'SEND_ACCESS_UNAVAILABLE'
@@ -60,8 +63,8 @@ try {
       await page.goto(`${host.url}?mode=${mode}#/settings`)
       await page.locator('[data-testid=access-self]').waitFor()
       check('zero read is advisory, no client spend', (await page.locator('[data-testid=access-other]').innerText()).startsWith('0 / 2'))
-      await page.locator('a[href="/"]').last().click()
-      await page.locator('a[href="/create"]').click()
+      await follow(page, '/')
+      await follow(page, '/create')
       await page.waitForFunction(() => Boolean(window.sendFeedbackFixture))
       await page.evaluate(() => window.sendFeedbackFixture.ready())
       const authored = await page.locator('textarea').inputValue()
@@ -74,7 +77,12 @@ try {
       check('one signature and terminal button', await page.evaluate(() => window.sendFeedbackFixture.state().signs === 1) && await page.locator('[data-testid=send_button]').isDisabled())
       const before = await page.evaluate(() => window.sendAccessFixture.audit.length)
       await page.locator('[data-testid=send_button]').evaluate((button) => button.click())
-      await page.locator('textarea').fill('Retained synthetic draft after a terminal result.')
+      check('a terminal result leaves no way back to the text', await locked(page))
+      // The field is out of reach, so the edit goes in under the page: even then it must not rearm.
+      await page.locator('textarea').evaluate((field, text) => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(field, text)
+        field.dispatchEvent(new Event('input', { bubbles: true }))
+      }, 'Retained synthetic draft after a terminal result.')
       await page.waitForTimeout(150)
       check('edits/clicks cannot rearm', await page.locator('[data-testid=send_button]').isDisabled()
         && await page.evaluate((before) => window.sendAccessFixture.audit.length === before && window.sendFeedbackFixture.state().signs === 1, before))

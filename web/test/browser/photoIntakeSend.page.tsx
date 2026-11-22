@@ -84,7 +84,7 @@ async function front() {
   button('useCamera').click()
   await waitFor(() => [...document.querySelectorAll('button')].some((item) => item.textContent === catalog.en.takePicture && !item.disabled), 'camera')
   button('takePicture').click()
-  await waitFor(() => document.querySelector('main > .status[role=alert]')?.textContent === catalog.en.frontReady, 'front fingerprint')
+  await waitFor(() => document.querySelector('main > .notice[role=alert]')?.textContent === catalog.en.frontReady, 'front fingerprint')
 }
 Object.assign(window, { photoIntakeFixture: {
   async ready() {

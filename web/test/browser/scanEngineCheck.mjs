@@ -61,6 +61,8 @@ const dist = join(work, 'dist')
 const vendor = join(web, 'public', 'opencv')
 if (!existsSync(vendor)) throw new Error('vendored opencv assets missing at ' + vendor)
 await cp(vendor, join(dist, 'opencv'), { recursive: true })
+// The scan path also loads the frozen matcher's vocabulary and model from the same origin.
+await cp(join(web, 'public', 'frozen-matcher'), join(dist, 'frozen-matcher'), { recursive: true })
 const fontsDir = join(web, 'public', 'fonts')
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.otf': 'font/otf', '.wasm': 'application/wasm' }
 
@@ -186,7 +188,9 @@ const server = createServer((req, res) => {
       if (req.method === 'GET' && url.pathname.startsWith('/fonts/')) {
         const file = join(fontsDir, decodeURIComponent(url.pathname.slice('/fonts/'.length)))
         if (!file.startsWith(fontsDir + sep)) { res.writeHead(403).end(); return }
-        res.writeHead(200, { 'content-type': 'font/otf', 'cache-control': 'no-store' }).end(await readFile(file))
+        // Read first: a missing file must reach the 404 below, not die on a second writeHead.
+        const found = await readFile(file)
+        res.writeHead(200, { 'content-type': 'font/otf', 'cache-control': 'no-store' }).end(found)
         return
       }
       const path = resolve(dist, '.' + decodeURIComponent(url.pathname))

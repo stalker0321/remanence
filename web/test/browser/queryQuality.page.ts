@@ -1,11 +1,15 @@
 /**
  * T348 requested-quality receiving-query browser gate (Chromium-only).
  *
- * A textured JPEG goes through the REAL production identity-free query with
- * `quality: true` (shared cached RawCv -> wrapOpenCvRuntime + accepted native
- * meter), and the default/sender paths stay diagnostic-free with byte-identical
- * wires. A counting wrapper around the REAL runtime/meter/decode proves exactly
- * one decode, one warp and one post-warp measurement. Synthetic only.
+ * A textured JPEG goes through the identity-free query with `quality: true`
+ * (the shared cached RawCv -> wrapOpenCvRuntime + accepted native meter), and
+ * the default/sender paths stay diagnostic-free with byte-identical wires. A
+ * counting wrapper around the REAL runtime/meter/decode proves exactly one
+ * decode, one warp and one post-warp measurement. Synthetic only.
+ *
+ * The production query is the frozen postcard matcher (S3), which does not
+ * run the meter; the meter belongs to the contour pipeline, which stays behind
+ * the `runtime` seam and is entered through it here.
  */
 import {
   createCaptureQualityMeter,
@@ -20,7 +24,7 @@ import type { CvContourRuntime } from '../../src/scan/opencvContour'
 import type { QualityRawCv } from '../../src/scan/opencvQualityPort'
 import type { StillCapture } from '../../src/scan/camera'
 import type { FrontStill } from '../../src/create/front'
-import { parseSiftFingerprint } from '../../src/scan/siftFingerprint'
+import { parseSiftFingerprint, S3_FINGERPRINT_PROFILE_ID } from '../../src/scan/siftFingerprint'
 import { bytesToHex } from '../../src/protocol/bytes'
 
 interface CheckResult { name: string; ok: boolean; detail?: string }
@@ -96,10 +100,21 @@ async function main(): Promise<void> {
   try {
     const jpeg = await texturedQuadJpeg(7, 640, 480)
 
-    // Requested quality: REAL production query over the shared cached RawCv.
+    // Production: the frozen matcher answers; what it says about quality is recorded, not required.
+    const shipped = await produceQueryFingerprint(plainStill(jpeg.slice(), 640, 480), { fence: () => true, quality: true })
+    assert('production query is the frozen matcher', shipped.profileId === S3_FINGERPRINT_PROFILE_ID, shipped.profileId)
+    report.productionQuality = 'quality' in shipped
+
+    const cv = await loadOpenCvModule()
+    const realRuntime = wrapOpenCvRuntime(cv)
+    const realMeter = createCaptureQualityMeter(cv as unknown as QualityRawCv)
+
+    // Requested quality: the REAL runtime and meter over the shared cached RawCv.
     const requested = await produceQueryFingerprint(plainStill(jpeg.slice(), 640, 480), {
       fence: () => true,
       quality: true,
+      runtime: realRuntime,
+      meter: realMeter,
     })
     assert('requested query returns quality diagnostics', requested.quality !== undefined)
     const signals: CaptureQualitySignals | undefined = requested.quality?.signals
@@ -126,7 +141,7 @@ async function main(): Promise<void> {
     assert('requested wire parses', parseSiftFingerprint(requested.wire).keypoints.length > 0)
 
     // Default query: unchanged, no diagnostics.
-    const plain = await produceQueryFingerprint(plainStill(jpeg.slice(), 640, 480), { fence: () => true })
+    const plain = await produceQueryFingerprint(plainStill(jpeg.slice(), 640, 480), { fence: () => true, runtime: realRuntime })
     assert('default query has no quality diagnostics', !('quality' in plain))
     assert('requested and default wires are byte-identical', bytesToHex(requested.wire) === bytesToHex(plain.wire))
 
@@ -134,15 +149,14 @@ async function main(): Promise<void> {
     const sender = await produceFrontStillFingerprint(senderStill(jpeg.slice(), 640, 480), {
       fence: () => true,
       quality: true,
+      runtime: realRuntime,
+      meter: realMeter,
     })
     assert('sender never includes quality diagnostics', !('quality' in sender))
     assert('sender and query wires are byte-identical', bytesToHex(sender.wire) === bytesToHex(plain.wire))
     assert('sender still carries the recipient', sender.recipient.userId === 't348-owner')
 
     // Counting run: wrapper calls the REAL runtime/meter/decode exactly once.
-    const cv = await loadOpenCvModule()
-    const realRuntime = wrapOpenCvRuntime(cv)
-    const realMeter = createCaptureQualityMeter(cv as unknown as QualityRawCv)
     let decodeCount = 0
     let warpCount = 0
     let meterCount = 0

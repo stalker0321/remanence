@@ -57,6 +57,8 @@ const dist = join(work, 'dist')
 const vendor = join(web, 'public', 'opencv')
 if (!existsSync(vendor)) throw new Error(`vendored opencv assets missing at ${vendor}`)
 await cp(vendor, join(dist, 'opencv'), { recursive: true })
+// The scan path also loads the frozen matcher's vocabulary and model from the same origin.
+await cp(join(web, 'public', 'frozen-matcher'), join(dist, 'frozen-matcher'), { recursive: true })
 
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.otf': 'font/otf', '.wasm': 'application/wasm' }
 const server = createServer(async (req, res) => {
@@ -69,7 +71,9 @@ const server = createServer(async (req, res) => {
       return
     }
     const file = path === dist ? join(dist, 'index.html') : path
-    res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(await readFile(file))
+    // Read first: a missing file must reach the 404 below, not die on a second writeHead.
+    const found = await readFile(file)
+    res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(found)
   } catch {
     res.writeHead(404).end('missing')
   }

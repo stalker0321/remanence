@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { follow } from './follow.mjs'
 const [web, proof] = process.argv.slice(2)
 const { fixtureHost } = await import(pathToFileURL(join(web, 'test/browser/fixtureHost.mjs')))
 const host = await fixtureHost(web, proof, 'candidateUsability.page.tsx')
@@ -20,7 +21,7 @@ try {
     const text = key => page.evaluate(([lang, key]) => window.candidateUI.catalog[lang][key], [lang, key])
     const button = async key => page.getByRole('button', { name: await text(key), exact: true })
     const shot = async name => { const file = `${lang}-${name}.png`; await page.evaluate(() => document.fonts.ready); await page.screenshot({ path: join(proof, file), fullPage: true }); images.push(file); check(`${file}: no horizontal overflow`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)) }
-    await page.locator('.main-nav a[href="/scan"]').click()
+    await follow(page, '/scan')
     await (await button('useCamera')).waitFor()
     check(`${lang}: receive entry does not start camera automatically`, (await state()).cameraStarts === 0)
     await (await button('useCamera')).click(); await page.locator('video.preview').waitFor()
@@ -32,7 +33,7 @@ try {
     await (await button('useCamera')).waitFor()
     check(`${lang}: Forward is idle, not capture/resume`, (await state()).cameraStarts === 1)
     await page.locator('.mark').click()
-    await page.locator('.main-nav a[href="/create"]').click()
+    await follow(page, '/create')
     await page.locator('.route-create h1').waitFor()
     check(`${lang}: signed-out Create directs to Account`, await page.locator('.route-create a[href="/account"]').count() === 1 && await page.locator('.photo-draft').count() === 0)
     await page.evaluate(() => window.candidateUI.unlock())
@@ -50,7 +51,7 @@ try {
     check(`${lang}: real photo input/normalizer paints composer`, (await state()).photos === 3)
     check(`${lang}: only content workspace is exposed initially`, await page.locator('.content-workspace').isVisible() && !await page.locator('.composition-workspace').isVisible() && !await page.locator('.postcard-workspace').isVisible())
     await shot('content')
-    await page.locator('.music-draft summary').click()
+    if (!await page.locator('.music-draft').evaluate(el => el.open)) await page.locator('.music-draft summary').click()
     const music = page.locator('.music-draft input')
     await music.fill('empty'); await page.getByText(await text('musicNone'), { exact: true }).waitFor()
     check(`${lang}: empty music has no selectable hit`, await page.locator('.music-draft li').count() === 0)
@@ -94,15 +95,15 @@ try {
     await page.waitForTimeout(50)
     check(`${lang}: leaving Create fences late music response`, (await state()).hits === 0)
     check(`${lang}: navigation aborts the request before its released reply`, (await state()).musicReplies.at(-1)?.aborted === true)
-    await page.locator('.main-nav a[href="/create"]').click()
-    await page.locator('.music-draft summary').click()
+    await follow(page, '/create')
+    if (!await page.locator('.music-draft').evaluate(el => el.open)) await page.locator('.music-draft summary').click()
     await page.locator('.music-draft input').fill('slow')
     await page.waitForFunction(() => window.candidateUI.state().calls.filter(c => c.query?.q === 'slow').length === 2)
     await page.evaluate(() => { window.candidateUI.releaseOnNavigation('remanence:route'); history.pushState(null, '', '/create'); dispatchEvent(new Event('remanence:route')) })
     await page.waitForFunction(() => window.candidateUI.state().hits === 1)
     check(`${lang}: same-route hash keeps legitimate search alive`, (await state()).musicReplies.at(-1)?.aborted === false)
     await page.locator('.mark').click()
-    await page.locator('.main-nav a[href="/settings"]').click()
+    await follow(page, '/settings')
     await page.locator('.settings-group .language-trigger').click()
     await page.getByRole('option', { name: 'English', exact: true }).click()
     check(`${lang}: settings language selection uses existing preference only`, (await state()).preferences.some(([key, value]) => key === 'remanence.language' && value === 'en'))

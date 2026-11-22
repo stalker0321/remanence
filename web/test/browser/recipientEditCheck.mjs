@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fixtureHost } from './fixtureHost.mjs'
+import { copy } from './copy.mjs'
 
 const [web, proof] = process.argv.slice(2)
+const en = await copy(web)
 const host = await fixtureHost(web, proof, 'recipientEdit.page.tsx')
 const checks = []
 const errors = []
@@ -23,7 +25,7 @@ async function scenario(name, run) {
 const input = (page) => page.locator('.handle-form input')
 const submit = (page) => page.locator('.handle-form button[type=submit]')
 const state = (page) => page.evaluate(() => window.recipientEdit.state())
-const confirm = (page) => page.getByRole('button', { name: 'this is the person', exact: true })
+const confirm = (page) => page.getByRole('button', { name: en.recipientConfirm, exact: true })
 async function find(page, handle) {
   await input(page).fill(handle)
   await submit(page).click()
@@ -40,7 +42,7 @@ try {
     assert.equal((await state(page)).pending, 'alice_qa')
     // The confirmation is deliberately a separate screen. Return through the
     // real Change action before editing; no direct controller reset in a test.
-    await page.getByRole('button', { name: 'choose someone else', exact: true }).click()
+    await page.getByRole('button', { name: en.recipientChange, exact: true }).click()
     assert.equal((await state(page)).pending, null)
     await input(page).fill('bob_qa')
     assert.equal((await state(page)).pending, null)
@@ -66,10 +68,10 @@ try {
     assert.equal((await state(page)).pending, 'bob_qa')
   })
   await scenario('self-then-change-and-edit', async (page) => {
-    await page.getByRole('button', { name: 'for myself', exact: true }).click()
+    await page.getByRole('button', { name: en.forMyself, exact: true }).click()
     await result(page, 0)
     assert.equal((await state(page)).pending, 'self_qa')
-    await page.getByRole('button', { name: 'choose someone else', exact: true }).click()
+    await page.getByRole('button', { name: en.recipientChange, exact: true }).click()
     await input(page).fill('bob_qa')
     assert.equal((await state(page)).pending, null)
   })

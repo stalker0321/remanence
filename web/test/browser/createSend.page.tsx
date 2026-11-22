@@ -596,11 +596,15 @@ async function main(): Promise<void> {
         await new Promise((resolve) => setTimeout(resolve, 250))
       }
     }
+    // The photos are on the first step, which the page does not show while
+    // sending, and their remove button carries its name as a label: the edit
+    // goes in under the page.
+    const removePhoto = () => document.querySelector<HTMLButtonElement>(`button.photo-remove[aria-label="${t('removePhoto')}"]`)
     await waitFor(() => {
-      const button = buttonByText(t('removePhoto'))
+      const button = removePhoto()
       return button !== null && !button.disabled
     }, 'removePhoto clickable while working')
-    buttonByText(t('removePhoto'))!.click()
+    removePhoto()!.click()
     await releaseDraft()
     await new Promise((resolve) => setTimeout(resolve, 2500))
     const after5 = await capture()

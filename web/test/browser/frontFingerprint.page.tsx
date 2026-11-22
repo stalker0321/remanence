@@ -381,7 +381,8 @@ async function main(): Promise<void> {
     }
     let canProceed = false
     for (let i = 0; i < 20 && !canProceed; i++) {
-      const primary = document.querySelector('button.primary') as HTMLButtonElement | null
+      // The page has other primary buttons now; the camera's is the one that busy holds back.
+      const primary = buttonByText(t('useCamera'))
       canProceed = primary !== null && !primary.disabled
       if (!canProceed) await new Promise((resolve) => setTimeout(resolve, 250))
     }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fixtureHost } from './fixtureHost.mjs'
+import { follow } from './follow.mjs'
 
 const [web, proof] = process.argv.slice(2)
 const host = await fixtureHost(web, proof, 'presentationNavigation.page.tsx')
@@ -29,7 +30,7 @@ async function scenario(name, width, run, direct = false, liveCamera = false) {
   try {
     await page.goto(`${host.url}#/${direct ? 'scan' : ''}`)
     await page.waitForFunction(() => Boolean(window.presentationNavigation))
-    if (!direct) await page.locator('a[href="/scan"]').click()
+    if (!direct) await follow(page, '/scan')
     if (liveCamera) {
       await page.locator('.card .primary').click()
       await page.locator('.card video').waitFor({ state: 'attached' })
@@ -78,7 +79,7 @@ try {
         await page.keyboard.press(i < 6 ? 'Tab' : 'Shift+Tab')
         assert.equal(await page.evaluate(() => Boolean(document.activeElement?.closest('.stage'))), true)
       }
-      assert.equal(await page.locator('main.shell').getAttribute('inert'), '')
+      assert.equal(await page.locator('.shell').getAttribute('inert'), '')
       await record(page, 'stage-keyboard-contained')
       await page.screenshot({ path: join(proof, `stage-focus-${width}.png`) })
       await writeFile(join(proof, `stage-focus-${width}.html`), await page.content())
@@ -92,7 +93,7 @@ try {
       await pause(page)
       assert.equal(await page.locator('.stage').count(), 0)
       assert.equal(await page.evaluate(() => Boolean(document.activeElement?.closest('.card'))), true)
-      assert.equal(await page.locator('main.shell').getAttribute('inert'), null)
+      assert.equal(await page.locator('.shell').getAttribute('inert'), null)
     })
     await scenario('explicit-close-reopen-no-extra-back', width, async (page) => {
       await page.locator('.stage .hit').last().click()

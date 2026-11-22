@@ -73,6 +73,8 @@ const dist = join(work, 'dist')
 const vendor = join(web, 'public', 'opencv')
 if (!existsSync(vendor)) throw new Error(`vendored opencv assets missing at ${vendor}`)
 await cp(vendor, join(dist, 'opencv'), { recursive: true })
+// The scan path also loads the frozen matcher's vocabulary and model from the same origin.
+await cp(join(web, 'public', 'frozen-matcher'), join(dist, 'frozen-matcher'), { recursive: true })
 
 const types = {
   '.html': 'text/html',

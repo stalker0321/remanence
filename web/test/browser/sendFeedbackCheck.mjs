@@ -6,6 +6,8 @@ import { fixtureHost } from './fixtureHost.mjs'
 
 const [web, proof] = process.argv.slice(2)
 const modes = (process.env.T363_MODES || 'local,draft422,draft503,malformed,lost-finalize,hold-draft,hold-finalize,delayed-draft').split(',')
+// After a terminal result the three steps are off and the note is on a step that is not shown.
+const locked = async (page) => await page.locator('.workspace-nav button').evaluateAll((steps) => steps.length === 3 && steps.every((step) => step.disabled)) && !await page.locator('textarea').isVisible()
 const checks = []
 const facts = []
 const errors = []
@@ -69,7 +71,7 @@ async function check(name, work) {
   catch (error) { checks.push({ mode, name, ok: false, error: String(error) }) }
 }
 async function assertNoPreparationClaims(page, language) {
-  const visible = await page.locator('main.shell').innerText()
+  const visible = await page.locator('.shell').innerText()
   for (const key of ['recipientHeld', 'frontHeld', 'frontWorking', 'frontReady', 'photoCount', 'musicNotSent']) {
     const text = await page.evaluate(([lang, name]) => window.sendFeedbackFixture.messages(lang)[name], [language, key])
     assert.equal(visible.includes(text), false, `old preparation-only claim remained: ${key}`)
@@ -90,8 +92,9 @@ try {
       await page.goto(`${host.url}?mode=${mode}#/create`)
       await page.waitForFunction(() => Boolean(window.sendFeedbackFixture))
       await page.evaluate(() => window.sendFeedbackFixture.ready())
-      for (const key of ['frontReady', 'photoCount', 'musicNotSent']) {
-        assert.equal(await page.locator('main.shell').innerText().then(async (text) => text.includes(
+      // The postcard step says the front is ready; the photo count stays on the first step, and the site makes no claim about a song.
+      for (const key of ['frontReady']) {
+        assert.equal(await page.locator('.shell').innerText().then(async (text) => text.includes(
           await page.evaluate((name) => window.sendFeedbackFixture.messages('en')[name], key),
         )), true, `preparation claim remains available before Send: ${key}`)
       }
@@ -106,21 +109,24 @@ try {
           assert.equal(await page.locator('[data-testid=send_button]').isDisabled(), true)
           assert.equal(calls.filter((call) => call.path === '/v1/capsules').length, 1)
           await assertNoPreparationClaims(page, 'en')
-          assert.equal(await page.locator('main > .status[role=alert]').innerText(), await page.evaluate(() => window.sendFeedbackFixture.messages('en').sendWorkingHelp))
+          assert.equal(await page.locator('main > .notice[role=alert]').innerText(), await page.evaluate(() => window.sendFeedbackFixture.messages('en').sendWorkingHelp))
         })
         await capture(page, 'waiting')
+        // While a send is in flight the card offers no exit of its own; the way out is the site's home link.
         await check('leaving-does-not-claim-cancellation-or-completion', async () => {
-          await page.locator('.card a[href="/"]').last().click()
+          await page.locator('a[href="/"]:visible').last().click()
           await page.waitForFunction(() => location.pathname === '/' && document.querySelector('[data-testid=send_button]') === null)
           releaseHeld()
           await page.waitForTimeout(250)
           assert.equal(calls.filter((call) => call.path === '/v1/capsules').length, 1)
           if (mode === 'hold-draft') assert.equal(calls.length, 1, 'no upload/finalize follows an abandoned draft')
           assert.equal(await page.locator('[data-testid=send_state]').count(), 0)
-          const text = await page.locator('main.shell').innerText()
+          const text = await page.locator('.shell').innerText()
           assert.equal(text.includes('postcard sent.'), false)
           assert.equal(text.includes('nothing left this device'), false)
-          assert.equal(await page.locator('main > .status[role=alert]').innerText(), await page.evaluate(() => window.sendFeedbackFixture.messages('en').sendWorkingHelp))
+          // A route change clears the notice, so home says nothing about the send; whatever it does say is still only the warning.
+          const notice = page.locator('main > .notice[role=alert]')
+          if (await notice.count()) assert.equal(await notice.innerText(), await page.evaluate(() => window.sendFeedbackFixture.messages('en').sendWorkingHelp))
         })
       } else {
         let pendingFocus = null
@@ -133,7 +139,7 @@ try {
             assert.equal(await page.locator('[data-testid=send_state]').innerText(), await page.evaluate(() => window.sendFeedbackFixture.messages('en').sendWorking))
             assert.equal(calls.length, 1)
             await assertNoPreparationClaims(page, 'en')
-            await page.locator('.card a[href="/"]').last().focus()
+            await page.locator('a[href="/"]:visible').last().focus()
             pendingFocus = await page.evaluateHandle(() => document.activeElement)
             await capture(page, 'waiting')
           })
@@ -166,7 +172,7 @@ try {
             }
             assert.equal(text, await page.evaluate(() => window.sendFeedbackFixture.messages('en').sendNotConfirmed))
           }
-          assert.equal(await page.locator('main > .status[role=alert]').innerText(), text)
+          assert.equal(await page.locator('main > .notice[role=alert]').innerText(), text)
           if (pendingFocus) assert.equal(await page.evaluate((previous) => document.activeElement === previous, pendingFocus), true, 'async error must not steal focus')
           assert.equal(await page.locator('body').innerText().then((value) => value.includes('SYNTHETIC_PRIVATE_ERROR_DO_NOT_RENDER')), false)
         })
@@ -174,7 +180,12 @@ try {
           const before = calls.length
           assert.equal(await page.locator('[data-testid=send_button]').isDisabled(), true)
           await page.locator('[data-testid=send_button]').evaluate((button) => button.click())
-          await page.locator('textarea').fill('Synthetic draft edit after a terminal attempt.')
+          assert.equal(await locked(page), true, 'a terminal result leaves no way back to the text')
+          // The field is out of reach, so the edit goes in under the page: even then it must not rearm.
+          await page.locator('textarea').evaluate((field, text) => {
+            Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(field, text)
+            field.dispatchEvent(new Event('input', { bubbles: true }))
+          }, 'Synthetic draft edit after a terminal attempt.')
           await page.waitForTimeout(150)
           assert.equal(await page.locator('[data-testid=send_button]').isDisabled(), true, 'draft edit must not rearm Send')
           assert.equal(calls.length, before)

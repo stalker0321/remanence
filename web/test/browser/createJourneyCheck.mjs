@@ -97,7 +97,9 @@ const server = createServer(async (req, res) => {
         res.end()
         return
       }
-      res.writeHead(200, { 'content-type': 'font/otf', 'cache-control': 'no-store' }).end(await readFile(file))
+      // Read first: a missing file must reach the 404 below, not die on a second writeHead.
+      const found = await readFile(file)
+      res.writeHead(200, { 'content-type': 'font/otf', 'cache-control': 'no-store' }).end(found)
       return
     }
     const path = resolve(dist, '.' + decodeURIComponent(url.pathname))
@@ -107,7 +109,9 @@ const server = createServer(async (req, res) => {
       return
     }
     const file = path === dist ? join(dist, 'index.html') : path
-    res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(await readFile(file))
+    // Read first: a missing file must reach the 404 below, not die on a second writeHead.
+    const found = await readFile(file)
+    res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(found)
   } catch {
     res.writeHead(404).end('missing')
   }

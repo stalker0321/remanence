@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fixtureHost } from './fixtureHost.mjs'
+import { follow } from './follow.mjs'
 const [web, proof] = process.argv.slice(2)
 function dto(mode = 'enforce', self = 2, other = 2, lifetime = false) {
   return { policy_version: 1, mode, lifetime,
@@ -74,9 +75,9 @@ try {
     await settled(page)
     await page.waitForFunction(() => document.querySelector('[data-testid=send-access]') === null)
     check('OFF has neither section nor numbers', await section(page).count() === 0)
-    await page.locator('a[href="/"]').last().click()
-    await page.locator('a[href="/create"]').waitFor()
-    check('OFF retains ordinary beta navigation', await page.locator('a[href="/create"]').count() === 1)
+    await follow(page, '/')
+    await page.locator('a[href="/create"]:visible').first().waitFor()
+    check('OFF retains ordinary beta navigation', await page.locator('a[href="/create"]:visible').count() >= 1)
   })
   await scenario('all-counts-record-lifetime-locales', 'enforce', async (page) => {
     await counts(page, 2, 2)
@@ -121,7 +122,7 @@ try {
       await refresh(page).focus(); await page.keyboard.press('Enter'); await counts(page, 1, 2)
     }
     mode = 'hold'; await refresh(page).click()
-    await section(page).getByText('Checking sending access…', { exact: true }).waitFor()
+    await section(page).getByRole('status').waitFor()
     check('refresh removes old numbers before new response', await section(page).locator('dd').count() === 0)
     await heldRequest()
     const reads = requests.length
@@ -158,8 +159,8 @@ try {
   })
   await scenario('unmount-back-fresh-owner-read', 'hold', async (page) => {
     await section(page).getByRole('status').waitFor()
-    await page.locator('a[href="/"]').last().click()
-    await page.locator('a[href="/settings"]').waitFor()
+    await follow(page, '/')
+    await page.locator('a[href="/settings"]:visible').first().waitFor()
     held.splice(0).forEach((release) => release()); await settled(page)
     check('leaving retires request and section', await section(page).count() === 0 && await page.evaluate(() => window.sendAccessFixture.audit[0].aborted))
     mode = 'enforce'; value = dto('enforce', 1, 1)

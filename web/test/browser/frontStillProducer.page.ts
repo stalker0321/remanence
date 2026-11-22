@@ -2,11 +2,14 @@
  * T316 front-still producer browser gate (Chromium-only).
  *
  * Generates deterministic synthetic JPEGs on canvas (no fixtures, no camera)
- * and runs the REAL production `produceFrontStillFingerprint` — real DOM
- * decode, real WASM contour detection/selection/warp, real SIFT, accepted
- * serializer — in a pinned browser. Proves functional localization/warp ONLY:
- * no real-postcard field accuracy, exact native numerics, scan-admission,
- * receive or AppSend. No fake detector, grant, or UI integration.
+ * and runs the REAL `produceFrontStillFingerprint` in a pinned browser. The
+ * production entry is the frozen postcard matcher (S3); the contour/warp
+ * pipeline this gate was written for stays behind the `runtime` seam and is
+ * entered through it here — real DOM decode, real WASM contour
+ * detection/selection/warp, real SIFT, accepted serializer. Proves functional
+ * localization/warp ONLY: no real-postcard field accuracy, exact native
+ * numerics, scan-admission, receive or AppSend. No fake detector, grant, or
+ * UI integration.
  */
 import { bytesToHex } from '../../src/protocol/bytes'
 import { orderClockwiseFromTopLeft } from '../../src/scan/cornerGeometry'
@@ -18,7 +21,7 @@ import {
   produceFrontStillFingerprint,
 } from '../../src/scan/frontStillProducer'
 import { loadOpenCvRuntime } from '../../src/scan/opencvRuntime'
-import { parseSiftFingerprint } from '../../src/scan/siftFingerprint'
+import { parseSiftFingerprint, S3_FINGERPRINT_PROFILE_ID } from '../../src/scan/siftFingerprint'
 import type { FrontStill } from '../../src/create/front'
 
 interface CheckResult { name: string; ok: boolean; detail?: string }
@@ -148,15 +151,23 @@ async function main(): Promise<void> {
 
     assert('same canvas encodes byte-identical JPEGs', bytesToHex(jpegA) === bytesToHex(jpegA2))
 
-    // Full producer on the known quad (real decode + runtime + serializer).
+    // The production entry: the frozen matcher describes the card it crops.
     const produced = await produceFrontStillFingerprint(stillFor(jpegA, W, H), { fence: () => true })
-    assert('detected source is LEGACY_CONTOUR', produced.provenance.source === 'LEGACY_CONTOUR', produced.provenance.source)
-    assert('warped long edge is 1600', produced.provenance.warpedWidth === 1600, String(produced.provenance.warpedWidth))
-    assert('profile id is format-3', produced.profileId === 'postcard-sift-rootsift-v1', produced.profileId)
+    assert('production profile is the frozen matcher', produced.profileId === S3_FINGERPRINT_PROFILE_ID, produced.profileId)
     assert('recipient tuple captured', produced.recipient.userId === 'u-1' && produced.recipient.directoryVersion === 'd-1')
     const parsed = parseSiftFingerprint(produced.wire)
     assert('wire parses to a nonempty fingerprint', parsed.keypoints.length > 0, String(parsed.keypoints.length))
     report.wireHex = bytesToHex(produced.wire)
+
+    // The contour pipeline on the known quad (real decode + runtime + serializer).
+    const runtime = await loadOpenCvRuntime()
+    const contoured = await produceFrontStillFingerprint(stillFor(jpegA, W, H), { fence: () => true, runtime })
+    assert('detected source is LEGACY_CONTOUR', contoured.provenance.source === 'LEGACY_CONTOUR', contoured.provenance.source)
+    assert('warped long edge is 1600', contoured.provenance.warpedWidth === 1600, String(contoured.provenance.warpedWidth))
+    assert('profile id is format-3', contoured.profileId === 'postcard-sift-rootsift-v1', contoured.profileId)
+    assert('contour wire parses to a nonempty fingerprint', parseSiftFingerprint(contoured.wire).keypoints.length > 0)
+    const contouredAgain = await produceFrontStillFingerprint(stillFor(jpegA, W, H), { fence: () => true, runtime })
+    assert('same image yields identical contour wire bytes', bytesToHex(contouredAgain.wire) === bytesToHex(contoured.wire))
 
     // Repeat determinism.
     const producedAgain = await produceFrontStillFingerprint(stillFor(jpegA, W, H), { fence: () => true })
@@ -174,7 +185,6 @@ async function main(): Promise<void> {
     report.distinctWireHex = bytesToHex(producedB.wire)
 
     // Direct geometry: decode + detect + warp with the real runtime.
-    const runtime = await loadOpenCvRuntime()
     const decoded = await decodeJpegUpright(document, jpegA)
     assert('bitmap upright dims are authoritative (no EXIF here)', decoded.width === W && decoded.height === H, `${decoded.width}x${decoded.height}`)
     const rgbaMat = runtime.matFromRgba(decoded.rgba, decoded.width, decoded.height)
@@ -266,8 +276,10 @@ async function main(): Promise<void> {
     const exifDecoded = await decodeJpegUpright(document, exifJpeg)
     try {
       assert('EXIF orientation applied exactly once (dims swapped)', exifDecoded.width === H && exifDecoded.height === W, `${exifDecoded.width}x${exifDecoded.height}`)
+      const exifContoured = await produceFrontStillFingerprint(stillFor(exifJpeg, W, H), { fence: () => true, runtime })
+      assert('EXIF-upright frame extracts', exifContoured.provenance.warpedWidth === 1600)
       const exifProduced = await produceFrontStillFingerprint(stillFor(exifJpeg, W, H), { fence: () => true })
-      assert('EXIF-upright frame extracts', exifProduced.provenance.warpedWidth === 1600)
+      assert('EXIF-upright frame extracts in production', parseSiftFingerprint(exifProduced.wire).keypoints.length > 0)
     } finally {
       exifDecoded.rgba.fill(0)
     }
@@ -281,7 +293,7 @@ async function main(): Promise<void> {
       texCtx.fillRect(Math.floor(texRandom() * 320), Math.floor(texRandom() * 240), 6, 6)
     }
     const texJpeg = await toJpeg(tex)
-    const guided = await produceFrontStillFingerprint(stillFor(texJpeg, 320, 240), { fence: () => true })
+    const guided = await produceFrontStillFingerprint(stillFor(texJpeg, 320, 240), { fence: () => true, runtime })
     assert('uncontoured texture uses labelled GUIDE_FALLBACK', guided.provenance.source === 'GUIDE_FALLBACK', guided.provenance.source)
 
     // Blank frame -> SIFT no-features (no fake pass).
@@ -290,6 +302,7 @@ async function main(): Promise<void> {
     blankCtx.fillRect(0, 0, 320, 240)
     const blankJpeg = await toJpeg(blank)
     assert('blank frame refuses features', (await reason(produceFrontStillFingerprint(stillFor(blankJpeg, 320, 240), { fence: () => true }))) === 'features')
+    assert('blank frame refuses features in the contour pipeline', (await reason(produceFrontStillFingerprint(stillFor(blankJpeg, 320, 240), { fence: () => true, runtime }))) === 'features')
 
     // Malformed bytes -> decode refusal; stale fence and abort paths.
     assert('malformed bytes refuse decode', (await reason(produceFrontStillFingerprint(stillFor(new Uint8Array([1, 2, 3]), 4, 4), { fence: () => true }))) === 'decode')

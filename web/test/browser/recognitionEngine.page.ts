@@ -1,21 +1,32 @@
 /**
  * T346 connected receiving engine (Chromium-only, synthetic).
  *
- * REAL production factory: identity-free query producer → strict format-3
- * parse → real `matchSide` (pinned OpenCV matcher/geometry + accepted scorer)
- * → accepted FRONT policy → existing MatchResult. A synthetic in-memory index
- * of GENUINE sender-extracted references (test harness only) proves unique →
- * one, two distinct IDs sharing one genuine reference → many, unrelated
- * reference → none, and an incomplete page → bounded refusal. No camera,
- * field, grant, admission or crypto journey claim.
+ * REAL factory: identity-free query producer → strict format-3 parse → real
+ * `matchSide` (pinned OpenCV matcher/geometry + accepted scorer) → accepted
+ * FRONT policy → existing MatchResult. In production the query is the frozen
+ * postcard matcher's (S3) and the engine answers it in its own branch; the
+ * format-3 branch is entered with a contour query through the engine's
+ * `produceQuery` seam. Both are proven here over a synthetic in-memory index
+ * of GENUINE sender-extracted references (test harness only): unique → one,
+ * two distinct IDs sharing one genuine reference → many, unrelated reference
+ * → none, and for the contour branch an incomplete page → bounded refusal.
+ * The production cards are drawn (`framedCard.ts`); `s3MatchCheck.mjs` runs
+ * the same matcher on photographs. No camera, field, grant, admission or
+ * crypto journey claim.
  */
+import { createCaptureQualityMeter } from '../../src/scan/captureQuality'
 import { produceFrontStillFingerprint } from '../../src/scan/frontStillProducer'
+import { loadOpenCvModule, wrapOpenCvRuntime } from '../../src/scan/opencvRuntime'
+import type { QualityRawCv } from '../../src/scan/opencvQualityPort'
+import { produceQueryFingerprint } from '../../src/scan/queryFingerprint'
 import { parseSiftFingerprint, type SiftFingerprint, type SiftFingerprintKeypoint } from '../../src/scan/siftFingerprint'
 import { createRecognitionEngine, RecognitionEngineError } from '../../src/scan/recognitionEngine'
 import type { RecognitionIndex } from '../../src/scan/recognitionIndex'
 import type { IncomingCatalog, IncomingCapsule } from '../../src/sync/incoming'
 import type { FrontStill } from '../../src/create/front'
 import type { StillCapture } from '../../src/scan/camera'
+import { isS3 } from '../../src/scan/s3/s3Fingerprint'
+import { framedCardJpeg } from './framedCard'
 
 interface CheckResult { name: string; ok: boolean; detail?: string }
 const assertions: CheckResult[] = []
@@ -126,13 +137,18 @@ async function main(): Promise<void> {
   try {
     const jpeg = await texturedQuadJpeg(7, 640, 480)
     const jpegSnapshot = jpeg.slice()
-    const produced = await produceFrontStillFingerprint(senderStill(jpeg.slice(), 640, 480), { fence: () => true })
+    const cv = await loadOpenCvModule()
+    const runtime = wrapOpenCvRuntime(cv)
+    const meter = createCaptureQualityMeter(cv as unknown as QualityRawCv)
+    const produced = await produceFrontStillFingerprint(senderStill(jpeg.slice(), 640, 480), { fence: () => true, runtime })
     const reference = parseSiftFingerprint(produced.wire)
     const referenceRows = reference.quantizedSiftDescriptors.map((row) => Array.from(row))
     assert('genuine sender reference has descriptors', reference.quantizedSiftDescriptors.length > 0)
 
     const capture: StillCapture = { bytes: jpeg, width: 640, height: 480 }
-    const engine = createRecognitionEngine()
+    const engine = createRecognitionEngine({
+      produceQuery: (source, options) => produceQueryFingerprint(source, { ...options, runtime, meter }),
+    })
 
     const unique = await engine.match(capture, catalogOf(['c1']), { index: indexOf([{ capsuleId: 'c1', fingerprint: reference }]) })
     assert('unique strong reference yields one exact capsule', unique.kind === 'one' && unique.capsuleId === 'c1', JSON.stringify(unique))
@@ -170,6 +186,42 @@ async function main(): Promise<void> {
       'original index reference descriptor rows are unchanged',
       reference.quantizedSiftDescriptors.every((row, index) => JSON.stringify(Array.from(row)) === JSON.stringify(referenceRows[index])),
     )
+
+    // ---- Production: the default engine and the frozen postcard matcher, no seam ----
+    const card = await framedCardJpeg(7, 720, 960)
+    const cardSnapshot = card.slice()
+    const otherCard = await framedCardJpeg(99, 720, 960)
+    const shippedReference = async (bytes: Uint8Array): Promise<SiftFingerprint> =>
+      parseSiftFingerprint((await produceFrontStillFingerprint(senderStill(bytes.slice(), 720, 960), { fence: () => true })).wire)
+    const cardReference = await shippedReference(card)
+    const otherReference = await shippedReference(otherCard)
+    assert('production sender references are the frozen matcher\'s', isS3(cardReference) && isS3(otherReference))
+    const shipped = createRecognitionEngine()
+    const cardCapture: StillCapture = { bytes: card, width: 720, height: 960 }
+
+    const shippedOne = await shipped.match(cardCapture, catalogOf(['z1', 'c1']), {
+      index: indexOf([{ capsuleId: 'z1', fingerprint: otherReference }, { capsuleId: 'c1', fingerprint: cardReference }]),
+    })
+    assert('production: the card among another yields that one capsule', shippedOne.kind === 'one' && shippedOne.capsuleId === 'c1', JSON.stringify(shippedOne))
+    report.shippedOne = shippedOne
+
+    const shippedMany = await shipped.match(cardCapture, catalogOf(['c1', 'c2']), {
+      index: indexOf([{ capsuleId: 'c1', fingerprint: cardReference }, { capsuleId: 'c2', fingerprint: cardReference }]),
+    })
+    assert(
+      'production: two distinct IDs sharing the reference yield many, naming both',
+      shippedMany.kind === 'many' && JSON.stringify([...(shippedMany.capsuleIds ?? [])].sort()) === JSON.stringify(['c1', 'c2']),
+      JSON.stringify(shippedMany),
+    )
+    report.shippedMany = shippedMany
+
+    const shippedNone = await shipped.match(cardCapture, catalogOf(['z1']), { index: indexOf([{ capsuleId: 'z1', fingerprint: otherReference }]) })
+    assert('production: another card\'s reference yields none', shippedNone.kind === 'none', JSON.stringify(shippedNone))
+    report.shippedNone = shippedNone
+
+    // Recorded, not required: what a production query makes of a contour (format-3) reference.
+    report.shippedContourReference = await shipped.match(cardCapture, catalogOf(['c1']), { index: indexOf([{ capsuleId: 'c1', fingerprint: reference }]) })
+    assert('production: caller capture bytes are unchanged', Array.from(cardCapture.bytes).every((byte, i) => byte === cardSnapshot[i]))
 
     report.pass = failures.length === 0
   } catch (error) {

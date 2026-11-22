@@ -2,19 +2,20 @@
  * T349 connected proof (Chromium-only): the ACTUAL App/Scan default path uses
  * the REAL receiving engine end to end.
  *
- * A genuine sender producer wire (synthetic textured CameraPort through the
- * accepted front-fingerprint producer) is sealed by the REAL `sealCapsule`
+ * A genuine sender producer wire (a drawn portrait card in the scan frame,
+ * through the CameraPort and the accepted front-fingerprint producer) is sealed by the REAL `sealCapsule`
  * (canvas-decodable JPEG photos, not header-only fixtures) and served over a
  * same-origin loopback catalog/signing/blob harness. The exported `App`
  * receives through the production default engine (no injected engine):
  * positive unique match -> real grant/receive/decrypt -> presentation-admitted
- * CollageStage; two distinct capsule IDs sharing one reference -> truthful
- * ambiguous notice with ZERO content/photo reads; a `has_more` page -> truthful
+ * CollageStage; two distinct capsule IDs sharing one reference -> the recipient
+ * is asked whose to open, with ZERO content/photo reads until they choose; a `has_more` page -> truthful
  * incomplete notice with ZERO body reads; an explicit injected unavailable
  * engine still refuses; locking during a pending match never admits a view.
  */
 import { createRoot, type Root } from 'react-dom/client'
 import { App } from '../../src/ui/App'
+import { ROUTE_CHANGE, currentRoute } from '../../src/router/route'
 import { RecipientDraft, type RecipientSnapshot } from '../../src/create/recipient'
 import { NoteDraft } from '../../src/create/note'
 import { PhotoDraft } from '../../src/create/photos'
@@ -36,11 +37,14 @@ import { layoutCreatorNote } from '../../src/collage/creatorNote'
 import { creatorScene, plannerFromTextMeasurer, previewCandidates } from '../../src/collage/creatorPreview'
 import { captureFrozenRenderedPlan } from '../../src/collage/frozenRenderedPlan'
 
+import { bundledFaces } from '../../src/collage/fonts'
 import type { TextMeasurer } from '../../src/collage/prepare'
+import { canvasTextMeasurer } from '../../src/collage/measure'
 import { styleById } from '../../src/collage/styles'
 import { freezeSelection, type CreatorFreeze } from '../../src/create/creatorFreeze'
 import type { DraftPhoto } from '../../src/create/photos'
 import type { CameraPort, StillCapture } from '../../src/scan/camera'
+import { framedCardJpeg } from './framedCard'
 import { unavailableRecognition, type RecognitionEngine } from '../../src/scan/grant'
 import { bytesToHex } from '../../src/protocol/bytes'
 import { catalog as i18nCatalog, type MessageKey, type Language } from '../../src/i18n/catalog'
@@ -89,11 +93,34 @@ function senderSnapshot(): RecipientSnapshot {
   }
 }
 
-const measurer: TextMeasurer = {
-  measure(request) {
-    return { width: request.text.length * 10, height: request.line, hasVisualOverflow: false }
-  },
+const faceSpec = (face: { family: string; weight: number; italic: boolean }): string => `${face.italic ? 'italic ' : ''}${face.weight} 20px ${face.family}`
+
+/**
+ * The sender measures with the real faces, as the composer does, but in a
+ * document of its own: the faces load there, and the App's document stays a
+ * recipient's who has drawn no card yet.
+ */
+async function senderMeasurer(): Promise<TextMeasurer> {
+  const frame = document.createElement('iframe')
+  frame.setAttribute('aria-hidden', 'true')
+  frame.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden'
+  document.body.appendChild(frame)
+  const doc = frame.contentDocument!
+  await Promise.all(Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')).map((link) => new Promise<void>((ok, fail) => {
+    const copy = doc.createElement('link')
+    copy.rel = 'stylesheet'
+    copy.href = link.href
+    copy.onload = () => ok()
+    copy.onerror = () => fail(new Error('sender stylesheet did not load'))
+    doc.head.appendChild(copy)
+  })))
+  for (const face of bundledFaces()) {
+    const loaded = await doc.fonts.load(faceSpec(face))
+    if (loaded.length === 0) throw new Error(`sender face did not load: ${faceSpec(face)}`)
+  }
+  return canvasTextMeasurer(doc)
 }
+let measurer!: TextMeasurer
 
 async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as unknown as BufferSource))
@@ -181,42 +208,6 @@ function mulberry32(seed: number): () => number {
   }
 }
 
-async function texturedQuadJpeg(seed: number, width: number, height: number): Promise<Uint8Array> {
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const context = canvas.getContext('2d')
-  if (!context) throw new Error('no 2d context')
-  context.fillStyle = '#101418'
-  context.fillRect(0, 0, width, height)
-  const quad = [
-    { x: 100, y: 80 }, { x: 540, y: 60 }, { x: 560, y: 400 }, { x: 80, y: 420 },
-  ]
-  context.save()
-  context.beginPath()
-  context.moveTo(quad[0]!.x, quad[0]!.y)
-  for (let i = 1; i < quad.length; i++) context.lineTo(quad[i]!.x, quad[i]!.y)
-  context.closePath()
-  context.clip()
-  const random = mulberry32(seed)
-  for (let i = 0; i < 260; i++) {
-    const gray = Math.floor(random() * 256)
-    context.fillStyle = `rgb(${gray},${gray},${gray})`
-    context.fillRect(quad[0]!.x + random() * 480, quad[0]!.y + random() * 340, 4 + random() * 22, 4 + random() * 22)
-  }
-  context.restore()
-  context.lineWidth = 6
-  context.strokeStyle = '#ffffff'
-  context.beginPath()
-  context.moveTo(quad[0]!.x, quad[0]!.y)
-  for (let i = 1; i < quad.length; i++) context.lineTo(quad[i]!.x, quad[i]!.y)
-  context.closePath()
-  context.stroke()
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92))
-  if (!blob) throw new Error('encode failed')
-  return new Uint8Array(await blob.arrayBuffer())
-}
-
 async function waitFor(cond: () => boolean, what: string, timeoutMs = 120000): Promise<void> {
   const start = Date.now()
   for (;;) {
@@ -299,12 +290,13 @@ async function main(): Promise<void> {
     const producerTicket = producerRecipient.nextTicket(SENDER_ID)
     producerRecipient.offer(producerTicket, SENDER_ID, senderSnapshot())
     producerRecipient.confirm()
-    const quad = await texturedQuadJpeg(7, 640, 480)
+    // A portrait card inside the scan frame: what the frozen matcher (S3) reads.
+    const quad = await framedCardJpeg(7, 720, 960)
     const producerHold = new FrontHold()
     await producerHold.open({
       open: async () => ({
         preview: document.createElement('video') as HTMLVideoElement,
-        capture: async (): Promise<StillCapture> => ({ bytes: quad.slice(), width: 640, height: 480 }),
+        capture: async (): Promise<StillCapture> => ({ bytes: quad.slice(), width: 720, height: 960 }),
         stop: () => undefined,
       }),
     })
@@ -316,13 +308,14 @@ async function main(): Promise<void> {
       hold: producerHold,
       mounted: () => true,
     })
-    assert('genuine producer wire is nonempty format-3', produced.wire.length > 0)
+    assert('genuine producer wire is nonempty', produced.wire.length > 0)
 
     const photoDrafts = await Promise.all([jpeg('p0', 300, 400), jpeg('p1', 300, 400), jpeg('p2', 300, 400)])
     const hashedPhotos = await Promise.all(photoDrafts.map(async (photo) => ({
       ...photo,
       contentHash: bytesToHex(await sha256(photo.bytes)),
     })))
+    measurer = await senderMeasurer()
     const freeze = await buildFreeze(hashedPhotos, NOTE_TEXT, senderStore.getSnapshot().generation)
     const ordered = freeze.slots.map((slot) => hashedPhotos.find((photo) => photo.id === slot.contentId)!)
 
@@ -375,12 +368,12 @@ async function main(): Promise<void> {
     const item2 = await wireItem(sealed2)
     // Distinct visual reference so a cross-page unique page can contain a
     // non-matching capsule before the matching one.
-    const otherQuad = await texturedQuadJpeg(99, 640, 480)
+    const otherQuad = await framedCardJpeg(99, 720, 960)
     const otherHold = new FrontHold()
     await otherHold.open({
       open: async () => ({
         preview: document.createElement('video') as HTMLVideoElement,
-        capture: async (): Promise<StillCapture> => ({ bytes: otherQuad.slice(), width: 640, height: 480 }),
+        capture: async (): Promise<StillCapture> => ({ bytes: otherQuad.slice(), width: 720, height: 960 }),
         stop: () => undefined,
       }),
     })
@@ -466,7 +459,7 @@ async function main(): Promise<void> {
         preview: document.createElement('video') as HTMLVideoElement,
         capture: async (): Promise<StillCapture> => {
           const bytes = scanQuad.slice(); capturedBytes.push(bytes)
-          return { bytes, width: 640, height: 480 }
+          return { bytes, width: 720, height: 960 }
         },
         stop: () => { cameraStops++ },
       }),
@@ -487,7 +480,8 @@ async function main(): Promise<void> {
     const rootRef: { current: Root | null } = { current: null }
     const mountApp = (rec: ReturnType<typeof makeRecipient>, engine?: RecognitionEngine): void => {
       rootRef.current?.unmount()
-      window.location.hash = '#/scan'
+      // A new history entry on the scan page, as a link to it makes.
+      history.pushState(null, '', '/scan')
       const host = document.createElement('div')
       host.setAttribute('data-testid', 'app-host')
       // App owns the shell; a second shell distorts responsive proof and leaves
@@ -526,12 +520,18 @@ async function main(): Promise<void> {
     }>('/__capture')
     const waitNotice = (key: MessageKey) => waitFor(() => bodyText().includes(t(key)), `notice ${key}`)
     const stageShown = () => document.querySelector('.stage') !== null
+    const senderChoices = () => Array.from(document.querySelectorAll<HTMLButtonElement>('.sender-choice button'))
+    // The mark in the shell's header is a link home; the app turns the click into a route change.
+    const leaveByLink = (): void => { (document.querySelector('.shell a.mark') as HTMLAnchorElement).click() }
 
     // ---- POSITIVE: production DEFAULT engine opens the exact sealed capsule ----
     // Real server terminal semantics: has_more=false with a NON-NULL cursor.
     await serveCatalog([item1], false, canonicalCursor(1))
     let rec = makeRecipient()
     const beforePositive = await captureCounts()
+    // The first card this document draws: none of its faces has loaded here.
+    assert('positive: the recipient has drawn no card before this one', bundledFaces().every((face) => !document.fonts.check(faceSpec(face))),
+      JSON.stringify(bundledFaces().filter((face) => document.fonts.check(faceSpec(face)))))
     mountApp(rec)
     await runScan('positive')
     await waitFor(() => rec.store.getSnapshot().phase === 'presentation-admitted', 'presentation admitted', 60000)
@@ -597,7 +597,7 @@ async function main(): Promise<void> {
       }
       assert(`${interruption}: no presentation while admission unresolved`, !stageShown() && rec.memory.getSnapshot() === null)
       if (interruption === 'cancel') await clickText(t('closeCamera'), 'cancel admission')
-      else if (interruption === 'back') { location.hash = '#/'; await waitFor(() => !buttonByText(t('matchPicture')), 'back unmount') }
+      else if (interruption === 'back') { leaveByLink(); await waitFor(() => !buttonByText(t('matchPicture')), 'back unmount') }
       else {
         rec.store.signOut()
         if (interruption !== 'logout') {
@@ -630,10 +630,10 @@ async function main(): Promise<void> {
       && !stageShown() && rec.memory.getSnapshot() === null && rec.store.getSnapshot().phase === 'keys-unlocked')
     rootRef.current?.unmount()
 
-    // Real native Back/popstate, not a hash assignment followed by unmount.
+    // The shell's own home link and real native Back/popstate, not an unmount.
     // Keep the original reviewer's response/event ordering as the RED control.
-    for (const navigationKind of ['hash', 'browser-back'] as const) {
-      history.replaceState(null, '', '#/')
+    for (const navigationKind of ['link', 'browser-back'] as const) {
+      history.replaceState(null, '', '/')
       rec = makeRecipient(); mountApp(rec)
       let reached!: () => void, releaseResponse!: () => void
       const entered = new Promise<void>((ok) => { reached = ok })
@@ -645,27 +645,27 @@ async function main(): Promise<void> {
       let synchronousCleanup = false
       let offRouteAdmission = false
       const stopObservation = rec.store.subscribe(() => {
-        if (rec.store.getSnapshot().phase === 'presentation-admitted' && location.hash !== '#/scan') offRouteAdmission = true
+        if (rec.store.getSnapshot().phase === 'presentation-admitted' && currentRoute() !== 'scan') offRouteAdmission = true
       })
-      window.addEventListener(navigationKind === 'hash' ? 'hashchange' : 'popstate', () => {
+      window.addEventListener(navigationKind === 'link' ? ROUTE_CHANGE : 'popstate', () => {
         synchronousCleanup = lastAdmissionSignal?.aborted === true && cameraStops > stopsBeforeDeparture
           && capturedBytes.at(-1)!.every((byte) => byte === 0)
         releaseResponse()
       }, { once: true })
-      if (navigationKind === 'hash') location.hash = '#/'
+      if (navigationKind === 'link') leaveByLink()
       else history.back()
       await new Promise((ok) => setTimeout(ok, 300))
       assert('native ' + navigationKind + ': no admission after route departure', !offRouteAdmission)
       assert('native ' + navigationKind + ': late reply leaves no sheet', rec.memory.getSnapshot() === null && rec.store.getSnapshot().phase === 'keys-unlocked')
       assert('native ' + navigationKind + ': synchronous abort/camera/capture cleanup', synchronousCleanup)
       assert('native ' + navigationKind + ': decrypted bytes zero and no URLs', allZero() && rec.liveUrls.size === 0)
-      report['native-' + navigationKind] = { offRouteAdmission, phase: rec.store.getSnapshot().phase, sheet: rec.memory.getSnapshot() !== null, hash: location.hash }
+      report['native-' + navigationKind] = { offRouteAdmission, phase: rec.store.getSnapshot().phase, sheet: rec.memory.getSnapshot() !== null, path: location.pathname }
       await fetch('/__shot', { method: 'POST', body: JSON.stringify({ name: 'native-' + navigationKind, width: 320 }) })
       delayedAdmission = null
       stopObservation()
       if (navigationKind === 'browser-back') {
         history.forward()
-        await waitFor(() => location.hash === '#/scan' && buttonByText(t('useCamera')) !== null, 'forward returns idle scan')
+        await waitFor(() => currentRoute() === 'scan' && buttonByText(t('useCamera')) !== null, 'forward returns idle scan')
         assert('forward cannot resurrect cancelled admission', rec.memory.getSnapshot() === null && !stageShown())
         await runScan('explicit scan after forward')
         await waitFor(stageShown, 'forward explicit replay')
@@ -679,8 +679,8 @@ async function main(): Promise<void> {
 
     // Local crypto completion at the same native event boundary must not even
     // request first-open. Unlike the response case there is no server commit.
-    for (const navigationKind of ['hash', 'browser-back'] as const) {
-      history.replaceState(null, '', '#/')
+    for (const navigationKind of ['link', 'browser-back'] as const) {
+      history.replaceState(null, '', '/')
       rec = makeRecipient(); mountApp(rec)
       prepareGate = new Promise<void>((ok) => { releasePrepare = ok })
       const before = await captureCounts(), byteCount = preparedBytes.length
@@ -688,13 +688,13 @@ async function main(): Promise<void> {
       await waitFor(() => preparedBytes.length >= byteCount + 3, 'native photo decrypt held')
       const stops = cameraStops
       let syncCleanup = false
-      window.addEventListener(navigationKind === 'hash' ? 'hashchange' : 'popstate', () => {
+      window.addEventListener(navigationKind === 'link' ? ROUTE_CHANGE : 'popstate', () => {
         syncCleanup = cameraStops > stops && capturedBytes.at(-1)!.every((byte) => byte === 0)
         prepareGate = null; releasePrepare()
       }, { once: true })
-      if (navigationKind === 'hash') location.hash = '#/'
+      if (navigationKind === 'link') leaveByLink()
       else history.back()
-      await waitFor(() => location.hash === '#/' && allZero(), 'native prepared bytes wiped')
+      await waitFor(() => currentRoute() === 'home' && allZero(), 'native prepared bytes wiped')
       assert('native prepare ' + navigationKind + ': synchronous camera/capture cleanup', syncCleanup)
       assert('native prepare ' + navigationKind + ': zero first-open, sheet, URLs', (await captureCounts()).admissions.length === before.admissions.length
         && rec.memory.getSnapshot() === null && rec.liveUrls.size === 0 && rec.store.getSnapshot().phase === 'keys-unlocked')
@@ -741,14 +741,23 @@ async function main(): Promise<void> {
     const beforeMany = await captureCounts()
     mountApp(rec)
     await runScan('many')
-    await waitNotice('ambiguousMatch')
+    // The same postcard from two senders: the recipient is asked whose to open, and nothing is read until they say.
+    await waitNotice('chooseSender')
     const manyCounts = await captureCounts()
-    assert('many: ambiguous notice is shown', bodyText().includes(t('ambiguousMatch')))
+    assert('many: asks whose postcard to open', bodyText().includes(t('chooseSender')) && senderChoices().length === 2, String(senderChoices().length))
     assert('many: no CollageStage', !stageShown())
     assert('many: zero content reads', manyCounts.content === beforeMany.content)
     assert('many: zero photo reads', manyCounts.photo === beforeMany.photo)
+    assert('many: no admission before the choice', manyCounts.admissions.length === beforeMany.admissions.length)
     assert('many: phase stays keys-unlocked', rec.store.getSnapshot().phase === 'keys-unlocked')
     report.many = manyCounts
+    senderChoices()[1]!.click()
+    await waitFor(() => stageShown(), 'chosen sender\'s postcard displayed', 60000)
+    const chosenCounts = await captureCounts()
+    assert('many: the choice opens that sender\'s capsule and no other', chosenCounts.admissions.length === manyCounts.admissions.length + 1
+      && chosenCounts.admissions.at(-1)?.capsule === sealed2.capsuleId && rec.memory.getSnapshot()?.photos.size === 3,
+      JSON.stringify(chosenCounts.admissions.slice(manyCounts.admissions.length)))
+    rec.store.lock()
     rootRef.current?.unmount()
 
     // ---- INCOMPLETE later page fails closed, nothing opened ----
@@ -818,9 +827,9 @@ async function main(): Promise<void> {
     const beforeCrossMany = await captureCounts()
     mountApp(rec)
     await runScan('cross-page many')
-    await waitNotice('ambiguousMatch')
+    await waitNotice('chooseSender')
     const crossManyCounts = await captureCounts()
-    assert('cross-page many: ambiguous notice', bodyText().includes(t('ambiguousMatch')))
+    assert('cross-page many: asks whose postcard to open', bodyText().includes(t('chooseSender')) && senderChoices().length === 2, String(senderChoices().length))
     assert('cross-page many: no CollageStage', !stageShown())
     assert('cross-page many: zero content reads', crossManyCounts.content === beforeCrossMany.content)
     assert('cross-page many: zero photo reads', crossManyCounts.photo === beforeCrossMany.photo)

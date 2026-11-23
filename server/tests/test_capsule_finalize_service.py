@@ -126,14 +126,19 @@ def _seed_user(session, label: str, *, signing_public: bytes) -> tuple[User, Use
     return user, bundle
 
 
-def _payloads() -> dict[CapsuleBlobKind | int, bytes]:
-    return {
+def _payloads(full: bool = False) -> dict[CapsuleBlobKind | int, bytes]:
+    payloads: dict[CapsuleBlobKind | int, bytes] = {
         CapsuleBlobKind.RECOGNITION_MANIFEST: b"recognition-ciphertext",
         CapsuleBlobKind.CONTENT_MANIFEST: b"content-ciphertext",
         0: b"photo-0-ciphertext",
         1: b"photo-1-ciphertext",
         2: b"photo-2-ciphertext",
     }
+    if full:
+        # ADR-021: the most a card carries, 5 photos, a voice note and a video square.
+        payloads.update({3: b"photo-3-ciphertext", 4: b"photo-4-ciphertext",
+                         CapsuleBlobKind.MEDIA: b"voice-ciphertext", CapsuleBlobKind.VIDEO: b"video-ciphertext"})
+    return payloads
 
 
 def _add_draft(
@@ -162,13 +167,10 @@ def _add_draft(
     )
     session.add(capsule)
     session.flush()
-    specs = (
-        (CapsuleBlobKind.RECOGNITION_MANIFEST, None),
-        (CapsuleBlobKind.CONTENT_MANIFEST, None),
-        (CapsuleBlobKind.PHOTO, 0),
-        (CapsuleBlobKind.PHOTO, 1),
-        (CapsuleBlobKind.PHOTO, 2),
-    )
+    specs = [
+        (key, None) if isinstance(key, CapsuleBlobKind) else (CapsuleBlobKind.PHOTO, key)
+        for key in payloads
+    ]
     for kind, ordinal in specs:
         body = payloads[kind if ordinal is None else ordinal]
         blob_id = uuid4()
@@ -205,12 +207,12 @@ def _store_all(session, store: LocalFileBlobStore, capsule: Capsule, payloads: d
 def _protocol_blobs(session, capsule: Capsule) -> list[CapsuleBlob]:
     blobs = list(session.scalars(select(CapsuleBlob).where(CapsuleBlob.capsule_id == capsule.id)))
     photos = {blob.ordinal: blob for blob in blobs if blob.kind is CapsuleBlobKind.PHOTO}
+    media = [blob for kind in (CapsuleBlobKind.MEDIA, CapsuleBlobKind.VIDEO) for blob in blobs if blob.kind is kind]
     return [
         next(blob for blob in blobs if blob.kind is CapsuleBlobKind.RECOGNITION_MANIFEST),
         next(blob for blob in blobs if blob.kind is CapsuleBlobKind.CONTENT_MANIFEST),
-        photos[0],
-        photos[1],
-        photos[2],
+        *(photos[ordinal] for ordinal in sorted(photos)),
+        *media,
     ]
 
 
@@ -290,8 +292,8 @@ def _finalize(session, store, *, sender_id: UUID, capsule: Capsule, statement: b
     )
 
 
-def _ready_world(session, tmp_path, *, self_send: bool = False):
-    payloads = _payloads()
+def _ready_world(session, tmp_path, *, self_send: bool = False, full: bool = False):
+    payloads = _payloads(full)
     sender_private, sender_public = _signing_pair()
     sender, sender_bundle = _seed_user(session, "sender", signing_public=sender_public)
     if self_send:
@@ -371,6 +373,25 @@ def test_happy_path_persists_ready_envelope_and_delivery(session_factory, tmp_pa
         assert delivery.ciphertext_synced_at is None
         assert delivery.available_at == capsule.ready_at == _NOW
         assert session.scalar(select(func.count()).select_from(CapsuleEnvelope)) == 1
+
+
+def test_a_card_with_five_photos_a_voice_note_and_a_video_reaches_ready(session_factory, tmp_path):
+    with session_factory() as session:
+        world = _ready_world(session, tmp_path, full=True)
+        result = _finalize(
+            session,
+            world["store"],
+            sender_id=world["sender"].id,
+            capsule=world["capsule"],
+            statement=world["statement"],
+            signature_bytes=world["signature"],
+            envelope=world["envelope"],
+        )
+        session.commit()
+        assert result.state is CapsuleState.READY
+        kinds = sorted(blob.kind.value for blob in session.scalars(
+            select(CapsuleBlob).where(CapsuleBlob.capsule_id == world["capsule"].id)))
+        assert len(kinds) == 9 and kinds.count("MEDIA") == 1 and kinds.count("VIDEO") == 1
 
 
 def test_self_send_reaches_ready(session_factory, tmp_path):

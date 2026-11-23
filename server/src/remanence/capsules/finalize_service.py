@@ -293,6 +293,9 @@ class CapsuleFinalizeService:
                 <= LIMITS_V1.recognition_manifest_count
                 + LIMITS_V1.content_manifest_count
                 + LIMITS_V1.photo_count_max
+                # ADR-021: a voice note and a video square ride beside the photos.
+                + LIMITS_V1.media_count_max
+                + LIMITS_V1.video_count_max
             ):
                 raise _error("INTERNAL_ERROR")
             if any(blob.state is not CapsuleBlobState.STORED for blob in blobs):

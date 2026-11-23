@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { MessageKey } from '../i18n/catalog'
 import { exportComposition } from './exportComposition'
+import { zipStore, type ZipEntry } from './zipStore'
 import { paintScene, type PaintImage } from './paint'
 import type { HeldSheet } from './memory'
 import type { Scene } from './prepare'
@@ -188,16 +189,17 @@ export function CollageStage({
     else setViewer({ index, owner: held })
   }
 
-  async function exportSheet() {
+  async function exportSheet(whole = false) {
     if (paintState !== 'ready' || exporting) return
     const target = canvas.current
     if (!target) return
     const token = epoch.current
+    const sheet = held
     setExporting(true)
     setExportFailed(false)
     const outcome = await exportComposition({
       isCurrent: () => token === epoch.current && canvas.current === target,
-      encode: () => encodePort(target),
+      encode: () => whole ? encodeWhole(sheet, () => encodePort(target)) : encodePort(target),
       createUrl: (blob) => {
         const url = URL.createObjectURL(blob)
         exportUrls.current.add(url)
@@ -206,7 +208,7 @@ export function CollageStage({
       download: (url) => {
         const link = document.createElement('a')
         link.href = url
-        link.download = 'remanence.png'
+        link.download = whole ? 'remanence.zip' : 'remanence.png'
         link.click()
       },
       revokeUrl: (url) => {
@@ -259,7 +261,11 @@ export function CollageStage({
           <p className="status" role="status" aria-live="polite">{status}</p>
           <div className="actions">
             <button type="button" className="icon-action" aria-label={t('exportComposition')} title={t('exportComposition')}
-              disabled={paintState !== 'ready' || exporting} onClick={exportSheet}><Icon name="download" /></button>
+              disabled={paintState !== 'ready' || exporting} onClick={() => { void exportSheet() }}><Icon name="download" /></button>
+            {held.letter !== null || held.sound !== null || held.film !== null ? (
+              <button type="button" className="icon-action" aria-label={t('exportPostcard')} title={t('exportPostcard')}
+                disabled={paintState !== 'ready' || exporting} onClick={() => { void exportSheet(true) }}><Icon name="postcard" /></button>
+            ) : null}
             <button ref={closeButton} type="button" className="icon-action" aria-label={t('closeSheet')} title={t('closeSheet')}
               onClick={onClose}><Icon name="close" /></button>
           </div>
@@ -319,6 +325,22 @@ async function loadFaces(scene: Scene): Promise<void> {
   }
   for (const mark of scene.provenance) faces.add(`${mark.weight} ${mark.size}px ${mark.family}`)
   await Promise.all([...faces].map((face) => document.fonts.load(face)))
+}
+
+/**
+ * ADR-021 §6: the whole postcard in one archive, so nothing the picture
+ * cannot hold is lost: the picture, the letter as text, the voice note and
+ * the video as the MP4s the sender recorded.
+ */
+async function encodeWhole(held: HeldSheet, picture: () => Promise<Blob | null>): Promise<Blob | null> {
+  const png = await picture()
+  if (png === null) return null
+  const entries: ZipEntry[] = [{ name: 'postcard.png', bytes: new Uint8Array(await png.arrayBuffer()) }]
+  if (held.letter !== null) entries.push({ name: 'letter.txt', bytes: new TextEncoder().encode(held.letter) })
+  if (held.sound !== null) entries.push({ name: 'voice.m4a', bytes: new Uint8Array(await (await fetch(held.sound)).arrayBuffer()) })
+  if (held.film !== null) entries.push({ name: 'video.mp4', bytes: new Uint8Array(await (await fetch(held.film)).arrayBuffer()) })
+  const zip = zipStore(entries)
+  return new Blob([zip as unknown as BlobPart], { type: 'application/zip' })
 }
 
 function encodePng(canvas: HTMLCanvasElement): Promise<Blob | null> {

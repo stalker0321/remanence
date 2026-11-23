@@ -381,5 +381,6 @@
   "videoDenied": "the camera is not allowed for this site. allow it in the browser settings and try again",
   "videoFailed": "the video did not record. try again",
   "videoTooLarge": "the video came out too large. record a shorter one",
-  "videoTooShort": "the video is too short. record at least a second"
+  "videoTooShort": "the video is too short. record at least a second",
+  "exportPostcard": "save the whole postcard: picture, letter, voice and video"
 }

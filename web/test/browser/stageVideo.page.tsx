@@ -199,6 +199,35 @@ async function main(): Promise<void> {
     await advancing(film, 'back to the silent loop')
     assert('at its end it goes back to the silent loop', film()!.muted && !film()!.paused)
 
+    step = 'whole-postcard'
+    const made: Blob[] = []
+    const create = URL.createObjectURL.bind(URL)
+    URL.createObjectURL = (object: Blob | MediaSource) => {
+      if (object instanceof Blob) made.push(object)
+      return create(object)
+    }
+    const whole = [...document.querySelectorAll('.stage button')].find((button) => button.getAttribute('aria-label') === t('exportPostcard')) as HTMLButtonElement | undefined
+    assert('the card offers to save the whole postcard', whole !== undefined)
+    whole?.click()
+    await waitFor(() => made.some((blob) => blob.type === 'application/zip'), 'the archive is made', 10000)
+    URL.createObjectURL = create
+    const zip = new Uint8Array(await made.find((blob) => blob.type === 'application/zip')!.arrayBuffer())
+    const bytes = new DataView(zip.buffer)
+    const end = zip.length - 22
+    const names: Record<string, number> = {}
+    let at = bytes.getUint32(end + 16, true)
+    for (let index = 0; index < bytes.getUint16(end + 10, true); index++) {
+      const length = bytes.getUint16(at + 28, true)
+      names[new TextDecoder().decode(zip.subarray(at + 46, at + 46 + length))] = bytes.getUint32(at + 24, true)
+      at += 46 + length
+    }
+    report.archive = names
+    const videoBytes = (await (await fetch('./video-2s.mp4')).arrayBuffer()).byteLength
+    const voiceBytes = (await (await fetch('./voice-2s.m4a')).arrayBuffer()).byteLength
+    assert('the archive holds the picture, the voice note and the video, byte for byte in size',
+      (names['postcard.png'] ?? 0) > 1000 && names['voice.m4a'] === voiceBytes && names['video.mp4'] === videoBytes && !('letter.txt' in names),
+      JSON.stringify(names))
+
     step = 'close'
     const element = film()!
     render(null)

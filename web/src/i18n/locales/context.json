@@ -381,5 +381,6 @@
   "videoDenied": "Create page, video camera: the camera or microphone permission was refused.",
   "videoFailed": "Create page, video camera: recording failed.",
   "videoTooLarge": "Create page, video camera: the recording is over the size a card can carry.",
-  "videoTooShort": "Create page, video camera: the recording is shorter than a second."
+  "videoTooShort": "Create page, video camera: the recording is shorter than a second.",
+  "exportPostcard": "Postcard viewer button, shown when the card has a letter, a voice note or a video: saves one .zip with the picture, the letter as text and the recordings, so nothing the image cannot hold is lost."
 }

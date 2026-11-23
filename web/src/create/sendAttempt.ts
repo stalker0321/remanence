@@ -59,6 +59,8 @@ export interface SendVisit {
   trackId: string | null
   /** The recorded voice note's MP4, or null; must be the one the freeze sealed. */
   voice?: Uint8Array | null
+  /** The video square's MP4, or null; must be the one the freeze sealed. */
+  video?: Uint8Array | null
   freeze: CreatorFreeze
   still: FrontStill
   fingerprint: FrontFingerprintValue
@@ -117,6 +119,7 @@ function visitCurrent(visit: SendVisit, ports: SendPortsFull): boolean {
   if ((ports.letterTextCurrent?.() ?? '') !== (visit.letterText ?? '')) return false
   if (ports.trackIdCurrent() !== visit.trackId) return false
   if ((ports.voiceCurrent?.() ?? null) !== (visit.voice ?? null)) return false
+  if ((ports.videoCurrent?.() ?? null) !== (visit.video ?? null)) return false
   if (ports.freezeCurrent() !== visit.freeze) return false
   if (ports.stillCurrent() !== visit.still) return false
   if (ports.fingerprintCurrent() !== visit.fingerprint) return false
@@ -137,6 +140,8 @@ export interface SendCurrentAccessors {
   trackIdCurrent(): string | null
   /** The recorded voice note's bytes (the same array while it is unchanged), or null. */
   voiceCurrent?(): Uint8Array | null
+  /** The video square's bytes (the same array while it is unchanged), or null. */
+  videoCurrent?(): Uint8Array | null
   freezeCurrent(): CreatorFreeze | null
   stillCurrent(): FrontStill | null
   fingerprintCurrent(): FrontFingerprintValue | null
@@ -162,6 +167,7 @@ export function sendPreflight(visit: SendVisit, ports: SendPortsFull): SendPrefl
   if (visit.photos.length < 3 || visit.photos.length > 5) return { ok: false, reason: 'photos' }
   if (visit.trackId !== (visit.freeze.track?.trackId ?? null)) return { ok: false, reason: 'music' }
   if (((visit.voice ?? null) === null) !== ((visit.freeze.voice ?? null) === null)) return { ok: false, reason: 'music' }
+  if (((visit.video ?? null) === null) !== ((visit.freeze.video ?? null) === null)) return { ok: false, reason: 'freeze' }
   if (visit.freeze.grammarId !== visit.freeze.renderedPlan.grammarId) return { ok: false, reason: 'freeze' }
   if (visit.still.bytes.length === 0) return { ok: false, reason: 'still' }
   if (visit.fingerprint.wire.length === 0) return { ok: false, reason: 'fingerprint' }
@@ -240,6 +246,7 @@ export async function runSendAttempt(
       placeLabel: null,
       letter: visit.letterText && visit.letterText.trim() !== '' ? visit.letterText : null,
       voice: visit.voice ?? null,
+      video: visit.video ?? null,
     })
   } catch (error) {
     if (error instanceof SealCapsuleError) {

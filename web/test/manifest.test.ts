@@ -299,6 +299,51 @@ describe('content manifest encoder', () => {
     expect(clipLetter('a' + '😀'.repeat(2500))).toBe('a' + '😀'.repeat(1999))
   })
 
+  it('writes and reads the video square in field 10 over a square poster', async () => {
+    const expression = await expressionFor('Probe note text.')
+    const blobs = blobsFor(expression)
+    const poster = expression.input.photos[1]!.contentId
+    const blobId = Uint8Array.from({ length: 16 }, (_, index) => 0x50 + index)
+    const video = { blobId, durationMs: 12_300, size: 480, posterContentId: poster }
+    const encoded = await encodeContentManifest({ expression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobs, video })
+    if (!encoded.ok) throw new Error(`encode failed: ${encoded.reason}`)
+    const parsed = await parseContentManifest(encoded.bytes)
+    expect(parsed.video).toEqual({ blobId, mimeType: 'video/mp4', durationMs: 12_300, size: 480, posterContentId: poster, posterSide: 1000 })
+    expect(parsed.voice).toBeNull()
+    for (const bad of [
+      { ...video, durationMs: 30_001 },
+      { ...video, durationMs: 0 },
+      { ...video, size: 100 },
+      { ...video, posterContentId: 'nobody' },
+      { ...video, blobId: blobId.slice(1) },
+    ]) {
+      expect(await encodeContentManifest({ expression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobs, video: bad })).toMatchObject({ ok: false, reason: 'video' })
+    }
+    const plain = await encodeContentManifest({ expression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobs })
+    if (!plain.ok) throw new Error('plain encode failed')
+    const entry = (fields: Uint8Array[]) => protoBytes(10, Uint8Array.from(fields.flatMap((field) => [...field])))
+    const forged = (over: { kind?: number; mime?: string; width?: number; height?: number; poster?: string; extra?: Uint8Array[] }) => entry([
+      protoVarint(1, over.kind ?? 2),
+      protoBytes(2, blobId),
+      protoBytes(3, new TextEncoder().encode(over.mime ?? 'video/mp4')),
+      protoVarint(4, 9_000),
+      protoVarint(5, over.width ?? 480),
+      protoVarint(6, over.height ?? 480),
+      protoBytes(7, new TextEncoder().encode(over.poster ?? poster)),
+      ...(over.extra ?? []),
+    ])
+    expect((await parseContentManifest(new Uint8Array([...plain.bytes, ...forged({})]))).video?.durationMs).toBe(9_000)
+    for (const bad of [
+      forged({ kind: 1 }),
+      forged({ mime: 'video/webm' }),
+      forged({ height: 640 }),
+      forged({ poster: 'nobody' }),
+      forged({ extra: [protoBytes(8, new Uint8Array(48))] }),
+    ]) {
+      await expect(parseContentManifest(new Uint8Array([...plain.bytes, ...bad]))).rejects.toThrow()
+    }
+  })
+
   it('reads a voice note from field 9 and draws it in the band instead of a song', async () => {
     const peaks = Uint8Array.from({ length: VOICE_PEAKS }, (_, index) => (index * 53) % 256)
     const blobId = Uint8Array.from({ length: 16 }, (_, index) => 0x30 + index)
@@ -326,8 +371,8 @@ describe('content manifest encoder', () => {
     ]) {
       await expect(parseContentManifest(new Uint8Array([...plain.bytes, ...bad]))).rejects.toThrow()
     }
-    // A circle is not drawn yet: the card is refused as unsupported, not opened without it.
-    await expect(parseContentManifest(new Uint8Array([...plain.bytes, ...voiceEntry({ kind: 2 })]))).rejects.toMatchObject({ code: 'UNSUPPORTED' })
+    // Field 9 holds only a voice note; the video square has its own field.
+    await expect(parseContentManifest(new Uint8Array([...plain.bytes, ...voiceEntry({ kind: 2 })]))).rejects.toMatchObject({ code: 'INVALID_ENCODING' })
     // A song and a voice note never share one card.
     const songExpression = await expressionFor('Probe note text.', 3, TRACK)
     const song = await encodeContentManifest({ expression: songExpression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobsFor(songExpression), track: TRACK })

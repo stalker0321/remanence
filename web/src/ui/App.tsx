@@ -70,6 +70,8 @@ import { GoogleButton, Icon, StepTrail } from './Primitives'
 import { CameraFeedback, type CameraFailure } from './CameraFeedback'
 import { VoiceDraft } from './VoiceDraft'
 import type { VoiceRecording } from '../create/voice'
+import { VideoDraft } from './VideoDraft'
+import type { VideoRecording } from '../create/videoSquare'
 
 export function App({
   store,
@@ -717,6 +719,37 @@ export function Create({
     setVoiceState(next)
     setStamp((value) => value + 1)
   }
+  // The video square takes one photo's place (ADR-021): its first frame joins
+  // the photos as the tile it plays in, and goes with it.
+  const [video, setVideoState] = useState<(VideoRecording & { posterId: string }) | null>(null)
+  const videoRef = useRef<(VideoRecording & { posterId: string }) | null>(null)
+  videoRef.current = video
+  const creatorVideo = useMemo(() => (video === null ? null : { sha256Hex: video.sha256Hex, durationMs: video.durationMs, size: video.size, posterContentId: video.posterId }), [video])
+  async function setVideo(next: VideoRecording | null): Promise<void> {
+    invalidateSend()
+    const previous = videoRef.current
+    if (previous !== null) {
+      photos.remove(previous.posterId)
+      rememberPhotos()
+    }
+    setVideoState(null)
+    videoRef.current = null
+    setStamp((value) => value + 1)
+    if (next === null) return
+    const before = new Set(photos.photos().map((photo) => photo.id))
+    await addPhotos([new File([next.poster], 'video-first-frame.jpg', { type: 'image/jpeg' })])
+    const poster = photos.photos().find((photo) => !before.has(photo.id))
+    if (!poster) return
+    const held = { ...next, posterId: poster.id }
+    videoRef.current = held
+    setVideoState(held)
+    setStamp((value) => value + 1)
+  }
+  // Removing the first frame from the photos removes the video with it.
+  if (video !== null && !photos.photos().some((photo) => photo.id === video.posterId)) {
+    videoRef.current = null
+    setVideoState(null)
+  }
   const bound = confirmed ? `${confirmed.userId}:${confirmed.keyBundleId}:${confirmed.directoryVersion}` : ''
   useEffect(() => {
     if (pending !== null && confirmed === null) recipientHeading.current?.focus()
@@ -747,6 +780,7 @@ export function Create({
     letterTextCurrent: () => sides(note.accepted()).letter ?? '',
     trackIdCurrent: () => music.selected()?.id ?? null,
     voiceCurrent: () => voiceRef.current?.bytes ?? null,
+    videoCurrent: () => videoRef.current?.bytes ?? null,
     freezeCurrent: () => frozenRef.current,
     stillCurrent: () => front.current.still(),
     fingerprintCurrent: () => frontFp.current.current(),
@@ -1067,6 +1101,7 @@ export function Create({
       letterText: acceptedSides.letter ?? '',
       trackId: selectedMusic?.id ?? null,
       voice: voiceRef.current?.bytes ?? null,
+      video: videoRef.current?.bytes ?? null,
       freeze,
       still,
       fingerprint,
@@ -1383,8 +1418,11 @@ export function Create({
             <p className="field-hint">{t('photoCount')} · {photos.photos().length} / {PHOTO_COUNT_MAX}</p>
             {photos.photos().length > 0 ? <ul className="photo-grid">
               {photos.photos().map((photo) => (
-                <li key={photo.id}>
+                <li key={photo.id} className={photo.id === video?.posterId ? 'is-video' : undefined}>
                   <img src={urls.current.get(photo.id)} alt="" />
+                  {photo.id === video?.posterId ? (
+                    <svg className="photo-video-mark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M7 19V7H19M81 7H93V19M93 81V93H81M19 93H7V81" /></svg>
+                  ) : null}
                   <button type="button" className="photo-remove" aria-label={t('removePhoto')} title={t('removePhoto')} onClick={() => { invalidateSend(); photos.remove(photo.id); rememberPhotos(); setStamp((value) => value + 1) }}><span aria-hidden="true">×</span></button>
                 </li>
               ))}
@@ -1406,6 +1444,13 @@ export function Create({
                 }}
               />
             </label> : null}
+            <VideoDraft
+              video={video}
+              onVideo={(next) => { void setVideo(next) }}
+              photosFull={photos.photos().length >= PHOTO_COUNT_MAX}
+              disabled={sendPhase !== 'idle' || photoIntakePending}
+              t={t}
+            />
           </section>
           <section className="draft-section">
           <label className="handle-form">
@@ -1439,6 +1484,7 @@ export function Create({
                   letter={sides(note.accepted()).letter}
                   track={selectedTrack}
                   voice={creatorVoice}
+                  video={creatorVideo}
                   cover={selectedCover}
                   recipient={composerRecipient}
                   ownerId={view.accountId ?? ''}

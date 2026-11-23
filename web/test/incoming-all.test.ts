@@ -165,7 +165,7 @@ describe('T353 complete incoming collector', () => {
     expect(result.nextCursor).toBeNull()
     expect(result.items.map((entry) => entry.capsuleId)).toEqual([capsuleId(0)])
     expect(incoming).toHaveLength(1)
-    expect(incoming[0]!.query).toEqual({ media: 'voice', limit: '25' })
+    expect(incoming[0]!.query).toEqual({ media: 'video', limit: '25' })
     expect(isCanonicalIncomingCursor(terminal)).toBe(true)
     wipeIncomingCatalog(result.items)
   })
@@ -174,7 +174,7 @@ describe('T353 complete incoming collector', () => {
     const voiced = await signedItem(0, 101, 1)
     const { transport, incoming } = transportFor(new Map([[null, page([voiced], false, null)]]))
     const result = await fetchCompleteIncoming(session(), transport)
-    expect(incoming[0]!.query?.media).toBe('voice')
+    expect(incoming[0]!.query?.media).toBe('video')
     expect(result.items[0]!.blobs.filter((blob) => blob.kind === 'MEDIA')).toEqual([
       { blobId: blobId(0, 5), kind: 'MEDIA', ordinal: null, ciphertextSize: 4096, ciphertextSha256: b64(digest(0x40)) },
     ])

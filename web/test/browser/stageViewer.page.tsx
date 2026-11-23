@@ -77,6 +77,8 @@ async function buildHeld(tint: string, labels: string[]): Promise<Fixture> {
       letter: null,
       voice: null,
       sound: null,
+      video: null,
+      film: null,
     },
     urls,
   }

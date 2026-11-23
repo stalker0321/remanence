@@ -59,6 +59,7 @@ export type SealCapsuleErrorCode =
   | 'envelope'
   | 'contract'
   | 'voice'
+  | 'video'
 
 /** Typed, secret-free operational refusal. `message` is always the code. */
 export class SealCapsuleError extends Error {
@@ -84,11 +85,13 @@ export interface SealCapsuleInput {
   letter?: string | null
   /** The recorded voice note's MP4, required exactly when the freeze carries a voice note. */
   voice?: Uint8Array | null
+  /** The video square's MP4, required exactly when the freeze carries a video. */
+  video?: Uint8Array | null
 }
 
 export interface SealedCapsuleBlob {
   blobId: string
-  kind: 'RECOGNITION_MANIFEST' | 'CONTENT_MANIFEST' | 'PHOTO' | 'MEDIA'
+  kind: 'RECOGNITION_MANIFEST' | 'CONTENT_MANIFEST' | 'PHOTO' | 'MEDIA' | 'VIDEO'
   /** `-1` for the non-photo artifacts, matching the statement builder. */
   ordinal: number
   ciphertext: Uint8Array
@@ -114,6 +117,7 @@ const SUITE = 'HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519'
 const RECOGNITION_BLOB_BYTE = 0x01
 const CONTENT_BLOB_BYTE = 0x02
 const MEDIA_BLOB_BYTE = 0x03
+const VIDEO_BLOB_BYTE = 0x04
 const PHOTO_BLOB_TAG_BASE = 0x10
 const INT64_MAX = 2n ** 63n - 1n
 const CONTENT_HASH = /^[0-9a-f]{64}$/
@@ -261,6 +265,17 @@ export async function sealCapsule(input: SealCapsuleInput): Promise<SealedCapsul
       if (String.fromCharCode(...ownedVoice.subarray(4, 8)) !== 'ftyp') throw new SealCapsuleError('voice')
     }
 
+    // The video square is the frozen one: an MP4 no larger than one VIDEO artifact holds.
+    const frozenVideo = ownedFreeze.video ?? null
+    const video = input.video ?? null
+    if ((frozenVideo === null) !== (video === null)) throw new SealCapsuleError('video')
+    let ownedVideo: Uint8Array | null = null
+    if (video !== null) {
+      if (!(video instanceof Uint8Array) || video.length < 8 || video.length + limits.artifactOverhead > limits.videoCiphertext) throw new SealCapsuleError('video')
+      ownedVideo = ownCopy(video)
+      if (String.fromCharCode(...ownedVideo.subarray(4, 8)) !== 'ftyp') throw new SealCapsuleError('video')
+    }
+
     // Session/key identity guard: same visit, same account/bundle, SAME caps object.
     const fresh = (): void => {
       const next = session.getSnapshot()
@@ -302,6 +317,13 @@ export async function sealCapsule(input: SealCapsuleInput): Promise<SealedCapsul
       fresh()
       if (bytesToHex(digest) !== frozenVoice!.sha256Hex) throw new SealCapsuleError('voice')
     }
+    if (ownedVideo !== null) {
+      fresh()
+      const digest = await sha256(ownedVideo)
+      owned.push(digest)
+      fresh()
+      if (bytesToHex(digest) !== frozenVideo!.sha256Hex) throw new SealCapsuleError('video')
+    }
 
     fresh()
     const built = await buildFrozenExpression(ownedFreeze, epoch)
@@ -328,7 +350,14 @@ export async function sealCapsule(input: SealCapsuleInput): Promise<SealedCapsul
     fresh()
     const mediaBlobId = tagBlobId(capsuleBytes, MEDIA_BLOB_BYTE)
     const manifestVoice = frozenVoice === null ? null : { blobId: uuidToBytes(mediaBlobId), durationMs: frozenVoice.durationMs, peaks: frozenVoice.peaks }
-    const content = await encodeContentManifest({ expression: built.expression, capsuleId: capsuleBytes, candidateId, blobIdByContentId, track: ownedFreeze.track, letter: input.letter ?? null, voice: manifestVoice })
+    const videoBlobId = tagBlobId(capsuleBytes, VIDEO_BLOB_BYTE)
+    const manifestVideo = frozenVideo === null
+      ? null
+      : { blobId: uuidToBytes(videoBlobId), durationMs: frozenVideo.durationMs, size: frozenVideo.size, posterContentId: frozenVideo.posterContentId }
+    const content = await encodeContentManifest({
+      expression: built.expression, capsuleId: capsuleBytes, candidateId, blobIdByContentId,
+      track: ownedFreeze.track, letter: input.letter ?? null, voice: manifestVoice, video: manifestVideo,
+    })
     if (content.ok) owned.push(content.bytes) // own before the post-await fence/validation
     fresh()
     if (!content.ok) throw new SealCapsuleError('content')
@@ -408,6 +437,23 @@ export async function sealCapsule(input: SealCapsuleInput): Promise<SealedCapsul
       const digest = await withFresh(() => sha256(ciphertext))
       artifacts.push({ blobId: uuidToBytes(mediaBlobId), kind: 'MEDIA', ordinal: -1, ciphertextSize: ciphertext.length, ciphertextSha256: digest })
       blobs.push({ blobId: mediaBlobId, kind: 'MEDIA', ordinal: -1, ciphertext, ciphertextSize: ciphertext.length, ciphertextSha256: digest })
+    }
+
+    if (ownedVideo !== null) {
+      let ciphertext: Uint8Array
+      try {
+        ciphertext = await withFresh(() => encryptArtifact(
+          capsuleKeyset!,
+          artifactAad({ capsuleId, blobId: videoBlobId, kind: 'VIDEO', ordinal: -1, senderUserId: ownedFreeze.ownerId, recipientUserId: ownedFreeze.recipient.userId }),
+          ownedVideo,
+          'VIDEO',
+        ))
+      } catch (error) {
+        throw mapFailure(error, 'video')
+      }
+      const digest = await withFresh(() => sha256(ciphertext))
+      artifacts.push({ blobId: uuidToBytes(videoBlobId), kind: 'VIDEO', ordinal: -1, ciphertextSize: ciphertext.length, ciphertextSha256: digest })
+      blobs.push({ blobId: videoBlobId, kind: 'VIDEO', ordinal: -1, ciphertext, ciphertextSize: ciphertext.length, ciphertextSha256: digest })
     }
 
     let statement: Uint8Array

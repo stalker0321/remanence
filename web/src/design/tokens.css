@@ -186,6 +186,14 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
 .sound-tabs button[aria-selected="true"] { background:var(--surface); box-shadow:0 1px 2px var(--shadow); }
 .voice-draft { display:grid; gap:.6rem; max-width:36rem; }
 .voice-row { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem; }
+.video-draft { display:grid; gap:.6rem; max-width:36rem; margin-top:.8rem; }
+.video-shoot { display:grid; gap:.8rem; justify-items:start; }
+.video-viewfinder { position:relative; width:min(100%,320px); aspect-ratio:1; overflow:hidden; border-radius:.5rem; background:#1e2130; }
+.video-viewfinder.is-small { width:88px; }
+.video-viewfinder video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.video-shoot .video-viewfinder video { transform:scaleX(-1); }
+.video-viewfinder svg, .photo-draft .photo-grid .photo-video-mark { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+.video-viewfinder svg path, .photo-draft .photo-grid .photo-video-mark path { fill:none; stroke:#fff; stroke-width:2.2px; vector-effect:non-scaling-stroke; filter:drop-shadow(0 0 1px rgb(0 0 0 / .45)); }
 .voice-record { display:inline-flex; align-items:center; gap:.55rem; }
 .voice-dot { width:.7rem; height:.7rem; border-radius:50%; background:currentColor; }
 .voice-record.is-recording .voice-dot { border-radius:.12rem; animation:voice-pulse 1.2s ease-in-out infinite; }
@@ -397,6 +405,62 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
 
 /* The pause glyph covers the play glyph the card draws while the voice note plays. */
 .card-sides button.voice-band svg { position: absolute; }
+
+/* The video square: the film over its poster's tile, viewfinder corners, a red dot and the length. */
+.card-sides button.video-square {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  container-type: inline-size;
+  cursor: pointer;
+}
+.card-sides button.video-square:hover { background: transparent; }
+.card-sides button.video-square video {
+  position: absolute;
+  max-width: none;
+  object-fit: fill;
+  pointer-events: none;
+}
+.card-sides button.video-square svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.card-sides button.video-square svg path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2.2px;
+  stroke-linecap: square;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.45));
+}
+.card-sides button.video-square svg circle { fill: #ff3b30; }
+.card-sides button.video-square svg path.video-square-play { fill: #fff; stroke: none; }
+.card-sides button.video-square .video-square-length {
+  position: absolute;
+  left: 27%;
+  top: 14%;
+  transform: translateY(-50%);
+  color: #fff;
+  font: 500 clamp(8px, 7.5cqw, 14px) / 1 ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
+  letter-spacing: 0.02em;
+}
+.card-sides button.video-square .video-square-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2.5%;
+  background: #ff3b30;
+}
 
 /* The site's button hover paints a panel; over the card it would cover the note. */
 .card-sides button.letter-mark:hover,

@@ -1,19 +1,25 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { css } from './paint'
 import type { Scene } from './prepare'
+import { claimSound, releaseSound } from './soundArbiter'
 
 /**
  * The voice note's band is its button (ADR-021 §5): the whole band plays and
  * pauses the sound. The card draws the play glyph; while the sound plays, a
  * pause glyph in the same form covers it. The sound is an object URL the held
- * sheet revokes on close.
+ * sheet revokes on close. Starting it stops the video square's sound.
  */
 export function VoiceBand({ scene, sound, listen, pause }: { scene: Scene; sound: string; listen: string; pause: string }) {
   const audio = useRef<HTMLAudioElement>(null)
   const [playing, setPlaying] = useState(false)
+  const owner = useRef({})
   useEffect(() => {
     const element = audio.current
-    return () => element?.pause()
+    const self = owner.current
+    return () => {
+      element?.pause()
+      releaseSound(self)
+    }
   }, [sound])
   const music = scene.music
   const band = music?.band
@@ -54,10 +60,18 @@ export function VoiceBand({ scene, sound, listen, pause }: { scene: Scene; sound
         ref={audio}
         src={sound}
         preload="auto"
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
+        onPlay={(event) => {
+          const element = event.currentTarget
+          claimSound(owner.current, () => element.pause())
+          setPlaying(true)
+        }}
+        onPause={() => {
+          releaseSound(owner.current)
+          setPlaying(false)
+        }}
         onEnded={(event) => {
           event.currentTarget.currentTime = 0
+          releaseSound(owner.current)
           setPlaying(false)
         }}
       />

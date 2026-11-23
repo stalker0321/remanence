@@ -88,6 +88,7 @@ const KIND_CAP: Record<SealedCapsuleBlob['kind'], number> = {
   CONTENT_MANIFEST: limits.contentCiphertext,
   PHOTO: limits.photoCiphertext,
   MEDIA: limits.mediaCiphertext,
+  VIDEO: limits.videoCiphertext,
 }
 
 const CATEGORY_BY_CODE: Record<string, string> = {
@@ -226,12 +227,13 @@ export async function publishCapsule(input: PublishCapsuleInput): Promise<Publis
   if (owned.signature.length !== SIGNATURE_BYTES) throw refuse('preflight', 'contract')
   if (owned.statementSha256.length !== SHA256_BYTES) throw refuse('preflight', 'contract')
   if (owned.envelopeCiphertext.length < 1 || owned.envelopeCiphertext.length > ENVELOPE_MAX) throw refuse('preflight', 'contract')
-  if (!Array.isArray(owned.blobs) || owned.blobs.length < 5 || owned.blobs.length > 8) throw refuse('preflight', 'contract')
+  if (!Array.isArray(owned.blobs) || owned.blobs.length < 5 || owned.blobs.length > 9) throw refuse('preflight', 'contract')
   const recognition = owned.blobs.filter((blob) => blob.kind === 'RECOGNITION_MANIFEST')
   const content = owned.blobs.filter((blob) => blob.kind === 'CONTENT_MANIFEST')
   const photos = owned.blobs.filter((blob) => blob.kind === 'PHOTO')
   const media = owned.blobs.filter((blob) => blob.kind === 'MEDIA')
-  if (recognition.length !== 1 || content.length !== 1 || photos.length < 3 || photos.length > 5 || media.length > 1) throw refuse('preflight', 'contract')
+  const video = owned.blobs.filter((blob) => blob.kind === 'VIDEO')
+  if (recognition.length !== 1 || content.length !== 1 || photos.length < 3 || photos.length > 5 || media.length > 1 || video.length > 1) throw refuse('preflight', 'contract')
   const ids = new Set<string>()
   let total = 0
   for (let index = 0; index < owned.blobs.length; index++) {
@@ -248,7 +250,7 @@ export async function publishCapsule(input: PublishCapsuleInput): Promise<Publis
   if (total > TOTAL_MAX) throw refuse('preflight', 'contract')
   const photoOrdinals = photos.map((blob) => blob.ordinal)
   if (photoOrdinals.some((ordinal, index) => ordinal !== index)) throw refuse('preflight', 'contract')
-  if (recognition[0]!.ordinal !== -1 || content[0]!.ordinal !== -1 || media.some((blob) => blob.ordinal !== -1)) throw refuse('preflight', 'contract')
+  if (recognition[0]!.ordinal !== -1 || content[0]!.ordinal !== -1 || [...media, ...video].some((blob) => blob.ordinal !== -1)) throw refuse('preflight', 'contract')
 
   // ---- fence + token for the captured visit ----
   const guard = (stage: PublishStage): void => {

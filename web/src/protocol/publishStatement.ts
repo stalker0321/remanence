@@ -26,7 +26,7 @@ import { limits } from './limits'
  * signature input; signing remains in the existing `crypto/publish.ts`.
  */
 
-export type PublishStatementKind = 'RECOGNITION_MANIFEST' | 'CONTENT_MANIFEST' | 'PHOTO' | 'MEDIA'
+export type PublishStatementKind = 'RECOGNITION_MANIFEST' | 'CONTENT_MANIFEST' | 'PHOTO' | 'MEDIA' | 'VIDEO'
 
 export interface PublishStatementArtifact {
   blobId: Uint8Array
@@ -53,6 +53,7 @@ const NON_PHOTO_ORDINAL = -1
 const PHOTO_COUNT_MIN = 3
 const PHOTO_COUNT_MAX = 5
 const MEDIA_COUNT_MAX = 1
+const VIDEO_COUNT_MAX = 1
 const INT64_MIN = -(2n ** 63n)
 const INT64_MAX = (2n ** 63n) - 1n
 
@@ -61,12 +62,14 @@ const KIND_NUMBER: Record<PublishStatementKind, number> = {
   CONTENT_MANIFEST: 2,
   PHOTO: 3,
   MEDIA: 4,
+  VIDEO: 5,
 }
 const KIND_CAP: Record<PublishStatementKind, number> = {
   RECOGNITION_MANIFEST: limits.recognitionCiphertext,
   CONTENT_MANIFEST: limits.contentCiphertext,
   PHOTO: limits.photoCiphertext,
   MEDIA: limits.mediaCiphertext,
+  VIDEO: limits.videoCiphertext,
 }
 
 function requireUuid(value: Uint8Array): Uint8Array {
@@ -142,6 +145,7 @@ export function buildPublishStatement(input: PublishStatementInput): Uint8Array 
   let recognition = 0
   let content = 0
   let media = 0
+  let video = 0
   const photoOrdinals: number[] = []
   for (const artifact of input.artifacts) {
     const blobId = requireUuid(artifact.blobId)
@@ -163,11 +167,14 @@ export function buildPublishStatement(input: PublishStatementInput): Uint8Array 
     } else if (kind === 'MEDIA') {
       media += 1
       if (artifact.ordinal !== NON_PHOTO_ORDINAL) throw new ProtocolError('INVALID_ENCODING')
+    } else if (kind === 'VIDEO') {
+      video += 1
+      if (artifact.ordinal !== NON_PHOTO_ORDINAL) throw new ProtocolError('INVALID_ENCODING')
     } else {
       throw new ProtocolError('UNSUPPORTED')
     }
   }
-  if (recognition !== 1 || content !== 1 || media > MEDIA_COUNT_MAX) throw new ProtocolError('INVALID_ENCODING')
+  if (recognition !== 1 || content !== 1 || media > MEDIA_COUNT_MAX || video > VIDEO_COUNT_MAX) throw new ProtocolError('INVALID_ENCODING')
   if (photoOrdinals.length < PHOTO_COUNT_MIN || photoOrdinals.length > PHOTO_COUNT_MAX) {
     throw new ProtocolError('INVALID_ENCODING')
   }

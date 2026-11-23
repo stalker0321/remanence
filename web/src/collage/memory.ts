@@ -4,7 +4,7 @@ import type { PublicSession } from '../session/session'
 import { CollageError } from './errors'
 import type { OpenedPostcard } from './open'
 import type { Scene } from './prepare'
-import type { ManifestVoice } from './wire'
+import type { ManifestVideo, ManifestVoice } from './wire'
 
 export interface UrlPort {
   create(bytes: Uint8Array, type: string): string
@@ -20,6 +20,10 @@ export interface HeldSheet {
   voice: ManifestVoice | null
   /** The voice note's sound as an object URL, revoked with the sheet. */
   sound: string | null
+  /** The video square's poster and length. */
+  video: ManifestVideo | null
+  /** The video square's MP4 as an object URL, revoked with the sheet. */
+  film: string | null
 }
 
 export const browserUrls: UrlPort = {
@@ -79,7 +83,14 @@ export class PresentationMemory {
         sound = this.urls.create(copy, 'audio/mp4')
         this.#urls.push(sound)
       }
-      const held = { scene: opened.scene, photos, artwork, letter: opened.letter, voice: opened.voice, sound }
+      let film: string | null = null
+      if (opened.film) {
+        const copy = opened.film.slice()
+        this.#bytes.push(copy)
+        film = this.urls.create(copy, 'video/mp4')
+        this.#urls.push(film)
+      }
+      const held = { scene: opened.scene, photos, artwork, letter: opened.letter, voice: opened.voice, sound, video: opened.video, film }
       this.#sheet = held
       this.#emit()
       return held

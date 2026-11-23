@@ -47,6 +47,8 @@ export interface ParsedManifest {
   letter: string | null
   /** The voice note in the song band (field 9, ADR-021), or null. */
   voice: ManifestVoice | null
+  /** The video square over one photo's tile (field 10, ADR-021), or null. */
+  video: ManifestVideo | null
 }
 
 /** A voice note: its MEDIA blob, length and the bars the sender measured. */
@@ -57,8 +59,26 @@ export interface ManifestVoice {
   peaks: Uint8Array
 }
 
+/**
+ * The video square: its VIDEO blob, length, square size, and the photo whose
+ * tile it plays in (that photo is its first frame).
+ */
+export interface ManifestVideo {
+  blobId: Uint8Array
+  mimeType: 'video/mp4'
+  durationMs: number
+  size: number
+  posterContentId: string
+  /** The poster photo's side in pixels; the poster is square like the video. */
+  posterSide: number
+}
+
 const MEDIA_VOICE = 1
+const MEDIA_VIDEO = 2
 export const VOICE_MAX_MS = 60_000
+export const VIDEO_MAX_MS = 30_000
+export const VIDEO_MIN_SIZE = 240
+export const VIDEO_MAX_SIZE = 1080
 
 interface Part {
   field: number
@@ -71,7 +91,7 @@ interface Part {
  * and 3 (GENEX04) are refused before a scene exists.
  */
 export async function parseContentManifest(bytes: Uint8Array): Promise<ParsedManifest> {
-  const root = readParts(bytes, [1, 2, 3, 4, 5, 6, 7, 8, 9], [3])
+  const root = readParts(bytes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [3])
   if (root.some((part) => part.field === 5)) throw new ProtocolError('INVALID_PROTO')
   const version = requiredNumber(root, 1)
   if (version === 1) throw new CollageError('UNSUPPORTED')
@@ -98,11 +118,20 @@ export async function parseContentManifest(bytes: Uint8Array): Promise<ParsedMan
   const voice = mediaPart ? parseVoice(asBytes(mediaPart)) : null
   // One sound per card: a voice note in the band, or a song.
   if (voice !== null && track !== null) throw new ProtocolError('INVALID_ENCODING')
+  const videoPart = optional(root, 10)
+  const video = videoPart ? parseVideo(asBytes(videoPart)) : null
+  if (video !== null && voice !== null && equalBytes(video.blobId, voice.blobId)) throw new ProtocolError('INVALID_ENCODING')
   const expressionPart = optional(root, 6)
   if (!expressionPart) throw new ProtocolError('INVALID_ENCODING')
   const parsed = parseExpression(asBytes(expressionPart), photos, note)
   const recomputed = await projectionHash(parsed.expression, parsed.candidateId, parsed.blobs)
   if (!equalBytes(utf8(recomputed), utf8(parsed.expressionHash))) throw new CollageError('INTEGRITY')
+  // The video plays over its first frame: one of this card's photos, square like the video.
+  if (video !== null) {
+    const poster = parsed.expression.input.photos.find((photo) => photo.contentId === video.posterContentId)
+    if (!poster || poster.widthPx !== poster.heightPx) throw new ProtocolError('INVALID_ENCODING')
+    video.posterSide = poster.widthPx
+  }
   return {
     capsuleId,
     expression: parsed.expression,
@@ -113,13 +142,13 @@ export async function parseContentManifest(bytes: Uint8Array): Promise<ParsedMan
     track,
     letter,
     voice,
+    video,
   }
 }
 
 function parseVoice(bytes: Uint8Array): ManifestVoice {
   const fields = readParts(bytes, [1, 2, 3, 4, 5, 6, 7, 8], [])
-  // A circle (kind 2) is not drawn yet; it waits for its own release.
-  if (requiredNumber(fields, 1) !== MEDIA_VOICE) throw new CollageError('UNSUPPORTED')
+  if (requiredNumber(fields, 1) !== MEDIA_VOICE) throw new ProtocolError('INVALID_ENCODING')
   if (optional(fields, 5) || optional(fields, 6) || optional(fields, 7)) throw new ProtocolError('INVALID_ENCODING')
   const blobId = requiredBytes(fields, 2)
   const mimeType = text(requiredBytes(fields, 3))
@@ -129,6 +158,24 @@ function parseVoice(bytes: Uint8Array): ManifestVoice {
     throw new ProtocolError('INVALID_ENCODING')
   }
   return { blobId, mimeType, durationMs, peaks: peaks.slice() }
+}
+
+function parseVideo(bytes: Uint8Array): ManifestVideo {
+  const fields = readParts(bytes, [1, 2, 3, 4, 5, 6, 7, 8], [])
+  if (requiredNumber(fields, 1) !== MEDIA_VIDEO || optional(fields, 8)) throw new ProtocolError('INVALID_ENCODING')
+  const blobId = requiredBytes(fields, 2)
+  const mimeType = text(requiredBytes(fields, 3))
+  const durationMs = requiredNumber(fields, 4)
+  const width = requiredNumber(fields, 5)
+  const height = requiredNumber(fields, 6)
+  const posterContentId = text(requiredBytes(fields, 7))
+  if (
+    blobId.length !== 16 || mimeType !== 'video/mp4' || durationMs < 1 || durationMs > VIDEO_MAX_MS ||
+    width !== height || width < VIDEO_MIN_SIZE || width > VIDEO_MAX_SIZE || posterContentId === ''
+  ) {
+    throw new ProtocolError('INVALID_ENCODING')
+  }
+  return { blobId, mimeType, durationMs, size: width, posterContentId, posterSide: 0 }
 }
 
 function parsePhoto(bytes: Uint8Array): ManifestPhoto {

@@ -222,3 +222,37 @@ describe('creator choices: the Android pool on the site', () => {
     expect(views.length).toBeGreaterThan(3)
   })
 })
+
+describe('creator choices with a video square', () => {
+  const cases: Array<[string, number[], string | null, boolean]> = [
+    ['3 mixed', [1.5, 0.75, 1], null, false],
+    ['3 mixed, note', [1.5, 0.75, 1], 'Summer by the sea.', false],
+    ['4 landscape', [1.5, 1.5, 1.33, 1], null, false],
+    ['4 portrait, song', [0.75, 0.75, 0.8, 1], 'Hi!', true],
+    ['5 mixed', [1.5, 0.75, 0.75, 1.5, 1], 'Summer by the sea.', false],
+    ['5 portrait, song', [0.75, 0.75, 0.8, 0.66, 1], null, true],
+  ]
+  for (const [name, aspects, note, song] of cases) {
+    it(`seats the first frame in a square tile of at least 140 px (${name})`, () => {
+      const source = photos(aspects)
+      const poster = source[source.length - 1]!.contentId
+      const views = creatorChoices({
+        preview: { id: 'c', sender: SENDER, photos: source, note, music: song ? { artwork: false } : null },
+        measurer,
+        track: song ? TRACK : null,
+        seed: 'draft-1',
+        posterContentId: poster,
+      })
+      const grammars = new Set(views.map((view) => view.grammarId))
+      expect(grammars.size).toBeGreaterThanOrEqual(3)
+      for (const view of views) {
+        // Slots stay in authored order; only the tiles move.
+        expect(view.slots.map((item) => item.photoId)).toEqual(source.map((photo) => photo.contentId))
+        const slot = view.slots.find((item) => item.photoId === poster)!
+        const { width, height } = slot.destination
+        expect(Math.min(width, height)).toBeGreaterThanOrEqual(140)
+        expect(Math.abs(width - height)).toBeLessThanOrEqual(0.05 * Math.max(width, height))
+      }
+    })
+  }
+})

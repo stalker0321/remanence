@@ -10,7 +10,7 @@ import { SyncError } from './errors'
 
 export interface IncomingBlob {
   blobId: string
-  kind: 'RECOGNITION_MANIFEST' | 'CONTENT_MANIFEST' | 'PHOTO' | 'MEDIA'
+  kind: 'RECOGNITION_MANIFEST' | 'CONTENT_MANIFEST' | 'PHOTO' | 'MEDIA' | 'VIDEO'
   ordinal: number | null
   ciphertextSize: number
   ciphertextSha256: string
@@ -53,6 +53,7 @@ const KIND_CAP = {
   CONTENT_MANIFEST: limits.contentCiphertext,
   PHOTO: limits.photoCiphertext,
   MEDIA: limits.mediaCiphertext,
+  VIDEO: limits.videoCiphertext,
 } as const
 
 /**
@@ -86,8 +87,9 @@ export async function fetchIncoming(
   }
   // Optional bounded paging goes through the existing ApiRequest.query contract
   // (key/value validation, no manual `?` concatenation or path/auth bypass).
-  // ADR-021: the server lists a card with a voice note only to a client that reads it.
-  const query: Record<string, string> = { media: 'voice' }
+  // ADR-021: the server lists a card with a voice note or a video square only
+  // to a client that reads them; `video` asks for both.
+  const query: Record<string, string> = { media: 'video' }
   if (options.cursor !== undefined && options.cursor !== null) query.cursor = options.cursor
   if (options.limit !== undefined) query.limit = String(options.limit)
   const page = await transport.request({
@@ -293,7 +295,8 @@ function readBlobs(value: unknown[]): IncomingBlob[] {
   const content = blobs.filter((blob) => blob.kind === 'CONTENT_MANIFEST')
   const photos = blobs.filter((blob) => blob.kind === 'PHOTO')
   const media = blobs.filter((blob) => blob.kind === 'MEDIA')
-  if (recognition.length !== 1 || content.length !== 1 || photos.length < 3 || photos.length > 5 || media.length > 1) {
+  const video = blobs.filter((blob) => blob.kind === 'VIDEO')
+  if (recognition.length !== 1 || content.length !== 1 || photos.length < 3 || photos.length > 5 || media.length > 1 || video.length > 1) {
     throw new SyncError('SYNC_REJECTED')
   }
   if (recognition[0]?.ordinal !== null || content[0]?.ordinal !== null) throw new SyncError('SYNC_REJECTED')
@@ -308,7 +311,7 @@ function readBlob(value: unknown): IncomingBlob {
   const root = record(value)
   if (!root) throw new SyncError('SYNC_REJECTED')
   const kind = root.kind
-  if (kind !== 'RECOGNITION_MANIFEST' && kind !== 'CONTENT_MANIFEST' && kind !== 'PHOTO' && kind !== 'MEDIA') {
+  if (kind !== 'RECOGNITION_MANIFEST' && kind !== 'CONTENT_MANIFEST' && kind !== 'PHOTO' && kind !== 'MEDIA' && kind !== 'VIDEO') {
     throw new SyncError('SYNC_REJECTED')
   }
   const ordinal = root.ordinal
@@ -362,7 +365,7 @@ function bindStatement(statement: Uint8Array, item: DraftItem): void {
 function readBinding(bytes: Uint8Array): { blobId: string; kind: IncomingBlob['kind']; ordinal: number | null; size: number; sha256: Uint8Array } {
   const fields = walk(bytes, [1, 2, 3, 4, 5], null)
   const kindNumber = fields.numbers.get(2)
-  const kind = kindNumber === 1 ? 'RECOGNITION_MANIFEST' : kindNumber === 2 ? 'CONTENT_MANIFEST' : kindNumber === 3 ? 'PHOTO' : kindNumber === 4 ? 'MEDIA' : null
+  const kind = kindNumber === 1 ? 'RECOGNITION_MANIFEST' : kindNumber === 2 ? 'CONTENT_MANIFEST' : kindNumber === 3 ? 'PHOTO' : kindNumber === 4 ? 'MEDIA' : kindNumber === 5 ? 'VIDEO' : null
   if (!kind) throw new SyncError('SYNC_REJECTED')
   const encoded = fields.numbers.get(3)
   const ordinal = unzigzag(kind === 'PHOTO' ? encoded ?? 0 : encoded ?? Number.NaN)

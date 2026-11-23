@@ -111,6 +111,8 @@ async function buildHeld(tint: string, text: string): Promise<HeldSheet> {
     letter: split.letter,
     voice: null,
     sound: null,
+    video: null,
+    film: null,
   }
 }
 

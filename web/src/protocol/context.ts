@@ -7,7 +7,7 @@ export const ARTIFACT_AAD_PREFIX = 'postmark/artifact/v1'
 export const ENVELOPE_INFO_PREFIX = 'postmark/envelope/v1'
 export const PUBLISH_PREFIX = 'postmark/publish/v1'
 
-export const artifactKinds = ['RECOGNITION_MANIFEST', 'CONTENT_MANIFEST', 'PHOTO', 'MEDIA'] as const
+export const artifactKinds = ['RECOGNITION_MANIFEST', 'CONTENT_MANIFEST', 'PHOTO', 'MEDIA', 'VIDEO'] as const
 export type ArtifactKind = (typeof artifactKinds)[number]
 
 const kindValue: Record<ArtifactKind, number> = {
@@ -15,6 +15,7 @@ const kindValue: Record<ArtifactKind, number> = {
   CONTENT_MANIFEST: 2,
   PHOTO: 3,
   MEDIA: 4,
+  VIDEO: 5,
 }
 
 export interface ArtifactContext {

@@ -52,6 +52,7 @@ export async function receivePostcard(
   const content = item.blobs.find((blob) => blob.kind === 'CONTENT_MANIFEST')
   const photos = item.blobs.filter((blob) => blob.kind === 'PHOTO' && blob.ordinal !== null)
   const media = item.blobs.find((blob) => blob.kind === 'MEDIA') ?? null
+  const film = item.blobs.find((blob) => blob.kind === 'VIDEO') ?? null
   if (!content || photos.length === 0 || item.envelopeCiphertext.length === 0) throw new ScanError('BODY_MISSING')
   const downloaded: Uint8Array[] = []
   let matchedGeneration: number | null = null
@@ -76,6 +77,14 @@ export async function receivePostcard(
       stillUnlocked(session, generation)
       sealedMedia = { blobId: media.blobId, ciphertext: bytes }
     }
+    let sealedFilm: SealedBlob | null = null
+    if (film) {
+      if (signal.aborted) throw new ScanError('CANCELLED')
+      const bytes = await readChecked(blobs, item, film, signal)
+      downloaded.push(bytes)
+      stillUnlocked(session, generation)
+      sealedFilm = { blobId: film.blobId, ciphertext: bytes }
+    }
     if (signal.aborted) throw new ScanError('CANCELLED')
     const caps = keys.capabilities(session.getSnapshot())
     if (caps === null || caps.accountId !== view.accountId || caps.bundleId !== item.recipientKeyBundleId
@@ -98,7 +107,7 @@ export async function receivePostcard(
     opened = await openGrantedPostcard(session, keys, grant, item, {
       blobId: content.blobId,
       ciphertext: contentBytes,
-    }, sealedPhotos, measurer, fetchSealedCover, signal, sealedMedia)
+    }, sealedPhotos, measurer, fetchSealedCover, signal, sealedMedia, sealedFilm)
     currentToken()
     onAdmission?.()
     currentToken()
@@ -114,6 +123,7 @@ export async function receivePostcard(
       for (const bytes of opened.photos.values()) bytes.fill(0)
       opened.artwork?.fill(0)
       opened.sound?.fill(0)
+      opened.film?.fill(0)
     }
     for (const bytes of downloaded) bytes.fill(0)
   }

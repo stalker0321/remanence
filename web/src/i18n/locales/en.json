@@ -366,5 +366,20 @@
   "voiceUnsupported": "this browser cannot record a voice note. Chrome and Safari can",
   "voiceDenied": "no access to the microphone. allow it in the browser and try again",
   "voiceFailed": "the recording did not work. try again",
-  "voiceTooLarge": "the recording is too large. try a shorter one"
+  "voiceTooLarge": "the recording is too large. try a shorter one",
+  "videoWatch": "watch the video with sound",
+  "videoMute": "turn the video sound off",
+  "videoRecord": "record a video",
+  "videoStart": "start",
+  "videoStop": "stop",
+  "videoCancel": "cancel",
+  "videoRerecord": "record again",
+  "videoDelete": "delete",
+  "videoHint": "up to 30 seconds from the front camera. it takes one photo's place, and its first frame shows until it plays",
+  "videoPhotosFull": "the video takes one photo's place. remove a photo to record one",
+  "videoUnsupported": "this browser cannot record a video for a card. Chrome and Safari can",
+  "videoDenied": "the camera is not allowed for this site. allow it in the browser settings and try again",
+  "videoFailed": "the video did not record. try again",
+  "videoTooLarge": "the video came out too large. record a shorter one",
+  "videoTooShort": "the video is too short. record at least a second"
 }

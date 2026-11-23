@@ -366,5 +366,20 @@
   "voiceUnsupported": "Create page, voice tab: the browser cannot record AAC audio (Firefox). Browser names stay as they are.",
   "voiceDenied": "Create page, voice tab: the person or the browser refused the microphone.",
   "voiceFailed": "Create page, voice tab: recording or reading the recording failed.",
-  "voiceTooLarge": "Create page, voice tab: the recorded file exceeds the size a card can carry."
+  "voiceTooLarge": "Create page, voice tab: the recorded file exceeds the size a card can carry.",
+  "videoWatch": "Postcard viewer: the accessible name and tooltip of the video square (a square video in one photo tile with viewfinder corners, a red dot and its length; it loops silently while the card is open). Pressing it plays the video from the start with sound.",
+  "videoMute": "Postcard viewer: the accessible name of the video square while it plays with sound; pressing it turns the sound off and the video goes back to looping silently.",
+  "videoRecord": "Create page, photo step: opens the front camera to record the video square, a short video that takes one photo's place on the card.",
+  "videoStart": "Create page, video camera: starts recording the video square.",
+  "videoStop": "Create page, video camera: stops recording the video square.",
+  "videoCancel": "Create page, video camera: closes the camera without keeping a video.",
+  "videoRerecord": "Create page, photo step: records the video square again, replacing the one recorded.",
+  "videoDelete": "Create page, photo step: removes the recorded video square and its first frame from the photos.",
+  "videoHint": "Create page, photo step: hint under the video button.",
+  "videoPhotosFull": "Create page, photo step: shown when there are already five photos, the most a card holds.",
+  "videoUnsupported": "Create page, photo step: the browser has no MP4 video recorder (for example Firefox).",
+  "videoDenied": "Create page, video camera: the camera or microphone permission was refused.",
+  "videoFailed": "Create page, video camera: recording failed.",
+  "videoTooLarge": "Create page, video camera: the recording is over the size a card can carry.",
+  "videoTooShort": "Create page, video camera: the recording is shorter than a second."
 }

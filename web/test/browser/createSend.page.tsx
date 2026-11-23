@@ -25,6 +25,7 @@ import { fetchTransport } from '../../src/auth/http'
 import { signPublishStatement, verifyPublishStatement } from '../../src/crypto/publish'
 import { openRecipientEnvelope } from '../../src/crypto/hpke'
 import { decryptArtifact } from '../../src/crypto/artifact'
+import { parseContentManifest } from '../../src/collage/wire'
 import { artifactAad, recipientEnvelopeInfo } from '../../src/protocol/context'
 import { fieldBytes, readMessage } from '../../src/protocol/proto'
 import { b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
@@ -343,10 +344,10 @@ function harness(): Harness {
 
 /** Bring one fresh Create visit to fully-send-ready (photos+note+freeze+front).
  * Returns the NORMALIZED photo bytes actually sealed (post-intake drafts). */
-async function readyVisit(h: Harness, files: File[], seed: number): Promise<Uint8Array[]> {
+async function readyVisit(h: Harness, files: File[], seed: number, expected = 3): Promise<Uint8Array[]> {
   await waitFor(() => document.querySelector('.photo-draft input[type="file"]') !== null, 'create confirmed flow')
   h.pick(files)
-  await waitFor(() => h.photos.accepted()?.length === 3, 'three normalized photos')
+  await waitFor(() => h.photos.accepted()?.length === expected, 'three normalized photos')
   const normalized = (h.photos.accepted() ?? []).map((photo) => photo.bytes.slice())
   await waitFor(() => document.querySelector('[data-testid="creator-canvas"]')?.getAttribute('data-painted') === 'ready', 'composer painted')
   h.setNote(NOTE_TEXT)
@@ -397,6 +398,46 @@ async function readyVisit(h: Harness, files: File[], seed: number): Promise<Uint
  * page decodes, measures, seals and uploads the real MP4.
  */
 let voiceFixture: Uint8Array = new Uint8Array()
+/**
+ * A front camera that "records" the committed 2 s 480×480 H.264 + AAC MP4:
+ * the camera is a painted canvas stream (so the viewfinder and the first
+ * frame are real), and the recorder hands back the fixture.
+ */
+let videoFixture: Uint8Array = new Uint8Array()
+function fakeCamera(): void {
+  class FakeRecorder {
+    static isTypeSupported(type: string): boolean { return type.startsWith('video/mp4') }
+    state: 'inactive' | 'recording' = 'inactive'
+    ondataavailable: ((event: { data: Blob }) => void) | null = null
+    onstop: (() => void) | null = null
+    onerror: (() => void) | null = null
+    constructor(_stream: MediaStream, readonly options: { mimeType: string }) {}
+    start(): void { this.state = 'recording' }
+    stop(): void {
+      this.state = 'inactive'
+      this.ondataavailable?.({ data: new Blob([videoFixture as unknown as BlobPart], { type: 'video/mp4' }) })
+      this.onstop?.()
+    }
+  }
+  ;(window as unknown as { MediaRecorder: unknown }).MediaRecorder = FakeRecorder
+  const lens = document.createElement('canvas')
+  lens.width = 640
+  lens.height = 480
+  const paint = lens.getContext('2d')!
+  let frame = 0
+  setInterval(() => {
+    frame++
+    paint.fillStyle = `hsl(${(frame * 7) % 360} 60% 55%)`
+    paint.fillRect(0, 0, 640, 480)
+    paint.fillStyle = '#fff'
+    paint.fillRect(120 + (frame % 200), 140, 160, 200)
+  }, 33)
+  Object.defineProperty(navigator, 'mediaDevices', {
+    configurable: true,
+    value: { getUserMedia: async () => lens.captureStream(30) },
+  })
+}
+
 function fakeMicrophone(): void {
   class FakeRecorder {
     static isTypeSupported(type: string): boolean { return type === 'audio/mp4;codecs=mp4a.40.2' }
@@ -715,6 +756,77 @@ async function main(): Promise<void> {
       fail('the MEDIA blob was uploaded', JSON.stringify(after7.uploads.map((upload) => upload.url)))
     }
     report.voice = true
+
+    // ---- scenario 8: a video square takes one photo's place; its first frame
+    // is a photo of the card, the film is the one VIDEO artifact ----
+    h7.unmount()
+    videoFixture = new Uint8Array(await (await fetch('./video-2s.mp4')).arrayBuffer())
+    fakeCamera()
+    const h8 = harness()
+    h8.create()
+    await waitFor(() => document.querySelector('.photo-draft input[type="file"]') !== null, 'video create flow')
+    await clickText(t('videoRecord'), 'open the camera')
+    await waitFor(() => {
+      const start = buttonByText(t('videoStart'))
+      return start !== null && !start.disabled
+    }, 'camera ready')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    await clickText(t('videoStart'), 'start the take')
+    await waitFor(() => buttonByText(t('videoStop')) !== null, 'video recording')
+    assert('recording shows the 30 second limit', bodyText().includes('/ 0:30'))
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    await clickText(t('videoStop'), 'stop the take')
+    await waitFor(() => buttonByText(t('videoRerecord')) !== null, 'recorded video')
+    await waitFor(() => h8.photos.photos().length === 1, 'the first frame joined the photos')
+    const posterPhoto = h8.photos.photos()[0]!
+    assert('the first frame is a square photo', posterPhoto.width === posterPhoto.height && posterPhoto.width === 480, `${posterPhoto.width}x${posterPhoto.height}`)
+    assert('the first frame is marked as the video in the photo grid', document.querySelector('.photo-draft .photo-grid li.is-video .photo-video-mark') !== null)
+    const before8 = await capture()
+    await readyVisit(h8, files.slice(0, 2), 62)
+    await clickText(t('sendAction'), 'send video card')
+    try {
+      await waitFor(() => byTest('send_state')?.textContent === t('sendSent'), 'video card sent', 120000)
+    } catch (error) {
+      throw new Error(`${String(error)} state=${byTest('send_state')?.textContent ?? 'none'} button=${(byTest('send_button') as HTMLButtonElement | null)?.disabled} notices=${notices.slice(-4).join(',')} body=${bodyText().slice(0, 600)}`)
+    }
+    const after8 = await capture()
+    const videoDraft = JSON.parse(fromUtf8(fromHex(lastDraft(after8)!.bodyHex)))
+    const videoBlobs: Array<{ blob_id: string; kind: string; ordinal: number | null }> = videoDraft.blobs
+    const filmMeta = videoBlobs.filter((blob) => blob.kind === 'VIDEO')
+    assert('the draft declares exactly one VIDEO blob with no ordinal', filmMeta.length === 1 && filmMeta[0]!.ordinal === null, JSON.stringify(videoBlobs))
+    assert('the video card has three photos, the first frame among them', videoBlobs.filter((blob) => blob.kind === 'PHOTO').length === 3)
+    assert('the video card uploads six blobs', after8.uploads.length - before8.uploads.length === 6)
+    const videoFinalize = JSON.parse(fromUtf8(fromHex(lastFinalize(after8)!.bodyHex)))
+    const videoEnvelope = await openRecipientEnvelope(HPKE_PRIVATE, recipientEnvelopeInfo({
+      capsuleId: videoDraft.capsule_id, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID, recipientKeyBundleId: RECIPIENT_BUNDLE,
+    }), fromBase64(videoFinalize.recipient_envelope.ciphertext))
+    const videoKeyset = fieldBytes(readMessage(videoEnvelope, [1, 2, 3, 4, 5, 6, 7, 8]), 7)
+    const filmUpload = after8.uploads.find((upload) => upload.url.endsWith(`/blobs/${filmMeta[0]?.blob_id}`))
+    if (filmUpload && filmMeta[0]) {
+      const film = await decryptArtifact(videoKeyset, artifactAad({
+        capsuleId: videoDraft.capsule_id, blobId: filmMeta[0].blob_id, kind: 'VIDEO', ordinal: -1, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID,
+      }), fromHex(filmUpload.bodyHex), 'VIDEO')
+      assert('the VIDEO blob decrypts to the exact recorded MP4', sameBytes(film, videoFixture))
+    } else {
+      fail('the VIDEO blob was uploaded', JSON.stringify(after8.uploads.map((upload) => upload.url)))
+    }
+    const contentMeta = videoBlobs.find((blob) => blob.kind === 'CONTENT_MANIFEST')
+    const contentUpload = after8.uploads.find((upload) => upload.url.endsWith(`/blobs/${contentMeta?.blob_id}`))
+    if (contentUpload && contentMeta) {
+      const manifest = await parseContentManifest(await decryptArtifact(videoKeyset, artifactAad({
+        capsuleId: videoDraft.capsule_id, blobId: contentMeta.blob_id, kind: 'CONTENT_MANIFEST', ordinal: -1, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID,
+      }), fromHex(contentUpload.bodyHex), 'CONTENT_MANIFEST'))
+      const placed = manifest.expression.placements.find((placement) => placement.contentId === manifest.video?.posterContentId)
+      assert('the manifest names the video, 480 square, and its first frame', manifest.video?.size === 480 && placed !== undefined, JSON.stringify(manifest.video))
+      if (placed) {
+        assert('the first frame sits in a square tile of at least 140 px',
+          Math.min(placed.width, placed.height) >= 140 && Math.abs(placed.width - placed.height) <= 0.05 * Math.max(placed.width, placed.height),
+          `${placed.width}x${placed.height}`)
+      }
+    } else {
+      fail('the content manifest was uploaded', '')
+    }
+    report.video = true
 
     report.notices = [...notices]
   } catch (error) {

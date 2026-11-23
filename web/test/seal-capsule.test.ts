@@ -15,7 +15,7 @@ import { decryptArtifact } from '../src/crypto/artifact'
 import { openRecipientEnvelope } from '../src/crypto/hpke'
 import type { KeyCapabilities } from '../src/crypto/keyOwner'
 import { signPublishStatement, verifyPublishStatement } from '../src/crypto/publish'
-import { freezeSelection, type CreatorFreeze, type CreatorVoice } from '../src/create/creatorFreeze'
+import { freezeSelection, type CreatorFreeze, type CreatorVideo, type CreatorVoice } from '../src/create/creatorFreeze'
 import type { DraftPhoto } from '../src/create/photos'
 import type { RecipientSnapshot } from '../src/create/recipient'
 import { sealCapsule, SealCapsuleError } from '../src/create/sealCapsule'
@@ -91,7 +91,14 @@ async function creatorVoice(): Promise<CreatorVoice> {
   return { sha256Hex: bytesToHex(await sha256(VOICE_SOUND)), durationMs: 4200, peaks: VOICE_PEAKS }
 }
 
-function buildFreeze(photos: readonly DraftPhoto[], note: string | null, sessionGeneration: number, voice: CreatorVoice | null = null): CreatorFreeze {
+/** A recorded video square: an MP4 that is only its `ftyp` box. */
+const VIDEO_FILM = Uint8Array.from([0, 0, 0, 16, ...new TextEncoder().encode('ftypisom'), 0, 0, 2, 0])
+
+async function creatorVideo(posterContentId: string): Promise<CreatorVideo> {
+  return { sha256Hex: bytesToHex(await sha256(VIDEO_FILM)), durationMs: 7300, size: 480, posterContentId }
+}
+
+function buildFreeze(photos: readonly DraftPhoto[], note: string | null, sessionGeneration: number, voice: CreatorVoice | null = null, video: CreatorVideo | null = null): CreatorFreeze {
   const source = photos.map((photo) => ({ contentId: photo.id, width: photo.width, height: photo.height, contentHash: photo.contentHash }))
   const byId = new Map(source.map((spec) => [spec.contentId, spec]))
   const style = styleById('press')!
@@ -139,6 +146,7 @@ function buildFreeze(photos: readonly DraftPhoto[], note: string | null, session
     noteFits: true,
     track: null,
     voice,
+    video,
     ownerId: SENDER_ID,
     sessionGeneration,
     recipient: { userId: RECIPIENT_ID, keyBundleId: RECIPIENT_BUNDLE, directoryVersion: DIRECTORY_VERSION },
@@ -158,7 +166,7 @@ interface SenderFixture {
   photos: DraftPhoto[]
 }
 
-async function senderFixture(note: string | null = 'hello', voice: CreatorVoice | null = null): Promise<SenderFixture> {
+async function senderFixture(note: string | null = 'hello', voice: CreatorVoice | null = null, video: CreatorVideo | null = null): Promise<SenderFixture> {
   const photos = [await realPhoto('p0', 1000, 1000), await realPhoto('p1', 1080, 1080), await realPhoto('p2', 1160, 1160)]
   const session = new SessionStore('en')
   session.signIn({
@@ -185,7 +193,7 @@ async function senderFixture(note: string | null = 'hello', voice: CreatorVoice 
   }
   const keys = new MemoryKeys()
   keys.hold(session.getSnapshot(), caps)
-  const freeze = buildFreeze(photos, note, session.getSnapshot().generation, voice)
+  const freeze = buildFreeze(photos, note, session.getSnapshot().generation, voice, video)
   // Present photos in the frozen authored slot order (the sealer requires it).
   const orderedPhotos = freeze.slots.map((slot) => photos.find((photo) => photo.id === slot.contentId)!)
   return { session, keys, caps, freeze, photos: orderedPhotos }
@@ -287,7 +295,9 @@ async function openSealed(sealed: Awaited<ReturnType<typeof sealCapsule>>) {
   }
   const mediaBlob = sealed.blobs.find((blob) => blob.kind === 'MEDIA')
   const media = mediaBlob === undefined ? null : { blobId: mediaBlob.blobId, ciphertext: await downloadCiphertext(received.session, transport, item, mediaBlob.blobId) }
-  const opened = await openGrantedPostcard(received.session, received.keys, ScanGrant.issue(RECIPIENT_ID, CAPSULE_UUID), item, content, sealedPhotos, measurer, null, undefined, media)
+  const filmBlob = sealed.blobs.find((blob) => blob.kind === 'VIDEO')
+  const film = filmBlob === undefined ? null : { blobId: filmBlob.blobId, ciphertext: await downloadCiphertext(received.session, transport, item, filmBlob.blobId) }
+  const opened = await openGrantedPostcard(received.session, received.keys, ScanGrant.issue(RECIPIENT_ID, CAPSULE_UUID), item, content, sealedPhotos, measurer, null, undefined, media, film)
   return { opened, received }
 }
 
@@ -363,6 +373,22 @@ describe('production sealCapsule', () => {
     const { opened } = await openSealed(sealed)
     expect(bytesToHex(opened.sound!)).toBe(bytesToHex(VOICE_SOUND))
     expect(opened.scene.music?.band?.bars?.length).toBe(48)
+  })
+
+  it('seals a video square as the VIDEO artifact over its first frame, beside a voice note', async () => {
+    const sender = await senderFixture('hello', await creatorVoice(), await creatorVideo('p1'))
+    const sealed = await seal(sender, { voice: VOICE_SOUND, video: VIDEO_FILM })
+    expect(sealed.blobs.map((blob) => `${blob.kind}:${blob.ordinal}`)).toEqual([
+      'RECOGNITION_MANIFEST:-1', 'CONTENT_MANIFEST:-1', 'PHOTO:0', 'PHOTO:1', 'PHOTO:2', 'MEDIA:-1', 'VIDEO:-1',
+    ])
+    const { opened } = await openSealed(sealed)
+    expect(bytesToHex(opened.film!)).toBe(bytesToHex(VIDEO_FILM))
+    expect(opened.video).toMatchObject({ durationMs: 7300, size: 480, posterContentId: 'p1', posterSide: 1080 })
+    expect(bytesToHex(opened.sound!)).toBe(bytesToHex(VOICE_SOUND))
+    await expect(seal(sender, { voice: VOICE_SOUND })).rejects.toMatchObject({ code: 'video' })
+    const other = VIDEO_FILM.slice()
+    other[15] = 1
+    await expect(seal(sender, { voice: VOICE_SOUND, video: other })).rejects.toMatchObject({ code: 'video' })
   })
 
   it('refuses a voice note that is missing, extra or not the frozen one', async () => {

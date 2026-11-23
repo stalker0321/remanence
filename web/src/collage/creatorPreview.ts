@@ -564,6 +564,36 @@ export interface ChoicesInput {
    * Android does it; otherwise they keep the authored order and a centred crop.
    */
   analyses?: ReadonlyMap<string, CollageAnalysis> | null
+  /**
+   * The video square's first frame (ADR-021). It is seated only in a tile
+   * square within 5% and at least 140 px on its short side; a layout with no
+   * such tile is not offered.
+   */
+  posterContentId?: string | null
+}
+
+/** ADR-021 §8: the measured floor for the video square's tile. */
+export const VIDEO_TILE_MIN = 140
+const VIDEO_TILE_SKEW = 0.05
+
+export function videoTile(rect: { width: number; height: number }): boolean {
+  return Math.min(rect.width, rect.height) >= VIDEO_TILE_MIN
+    && Math.abs(rect.width - rect.height) <= VIDEO_TILE_SKEW * Math.max(rect.width, rect.height)
+}
+
+/**
+ * The photo per tile with the poster moved to the largest video tile and the
+ * others in authored order; null when no tile can hold the video.
+ */
+function seatPoster(plan: Plan, poster: string): string[] | null {
+  let best = -1
+  plan.tiles.forEach((tile, index) => {
+    if (videoTile(tile.rect) && (best < 0 || tile.rect.width * tile.rect.height > plan.tiles[best]!.rect.width * plan.tiles[best]!.rect.height)) best = index
+  })
+  if (best < 0) return null
+  const ids = plan.tiles.map((tile) => tile.photoId).filter((id) => id !== poster)
+  ids.splice(best, 0, poster)
+  return ids
 }
 
 /**
@@ -585,7 +615,8 @@ export function creatorChoices(input: ChoicesInput): CreatorCandidateView[] {
   const analysed = analysedPhotos(input)
   const d = planInput(input.preview)
   if (analysed !== null) d.photos = d.photos.map((photo) => ({ ...photo, hasProminentFace: hasProminentFace(analysed.get(photo.id)!) }))
-  const matching = analysed === null ? null : new Matching(input.preview.photos.map((photo) => photo.contentId), analysed)
+  const poster = input.posterContentId ?? null
+  const matching = analysed === null ? null : new Matching(input.preview.photos.map((photo) => photo.contentId), analysed, poster)
   const allowed = new Set(input.styleIds ?? styleIds())
   const fits = creatorMarkFits(input.measurer)
   const perGrammar = new Map<number, { styles: CollageStyle[]; branches: Map<string, Branch[]> }>()
@@ -608,6 +639,10 @@ export function creatorChoices(input: ChoicesInput): CreatorCandidateView[] {
         let order: string[] | null = null
         if (matching === null) {
           if (!sourceOrderAssignment(plan).feasible) continue
+          if (poster !== null) {
+            order = seatPoster(plan, poster)
+            if (order === null) continue
+          }
         } else {
           const assigned = matching.assign(plan)
           if (!assignmentOk(assigned)) continue
@@ -634,7 +669,10 @@ export function creatorChoices(input: ChoicesInput): CreatorCandidateView[] {
     for (const style of styles) {
       const candidates = (branches.get(style.id) ?? []).slice(0, depth.get(gid) ?? 0)
       for (const branch of candidates) {
-        const placement = branch.order === null ? null : matching!.placement(branch.plan, branch.order)
+        // Without analysis the poster's seat moves it and the crops stay centred.
+        const placement = branch.order === null
+          ? null
+          : matching === null ? { order: branch.order, crops: new Map() } : matching.placement(branch.plan, branch.order)
         if (branch.order !== null && placement === null) continue
         const view = tryView(branch.plan, byId, input, style, fits, placement)
         if (view === null) continue
@@ -672,7 +710,7 @@ class Matching {
   private readonly cells = new Map<string, number | null>()
   private readonly anyObject: boolean
 
-  constructor(private readonly ids: string[], private readonly analyses: ReadonlyMap<string, CollageAnalysis>) {
+  constructor(private readonly ids: string[], private readonly analyses: ReadonlyMap<string, CollageAnalysis>, private readonly poster: string | null = null) {
     this.anyObject = ids.some((id) => isObjectPhoto(analyses.get(id)!))
   }
 
@@ -694,6 +732,8 @@ class Matching {
   }
 
   private cost(id: string, tile: Plan['tiles'][number]): number | null {
+    // The video's first frame sits only in a tile that can hold the video square.
+    if (id === this.poster && !videoTile(tile.rect)) return null
     const key = `${id}|${tile.rect.width}|${tile.rect.height}|${tile.shape}|${tile.zooms.join(',')}|${tile.assignmentRole ?? ''}`
     const cached = this.cells.get(key)
     if (cached !== undefined) return cached

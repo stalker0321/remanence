@@ -6,7 +6,7 @@ import {
   sceneNoteLayout,
   type CreatorCandidateView,
 } from './creatorPreview'
-import { freezeSelection, freezeValid, type CreatorFreeze, type CreatorSlotFreeze, type CreatorVoice, type FreezeCurrent } from '../create/creatorFreeze'
+import { freezeSelection, freezeValid, type CreatorFreeze, type CreatorSlotFreeze, type CreatorVideo, type CreatorVoice, type FreezeCurrent } from '../create/creatorFreeze'
 import { captureFrozenRenderedPlan, type FrozenRenderedPlan } from './frozenRenderedPlan'
 import { paintCreatorNote, type CreatorNoteFace, type CreatorNoteLayout } from './creatorNote'
 import { bundledFaces } from './fonts'
@@ -48,6 +48,8 @@ export interface CreatorComposerProps {
   track: TrackSnapshot | null
   /** The recorded voice note, painted in the band and sealed instead of a song (ADR-021). */
   voice?: CreatorVoice | null
+  /** The video square; its first frame is one of the photos and is seated only in a square tile (ADR-021). */
+  video?: CreatorVideo | null
   /** The song's checked cover and its decoded image; null keeps the band as text. */
   cover?: { ref: ArtworkRef; image: CanvasImageSource } | null
   /** Offer only this style (tests); every bundled style otherwise. */
@@ -286,12 +288,14 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
   const voice = props.track === null ? props.voice ?? null : null
   const voiceKey = voice?.sha256Hex ?? null
   const voiceWords = useMemo(() => voice === null ? null : { peaks: voice.peaks, durationMs: voice.durationMs }, [voiceKey])
+  const video = props.video ?? null
+  const videoKey = video === null ? null : `${video.sha256Hex}:${video.posterContentId}`
 
   const inputKey = useMemo(() => {
     const photosKey = JSON.stringify(props.photos.map((photo) => [photo.contentId, photo.width, photo.height, photo.contentHash]))
     const transformsKey = JSON.stringify(transforms)
-    return JSON.stringify([photosKey, props.note, transformsKey, onlyStyle, senderHandle, props.track, coverKey, voiceKey])
-  }, [props.photos, props.note, transforms, onlyStyle, senderHandle, props.track, coverKey, voiceKey])
+    return JSON.stringify([photosKey, props.note, transformsKey, onlyStyle, senderHandle, props.track, coverKey, voiceKey, videoKey])
+  }, [props.photos, props.note, transforms, onlyStyle, senderHandle, props.track, coverKey, voiceKey, videoKey])
 
   // Fonts gate: the ONLY async step. Required bundled faces load first;
   // its own epoch, never shared with paint (paint is synchronous after
@@ -352,13 +356,14 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         seed,
         analyses,
         cover: cover?.ref ?? null,
+        posterContentId: video?.posterContentId ?? null,
         ...(onlyStyle === undefined ? {} : { styleIds: [onlyStyle] }),
       })
       return { views: completed }
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
     }
-  }, [tornDown, fontsReady, analysisReady, analyses, cover, inputKey, props.measurer, props.photos, props.note, props.track, voiceWords, transforms, senderHandle, seed, onlyStyle])
+  }, [tornDown, fontsReady, analysisReady, analyses, cover, inputKey, props.measurer, props.photos, props.note, props.track, voiceWords, video?.posterContentId, transforms, senderHandle, seed, onlyStyle])
 
   const views = planned !== null && 'views' in planned ? planned.views : null
   const planError = fontsError ?? (planned !== null && 'error' in planned ? planned.error : null)
@@ -389,8 +394,9 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       track: props.track,
       cover: coverKey,
       voice: voiceKey,
+      video: videoKey,
     })
-  }, [props.measurer, view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.track, coverKey, voiceKey])
+  }, [props.measurer, view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.track, coverKey, voiceKey, videoKey])
 
   const currentFreeze: FreezeCurrent | null = useMemo(() => {
     if (view === null) return null
@@ -401,6 +407,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       senderHandle,
       trackId: props.track?.trackId ?? null,
       voiceSha256: voiceKey,
+      videoSha256: video?.sha256Hex ?? null,
       renderedKey,
       slots: view.slots.map((slot, index) => {
         const meta = props.photos.find((photo) => photo.contentId === slot.photoId)
@@ -425,7 +432,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
               directoryVersion: props.recipient.directoryVersion,
             },
     }
-  }, [view, styleId, senderHandle, props.track, voiceKey, renderedKey, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
+  }, [view, styleId, senderHandle, props.track, voiceKey, video, renderedKey, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
 
   const signature = renderedKey
 
@@ -702,6 +709,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       noteFits,
       track: props.track,
       voice,
+      video,
       ownerId: props.ownerId,
       sessionGeneration: live.generation,
       recipient:

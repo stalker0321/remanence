@@ -44,6 +44,18 @@ export interface CreatorVoice {
   readonly peaks: Uint8Array
 }
 
+/**
+ * The video square as the freeze binds it (ADR-021): the SHA-256 of its MP4,
+ * its length and side, and the photo that is its first frame. The film's
+ * bytes stay with the draft.
+ */
+export interface CreatorVideo {
+  readonly sha256Hex: string
+  readonly durationMs: number
+  readonly size: number
+  readonly posterContentId: string
+}
+
 export interface CreatorFreeze {
   readonly grammarId: string;
   readonly branchId: string;
@@ -57,6 +69,8 @@ export interface CreatorFreeze {
   readonly track: Readonly<TrackSnapshot> | null;
   /** The recorded voice note painted in the band instead of a song. */
   readonly voice: CreatorVoice | null;
+  /** The video square over its poster's tile. */
+  readonly video: CreatorVideo | null;
   readonly noteRegion: { x: number; y: number; width: number; height: number } | null;
   readonly ownerId: string;
   readonly sessionGeneration: number;
@@ -73,6 +87,7 @@ export interface CreatorFreeze {
 
 export type FreezeRefusal =
   | 'music-mismatch'
+  | 'video-poster'
   | 'no-recipient'
   | 'note-missing'
   | 'note-no-region'
@@ -91,6 +106,7 @@ export interface FreezeInput {
   noteFits: boolean
   track: TrackSnapshot | null
   voice?: CreatorVoice | null
+  video?: CreatorVideo | null
   ownerId: string
   sessionGeneration: number
   recipient: CreatorFreezeRecipient | null
@@ -119,6 +135,11 @@ export function freezeSelection(input: FreezeInput): FreezeResult {
   if (painted !== null && (voice !== null) !== isVoiceMode(painted.mode)) return refuse('music-mismatch')
   if (input.track !== null && painted !== null
     && (painted.title !== input.track.title || painted.artist !== input.track.artistDisplay)) return refuse('music-mismatch')
+  const video = input.video ?? null
+  if (video !== null) {
+    const poster = input.slots.find((slot) => slot.contentId === video.posterContentId)
+    if (!poster || poster.widthPx !== poster.heightPx) return refuse('video-poster')
+  }
   if (input.recipient === null) return refuse('no-recipient')
   if (input.note !== null && input.noteRegion === null) return refuse('note-no-region')
   if (input.note === null && input.noteRegion !== null) return refuse('note-missing')
@@ -161,6 +182,7 @@ export function freezeSelection(input: FreezeInput): FreezeResult {
     note: input.note,
     track: input.track === null ? null : Object.freeze({ ...input.track }),
     voice: voice === null ? null : Object.freeze({ sha256Hex: voice.sha256Hex, durationMs: voice.durationMs, peaks: voice.peaks.slice() }),
+    video: video === null ? null : Object.freeze({ ...video }),
     noteRegion: input.noteRegion === null ? null : Object.freeze({ ...input.noteRegion }),
     ownerId: input.ownerId,
     sessionGeneration: input.sessionGeneration,
@@ -181,6 +203,8 @@ export interface FreezeCurrent {
   trackId: string | null
   /** SHA-256 of the recorded voice note, or null. */
   voiceSha256?: string | null
+  /** SHA-256 of the recorded video square, or null. */
+  videoSha256?: string | null
   /** T247: signature of the exact rendered geometry/inputs (null when no view). */
   renderedKey: string | null
   slots: CreatorSlotFreeze[]
@@ -211,6 +235,7 @@ export function freezeValid(frozen: CreatorFreeze, current: FreezeCurrent): { ok
   if (current.senderHandle !== frozen.senderHandle) return bad('sender changed')
   if (current.trackId !== (frozen.track?.trackId ?? null)) return bad('music changed')
   if ((current.voiceSha256 ?? null) !== (frozen.voice?.sha256Hex ?? null)) return bad('voice changed')
+  if ((current.videoSha256 ?? null) !== (frozen.video?.sha256Hex ?? null)) return bad('video changed')
   if (current.note !== frozen.note) return bad('note changed')
   if (current.ownerId !== frozen.ownerId) return bad('owner changed')
   if (current.sessionGeneration !== frozen.sessionGeneration) return bad('session changed')

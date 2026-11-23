@@ -109,6 +109,8 @@ async function voiceSheets(tint: string, sound: string | null, durationMs: numbe
               letter: null,
               voice: { blobId: new Uint8Array(16), mimeType: 'audio/mp4', durationMs, peaks: PEAKS },
               sound,
+              video: null,
+              film: null,
             })
           }
         }

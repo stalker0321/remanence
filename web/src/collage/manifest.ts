@@ -5,7 +5,7 @@ import { projectionHash } from './codec'
 import { CollageError } from './errors'
 import type { TrackSnapshot } from '../create/music'
 import { VOICE_PEAKS } from './songBand'
-import { letterValid, VOICE_MAX_MS } from './wire'
+import { letterValid, VIDEO_MAX_MS, VIDEO_MAX_SIZE, VIDEO_MIN_SIZE, VOICE_MAX_MS } from './wire'
 import {
   EXPRESSION_CONTRACT_V4,
   MUSIC_VOICE_MODES_V4,
@@ -50,6 +50,16 @@ export interface ContentManifestInput {
   letter?: string | null
   /** The voice note in the band (root field 9); required exactly when the band is a voice band. */
   voice?: ManifestVoiceInput | null
+  /** The video square (root field 10); its poster is one of the expression's photos. */
+  video?: ManifestVideoInput | null
+}
+
+/** The video square's VIDEO blob, length, square size and the photo holding its first frame. */
+export interface ManifestVideoInput {
+  blobId: Uint8Array
+  durationMs: number
+  size: number
+  posterContentId: string
 }
 
 /** A voice note's MEDIA blob and what the sender measured of it (ADR-021). */
@@ -64,6 +74,7 @@ export type ContentManifestRefusal =
   | 'unsupported'
   | 'music'
   | 'letter'
+  | 'video'
   | 'expression-invalid'
   | 'capsule-id'
   | 'candidate-id'
@@ -237,6 +248,26 @@ function voiceMessage(voice: ManifestVoiceInput): Uint8Array {
   ])
 }
 
+/** `MediaEntry` kind VIDEO: the VIDEO blob, video/mp4, the length, the square and its poster. */
+function videoMessage(video: ManifestVideoInput): Uint8Array {
+  return concat([
+    protoVarint(1, 2),
+    protoBytes(2, video.blobId),
+    protoBytes(3, utf8('video/mp4')),
+    protoVarint(4, video.durationMs),
+    protoVarint(5, video.size),
+    protoVarint(6, video.size),
+    protoBytes(7, utf8(video.posterContentId)),
+  ])
+}
+
+function videoValid(video: ManifestVideoInput, expression: ResolvedExpression): boolean {
+  return video.blobId instanceof Uint8Array && video.blobId.length === BLOB_ID_BYTES
+    && Number.isInteger(video.durationMs) && video.durationMs >= 1 && video.durationMs <= VIDEO_MAX_MS
+    && Number.isInteger(video.size) && video.size >= VIDEO_MIN_SIZE && video.size <= VIDEO_MAX_SIZE
+    && expression.input.photos.some((photo) => photo.contentId === video.posterContentId)
+}
+
 function voiceValid(voice: ManifestVoiceInput): boolean {
   return voice.blobId instanceof Uint8Array && voice.blobId.length === BLOB_ID_BYTES
     && Number.isInteger(voice.durationMs) && voice.durationMs >= 1 && voice.durationMs <= VOICE_MAX_MS
@@ -310,6 +341,8 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
     if ((track === null) !== (expression.input.music === null)) return refuse('music', 'generator input song and track snapshot must match')
     if (track !== null && (!trackValid(track) || expression.input.music?.trackId !== track.trackId)) return refuse('music', 'track snapshot is invalid')
   }
+  const video = input.video ?? null
+  if (video !== null && !videoValid(video, expression)) return refuse('video', 'video square is invalid')
   // Manifest contract limits first (existing Android bounds), so a bad
   // dimension/note reports its own typed reason rather than a generic one.
   if (!(capsuleId instanceof Uint8Array) || capsuleId.length !== BLOB_ID_BYTES) return refuse('capsule-id', 'capsuleId must be a 16-byte array')
@@ -374,6 +407,7 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
   const snapshotCapsule = capsuleId.slice()
   const snapshotTrack = track === null ? null : { ...track }
   const snapshotVoice = voice === null ? null : { blobId: voice.blobId.slice(), durationMs: voice.durationMs, peaks: voice.peaks.slice() }
+  const snapshotVideo = video === null ? null : { ...video, blobId: video.blobId.slice() }
 
   let expressionHash: string
   try {
@@ -399,6 +433,7 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
     if (snapshotTrack !== null) chunks.push(protoBytes(7, trackMessage(snapshotTrack)))
     if (letter !== null) chunks.push(protoBytes(8, utf8(letter)))
     if (snapshotVoice !== null) chunks.push(protoBytes(9, voiceMessage(snapshotVoice)))
+    if (snapshotVideo !== null) chunks.push(protoBytes(10, videoMessage(snapshotVideo)))
     const bytes = concat(chunks)
     // Explicit plaintext-output bound: the existing parser's `MAX_BYTES` (and
     // the manifest contract) cap the FINAL manifest at 65536. The projection

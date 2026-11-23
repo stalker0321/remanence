@@ -135,6 +135,8 @@ internal class PreparedIncomingPresentation internal constructor(
 
     internal fun letter(): String? = material.letter()
 
+    internal fun voice(): dev.hryshyn.remanence.core.crypto.ManifestVoice? = material.voice()
+
     internal fun loadPhoto(ordinal: Int): ByteArray = material.loadPhoto(ordinal)
 
     /** Used only while the owner/capsule boundary is held before grant issue. */

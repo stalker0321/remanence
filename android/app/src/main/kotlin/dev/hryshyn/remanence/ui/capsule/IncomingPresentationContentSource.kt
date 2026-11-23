@@ -37,6 +37,11 @@ internal class IncomingPresentationContentSource(
         return prepared.letter()
     }
 
+    override suspend fun voice(capsuleId: String): dev.hryshyn.remanence.core.crypto.ManifestVoice? {
+        require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
+        return prepared.voice()
+    }
+
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {
         require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
         if (prepared.protocolVersion == 1) return CapsulePresentationAdmission.LegacyV1

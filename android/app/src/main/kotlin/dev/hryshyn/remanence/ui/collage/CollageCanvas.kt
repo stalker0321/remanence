@@ -516,6 +516,33 @@ fun CollageCanvas(
                                             )
                                         }
                                     }
+                                    // A voice note: one bar per peak with fully rounded ends, the microphone beside the length.
+                                    songBand.bars.forEach { bar ->
+                                        drawRoundRect(
+                                            ink,
+                                            Offset(bar.x.toFloat(), bar.y.toFloat()),
+                                            Size(bar.width.toFloat(), bar.height.toFloat()),
+                                            androidx.compose.ui.geometry.CornerRadius(min(bar.width, bar.height) / 2f),
+                                        )
+                                    }
+                                    songBand.mic?.let { box ->
+                                        // The app's microphone (24-unit grid) at the box's size.
+                                        val unit = box.width / 24f
+                                        fun at(x: Float, y: Float) = Offset(box.x + x * unit, box.y + y * unit)
+                                        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(
+                                            width = maxOf(1f, 2.2f * unit),
+                                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                        )
+                                        drawRoundRect(
+                                            ink,
+                                            at(9f, 3f),
+                                            Size(6f * unit, 11f * unit),
+                                            androidx.compose.ui.geometry.CornerRadius(3f * unit),
+                                            style = stroke,
+                                        )
+                                        drawArc(ink, 0f, 180f, false, at(5f, 4f), Size(14f * unit, 14f * unit), style = stroke)
+                                        drawLine(ink, at(12f, 18f), at(12f, 21f), strokeWidth = stroke.width, cap = stroke.cap)
+                                    }
                                     val play = songBand.play
                                     val center = Offset(play.x + play.width / 2f, play.y + play.height / 2f)
                                     val radius = min(play.width, play.height) / 2f

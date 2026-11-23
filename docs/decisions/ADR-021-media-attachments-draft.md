@@ -167,8 +167,11 @@ memory on both clients.
     needs `media` with kind VOICE and no `track_snapshot`; a song mode the
     reverse; a manifest with both is refused. A circle (kind 2) is refused as
     unsupported until it is drawn. Site: `wire.ts` `parseVoice`,
-    `songBand.ts` `voiceBandLayout`, `prepare.ts` `voiceBandScene` (23
-    November).
+    `songBand.ts` `voiceBandLayout`, `prepare.ts` `voiceBandScene`; Android:
+    `ContentManifestCodec` `parseVoice`, `SongBand.voiceLayout` (the same
+    pixels, `SongBandTest`), `CollageRenderer.prepare(voice = …)` and the
+    bars and microphone in `CollageCanvas` (23 November). The proto gains
+    `MediaEntry` and `ContentManifest.media = 9`.
   - `MediaEntry` gains `bytes peaks = 8`: 48 amplitudes, 0..255, measured by
     the sender. Both platforms draw the same bars from them, and the band is
     whole before the voice blob arrives (the button waits for it).

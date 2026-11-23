@@ -343,4 +343,33 @@ class CollageRendererV4Test {
         val signal = ready(expressionV4()).provenance.single { it.kind == GeneratorExpression.ProvenanceKind.BRAND }
         assertEquals(GeneratorExpression.BRAND_TEXT, signal.text)
     }
+
+    @Test
+    fun aVoiceNoteIsDrawnInTheBandOnlyWhenBandAndSoundAgree() {
+        val voice = SongBand.VoiceWords(IntArray(SongBand.VOICE_PEAKS) { (it * 53) % 256 }, 42_400)
+        fun withMode(mode: String) = expressionV4(
+            grammarId = "1",
+            musicRegion = GeneratorExpression.MusicRegion(
+                x = 16, y = 539, width = 328, height = 64,
+                mode = mode,
+                type = GeneratorExpression.TextType("StudySans", 20, 400, false, 23),
+                artwork = null,
+            ),
+        )
+        val prepare = { expression: GeneratorExpression.ResolvedExpression, track: CapsuleTrackSnapshotV1?, sound: SongBand.VoiceWords? ->
+            CollageRenderer.prepare(expression, null, track, sources(), FakeMeasurer(), null, sound)
+        }
+        val plate = prepare(withMode("voice-plate"), null, voice)
+        assertTrue("expected Ready, got $plate", plate is CollageRenderer.SceneResult.Ready)
+        val band = requireNotNull((plate as CollageRenderer.SceneResult.Ready).scene.music?.band)
+        assertEquals(SongBand.VOICE_PEAKS, band.bars.size)
+        assertEquals(listOf("0:42"), band.runs.map { it.text })
+        assertTrue(band.mic != null)
+        val caption = prepare(withMode("voice-caption"), null, voice) as CollageRenderer.SceneResult.Ready
+        assertEquals("caption", caption.scene.music?.band?.mode)
+        // The band and the sound must agree both ways.
+        assertTrue(prepare(withMode("voice-plate"), snapshot(), voice) is CollageRenderer.SceneResult.Rejected)
+        assertTrue(prepare(withMode("voice-plate"), null, null) is CollageRenderer.SceneResult.Rejected)
+        assertTrue(prepare(withMode("plate"), snapshot(), voice) is CollageRenderer.SceneResult.Rejected)
+    }
 }

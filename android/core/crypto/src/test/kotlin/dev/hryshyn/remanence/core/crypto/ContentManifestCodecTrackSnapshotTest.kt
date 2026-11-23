@@ -13,6 +13,7 @@ import dev.hryshyn.remanence.core.model.GeneratorExpressionProjection
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.protocol.v1.CapsuleTrackSnapshotV1 as ProtoTrackSnapshot
 import dev.hryshyn.remanence.protocol.v1.ContentManifest
+import dev.hryshyn.remanence.protocol.v1.MediaEntry
 import dev.hryshyn.remanence.protocol.v1.PhotoEntry
 import java.nio.ByteBuffer
 import java.security.GeneralSecurityException
@@ -349,5 +350,42 @@ class ContentManifestCodecTrackSnapshotTest {
         assertFailsWith<GeneralSecurityException> {
             codec.decryptAndParse(wrongKeyset, routing(), ciphertext)
         }
+    }
+
+    private fun voiceEntry() = MediaEntry.newBuilder()
+        .setKind(MediaEntry.Kind.VOICE)
+        .setBlobId(ByteString.copyFrom(uuidBytes(UUID.fromString("bf0a1234-5678-4abc-9def-aabbccdd0009"))))
+        .setMimeType("audio/mp4")
+        .setDurationMs(42_400)
+        .setPeaks(ByteString.copyFrom(ByteArray(48) { it.toByte() }))
+
+    /** Re-seals a codec-built manifest with [edit] applied, as another client could. */
+    private fun resealed(base: ByteArray, edit: (ContentManifest.Builder) -> Unit): ByteArray {
+        val cryptor = CapsuleArtifactCryptor()
+        val context = ArtifactAadInput(
+            capsuleId = CapsuleId(capsuleUuid),
+            blobId = BlobId(contentBlobUuid),
+            artifactKind = CapsuleArtifactKind.CONTENT_MANIFEST,
+            ordinal = -1,
+            senderUserId = UserId(senderUuid),
+            recipientUserId = UserId(recipientUuid),
+        )
+        val manifest = ContentManifest.parseFrom(cryptor.decrypt(keyset, context, base)).toBuilder()
+        edit(manifest)
+        return cryptor.encrypt(capsuleKeyset = keyset, context = context, plaintext = manifest.build().toByteArray())
+    }
+
+    @Test
+    fun mediaWithoutAVoiceBandOrBesideASongFailsClosed() {
+        val plain = codec.buildAndEncryptV2(keyset, routing(), manifestPhotos(), null, "cand-1", ber1(), blobMap())
+        // A voice note needs a voice band in the expression.
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing(), resealed(plain) { it.setMedia(voiceEntry()) })
+        }
+        val song = codec.buildAndEncryptV2(keyset, routing(), manifestPhotos(), null, "cand-1", ber1(), blobMap(), snapshot())
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing(), resealed(song) { it.setMedia(voiceEntry()) })
+        }
+        assertNull(codec.decryptAndParse(keyset, routing(), plain).voice)
     }
 }

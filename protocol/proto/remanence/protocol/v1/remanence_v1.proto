@@ -124,6 +124,28 @@ message ContentManifest {
   // manifest like the track snapshot; no new artifact kind. Older Android
   // builds skip the unknown field and still open the sheet.
   optional string letter = 8;
+  // ADR-021: v2-only media in the card, at most one. A VOICE note plays in the
+  // song band (music modes voice-plate, voice-caption, voice-card) and excludes
+  // track_snapshot. Released builds refuse such a card: the web parser fails
+  // closed on the unknown field, Android on a music region without a track.
+  optional MediaEntry media = 9;
+}
+
+// ADR-021: one MEDIA artifact referenced from the content manifest.
+message MediaEntry {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    VOICE = 1;
+    CIRCLE = 2; // not drawn yet; receivers refuse it as unsupported
+  }
+  Kind kind = 1;
+  bytes blob_id = 2;            // UUID bytes exactly 16, the MEDIA artifact
+  string mime_type = 3;         // "audio/mp4" for VOICE
+  uint32 duration_ms = 4;       // VOICE 1..60000
+  optional uint32 width = 5;    // CIRCLE only
+  optional uint32 height = 6;   // CIRCLE only
+  optional string poster_content_id = 7; // CIRCLE only
+  bytes peaks = 8;              // VOICE: exactly 48 amplitudes 0..255, drawn as the waveform
 }
 
 // ADR-018: one authored source binding (expression content-id -> manifest

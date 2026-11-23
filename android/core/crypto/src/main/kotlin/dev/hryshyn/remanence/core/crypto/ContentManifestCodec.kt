@@ -12,6 +12,7 @@ import dev.hryshyn.remanence.protocol.v1.ExpressionSource
 import dev.hryshyn.remanence.protocol.v1.ExpressionStyle
 import dev.hryshyn.remanence.protocol.v1.ExpressionTextType
 import dev.hryshyn.remanence.protocol.v1.ExpressionV1
+import dev.hryshyn.remanence.protocol.v1.MediaEntry
 import dev.hryshyn.remanence.protocol.v1.PhotoEntry
 import com.google.crypto.tink.KeysetHandle
 import java.security.GeneralSecurityException
@@ -50,7 +51,32 @@ data class ContentManifestContent(
     val trackSnapshot: CapsuleTrackSnapshotV1? = null,
     /** v2-only long note read beside the sheet (field 8); null when absent. */
     val letter: String? = null,
+    /** v2-only voice note in the song band (field 9, ADR-021); null when absent. */
+    val voice: ManifestVoice? = null,
 )
+
+/** A voice note: its MEDIA blob, length and the 48 bars the sender measured. */
+class ManifestVoice(
+    val blobId: UUID,
+    val durationMs: Int,
+    peaks: ByteArray,
+) {
+    private val heldPeaks = peaks.copyOf()
+
+    /** 0..255 amplitudes, [PEAKS] of them. */
+    val peaks: IntArray get() = IntArray(heldPeaks.size) { heldPeaks[it].toInt() and 0xff }
+
+    override fun equals(other: Any?): Boolean =
+        other is ManifestVoice && other.blobId == blobId && other.durationMs == durationMs && other.heldPeaks.contentEquals(heldPeaks)
+
+    override fun hashCode(): Int = (blobId.hashCode() * 31 + durationMs) * 31 + heldPeaks.contentHashCode()
+
+    companion object {
+        const val PEAKS = 48
+        const val MAX_MS = 60_000
+        const val MIME_TYPE = "audio/mp4"
+    }
+}
 
 /**
  * Builds and encrypts the content manifest (docs/security.md section 6.2).
@@ -299,14 +325,26 @@ class ContentManifestCodec {
             if (manifest.hasLetter()) {
                 throw GeneralSecurityException("v1 content manifest must not carry a letter")
             }
+            if (manifest.hasMedia()) {
+                throw GeneralSecurityException("v1 content manifest must not carry media")
+            }
             ContentManifestContent(protocolVersion = manifest.protocolVersion, photos = parsed, note = note)
         } else {
             if (!manifest.hasExpression()) {
                 throw GeneralSecurityException("v2 content manifest is missing its expression artifact")
             }
+            // One sound per card: a voice band carries the voice note and no song.
+            if (manifest.hasMedia() && manifest.hasTrackSnapshot()) {
+                throw GeneralSecurityException("content manifest carries both a song and media")
+            }
+            val voiceBand = manifest.expression.hasMusic() &&
+                manifest.expression.music.mode in GeneratorExpression.VOICE_BAND_MODES
+            if (voiceBand != manifest.hasMedia()) {
+                throw GeneralSecurityException("expression voice band and media must match")
+            }
             if ((manifest.expression.expressionVersion == EXPRESSION_VERSION_V3 ||
                     manifest.expression.expressionVersion == EXPRESSION_VERSION_V4) &&
-                manifest.expression.hasMusic() != manifest.hasTrackSnapshot()
+                !voiceBand && manifest.expression.hasMusic() != manifest.hasTrackSnapshot()
             ) {
                 throw GeneralSecurityException("expression music region and track snapshot must match")
             }
@@ -324,6 +362,7 @@ class ContentManifestCodec {
                     null
                 },
                 letter = if (manifest.hasLetter()) manifest.letter else null,
+                voice = if (manifest.hasMedia()) parseVoice(manifest.media) else null,
             )
         }
     } catch (failure: GeneralSecurityException) {
@@ -737,6 +776,22 @@ class ContentManifestCodec {
             throw GeneralSecurityException("expression projection hash mismatch")
         }
         return ContentExpression(candidateId = candidateId, projectionHash = proto.expressionHash, expression = expression)
+    }
+
+    private fun parseVoice(proto: MediaEntry): ManifestVoice {
+        // A circle is not drawn yet; it waits for its own release.
+        if (proto.kind != MediaEntry.Kind.VOICE) throw GeneralSecurityException("content manifest media kind is not supported")
+        if (proto.hasWidth() || proto.hasHeight() || proto.hasPosterContentId()) {
+            throw GeneralSecurityException("voice media must not carry circle fields")
+        }
+        val blob = proto.blobId.toByteArray()
+        if (blob.size != PHOTO_BLOB_ID_BYTES || proto.mimeType != ManifestVoice.MIME_TYPE ||
+            proto.durationMs !in 1..ManifestVoice.MAX_MS || proto.peaks.size() != ManifestVoice.PEAKS
+        ) {
+            throw GeneralSecurityException("voice media is out of bounds")
+        }
+        val buffer = java.nio.ByteBuffer.wrap(blob)
+        return ManifestVoice(UUID(buffer.long, buffer.long), proto.durationMs, proto.peaks.toByteArray())
     }
 
     private fun parseTrackSnapshot(proto: ProtoTrackSnapshot): CapsuleTrackSnapshotV1 {

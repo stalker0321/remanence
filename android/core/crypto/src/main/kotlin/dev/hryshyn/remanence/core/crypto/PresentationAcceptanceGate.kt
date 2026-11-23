@@ -110,6 +110,9 @@ class PreparedPresentationMaterial internal constructor(
     /** The long note read beside the sheet, or null when absent. */
     fun letter(): String? = requireOpen().letter
 
+    /** The voice note in the song band (ADR-021), or null when absent. */
+    fun voice(): ManifestVoice? = requireOpen().voice
+
     /** Decrypts one verified photo from the exact snapshot captured at prepare time. */
     fun loadPhoto(ordinal: Int): ByteArray {
         val manifest = requireOpen()

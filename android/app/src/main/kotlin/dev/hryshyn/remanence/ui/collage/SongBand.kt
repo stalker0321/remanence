@@ -34,9 +34,16 @@ object SongBand {
         val divider: CollageRenderer.RectI?,
         val filled: Boolean,
         val runs: List<Run>,
+        /** A voice note's waveform, one bar per peak; empty for a song. */
+        val bars: List<CollageRenderer.RectI> = emptyList(),
+        /** The microphone beside a voice note's length (plate, card). */
+        val mic: CollageRenderer.RectI? = null,
     )
 
     data class Words(val title: String, val artistDisplay: String)
+
+    /** A received voice note's bars (0..255, [VOICE_PEAKS] of them) and length. */
+    class VoiceWords(val peaks: IntArray, val durationMs: Int)
 
     fun interface RunWidth {
         fun width(text: String, face: Face): Int
@@ -154,5 +161,92 @@ object SongBand {
             if (artist != null) add(Run(artist, ARTIST, region.x + (region.width - ARTIST.line) / 2, foot, vertical = true))
         }
         return Layout("card", null, play, PlayStyle.RING, null, true, runs)
+    }
+
+    /*
+     * A voice note in the song band (ADR-021 §5, the owner's look of 23
+     * November): the band's own three forms with the waveform where the title
+     * was and the length (with a microphone on the plate and the spine) where
+     * the artist was. No words, so it never needs to fit and never refuses.
+     * The site's `voiceBandLayout` line for line.
+     */
+    const val VOICE_PEAKS = 48
+    private const val MIC = 12
+
+    /** The song band form a `voice-` mode borrows. */
+    fun voiceBandShape(mode: String): String = when (mode) {
+        "voice-card" -> "card"
+        "voice-caption" -> "caption"
+        else -> "plate"
+    }
+
+    /** "0:42": whole seconds, at least one. */
+    fun voiceLength(durationMs: Int): String {
+        val seconds = maxOf(1, Math.round(durationMs / 1000.0).toInt())
+        return "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
+    }
+
+    /** Bars across [span] (horizontal: along x, vertical: along y), each centred on the band's axis. */
+    private fun waveBars(peaks: IntArray, along: Int, span: Int, across: Double, depth: Int, vertical: Boolean): List<CollageRenderer.RectI> {
+        val count = peaks.size
+        if (count == 0 || span < count * 2) return emptyList()
+        val step = span.toDouble() / count
+        val thick = maxOf(2, minOf(4, Math.floor(step * 0.6).toInt()))
+        val least = 3
+        return peaks.mapIndexed { index, peak ->
+            val size = maxOf(least, Math.round(least + (depth - least) * peak / 255.0).toInt())
+            val start = Math.round(along + index * step + (step - thick) / 2).toInt()
+            val side = Math.round(across - size / 2.0).toInt()
+            if (vertical) CollageRenderer.RectI(side, start, size, thick) else CollageRenderer.RectI(start, side, thick, size)
+        }
+    }
+
+    fun voiceLayout(region: CollageRenderer.RectI, mode: String, type: Face, peaks: IntArray, durationMs: Int, measure: RunWidth): Layout {
+        val length = voiceLength(durationMs)
+        if (mode == "card") {
+            val button = 34
+            val play = CollageRenderer.RectI(region.x + (region.width - button) / 2, region.y + region.height - 14 - button, button, button)
+            val mic = CollageRenderer.RectI(region.x + (region.width - MIC) / 2, play.y - 12 - MIC, MIC, MIC)
+            val foot = mic.y - 6
+            val run = Run(length, ARTIST, region.x + (region.width - ARTIST.line) / 2, foot, vertical = true)
+            val top = region.y + 24
+            val bottom = foot - measure.width(length, ARTIST) - 18
+            val bars = waveBars(peaks, top, bottom - top, region.x + region.width / 2.0, minOf(34, region.width - 16), vertical = true)
+            return Layout("card", null, play, PlayStyle.RING, null, true, listOf(run), bars, mic)
+        }
+        if (mode == "caption") {
+            val bodyY = region.y + 8
+            val bodyHeight = region.height - 8
+            val lead = 36
+            val play = CollageRenderer.RectI(region.x, bodyY + (bodyHeight - lead) / 2, lead, lead)
+            val lengthWidth = measure.width(length, type)
+            val top = bodyY + (bodyHeight - type.line) / 2
+            val run = Run(length, type, region.x + region.width - lengthWidth, top, vertical = false)
+            val left = play.x + lead + 12
+            val right = run.x - 12
+            val bars = waveBars(peaks, left, right - left, bodyY + bodyHeight / 2.0, minOf(22, bodyHeight - 8), vertical = false)
+            return Layout("caption", null, play, PlayStyle.CIRCLE, null, false, listOf(run), bars, null)
+        }
+        val side = region.height
+        val left = region.x + side + 12
+        val right = region.x + region.width - 14
+        val waveDepth = minOf(28, side - ARTIST.line - 20)
+        val block = waveDepth + 6 + ARTIST.line
+        val top = region.y + (side - block) / 2
+        val lineTop = top + waveDepth + 6
+        val mic = CollageRenderer.RectI(left, lineTop + (ARTIST.line - MIC) / 2, MIC, MIC)
+        val run = Run(length, ARTIST, left + MIC + 5, lineTop, vertical = false)
+        val bars = waveBars(peaks, left, right - left, top + waveDepth / 2.0, waveDepth, vertical = false)
+        return Layout(
+            "plate",
+            null,
+            CollageRenderer.RectI(region.x + (side - 20) / 2, region.y + (side - 22) / 2, 20, 22),
+            PlayStyle.GLYPH,
+            CollageRenderer.RectI(region.x + side - 1, region.y, 1, side),
+            true,
+            listOf(run),
+            bars,
+            mic,
+        )
     }
 }

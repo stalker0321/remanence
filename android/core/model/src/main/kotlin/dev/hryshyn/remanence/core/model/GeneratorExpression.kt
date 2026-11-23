@@ -321,6 +321,13 @@ object GeneratorExpression {
     val SONG_BAND_MODES: Set<String> = setOf("plate", "caption", "card")
 
     /**
+     * A voice note in the song band (ADR-021 §5, 23 November 2026): the same
+     * three forms, a waveform instead of words, never artwork. Older receivers
+     * refuse an unknown mode, so voice cards never half-open there.
+     */
+    val VOICE_BAND_MODES: Set<String> = setOf("voice-plate", "voice-caption", "voice-card")
+
+    /**
      * Frozen music presentation modes (v4 only).
      *
      * Verbatim from the freeze: `sound(d,r,mode)` (`expansion.js:21`) and
@@ -332,7 +339,7 @@ object GeneratorExpression {
      */
     val MUSIC_MODES_V4: Set<String> =
         setOf("text", "thumbnail", "inline", "tile-art", "tile-text", "sleeve", "sleeve-empty", "spine", "pulse") +
-            SONG_BAND_MODES
+            SONG_BAND_MODES + VOICE_BAND_MODES
 
     /** Music modes whose frozen DOM carries a cover image when artwork is present. */
     val MUSIC_COVER_MODES_V4: Set<String> = setOf("thumbnail", "inline", "tile-art", "sleeve", "pulse", "plate", "caption")
@@ -346,7 +353,7 @@ object GeneratorExpression {
      * validation all read these sets; nothing copies them.
      */
     val MUSIC_ARTWORK_REQUIRED_MODES_V4: Set<String> = setOf("thumbnail", "tile-art", "sleeve")
-    val MUSIC_TEXT_ONLY_MODES_V4: Set<String> = setOf("text", "tile-text", "sleeve-empty", "spine", "card")
+    val MUSIC_TEXT_ONLY_MODES_V4: Set<String> = setOf("text", "tile-text", "sleeve-empty", "spine", "card") + VOICE_BAND_MODES
     val MUSIC_BARE_TEXT_OK_MODES_V4: Set<String> = setOf("inline", "pulse")
 
     /** Maximum sealed provenance mark text length in chars (frozen maximum is far below). */

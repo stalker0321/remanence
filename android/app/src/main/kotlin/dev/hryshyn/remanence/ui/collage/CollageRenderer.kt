@@ -478,6 +478,8 @@ object CollageRenderer {
          * degrades to the text/no-art layout and never draws a placeholder.
          */
         artwork: SourcePhoto? = null,
+        /** The voice note a `voice-` band plays (ADR-021), or null. */
+        voice: SongBand.VoiceWords? = null,
     ): SceneResult {
         if (expression.expressionContractVersion != GeneratorExpression.EXPRESSION_CONTRACT_V3 &&
             expression.expressionContractVersion != GeneratorExpression.EXPRESSION_CONTRACT_V4
@@ -546,8 +548,14 @@ object CollageRenderer {
             null
         }
 
-        if ((musicRegion != null) != (trackSnapshot != null)) {
-            return SceneResult.Rejected("music region and track snapshot must match")
+        val voiceBand = musicRegion != null && musicRegion.mode in GeneratorExpression.VOICE_BAND_MODES
+        if (voiceBand) {
+            if (voice == null || trackSnapshot != null) return SceneResult.Rejected("a voice band needs the voice note and no song")
+        } else {
+            if (voice != null) return SceneResult.Rejected("a voice note needs a voice band")
+            if ((musicRegion != null) != (trackSnapshot != null)) {
+                return SceneResult.Rejected("music region and track snapshot must match")
+            }
         }
 
         val placements = expression.placements
@@ -652,6 +660,34 @@ object CollageRenderer {
         val artworkScene: SceneArtwork?
         if (musicRegion == null || musicType == null) {
             musicScene = null
+            artworkScene = null
+        } else if (voice != null) {
+            // A voice note: the song band of that form, bars instead of words.
+            val regionRect = RectI(musicRegion.x, musicRegion.y, musicRegion.width, musicRegion.height)
+            val type = SongBand.Face(musicType.family, musicType.size, musicType.weight, musicType.italic, musicType.line)
+            val band = SongBand.voiceLayout(
+                regionRect, SongBand.voiceBandShape(musicRegion.mode), type, voice.peaks, voice.durationMs, runWidth(measurer),
+            )
+            musicScene = SceneMusic(
+                title = "",
+                artist = "",
+                text = "",
+                region = regionRect,
+                family = musicType.family,
+                size = musicType.size,
+                weight = musicType.weight,
+                italic = musicType.italic,
+                line = musicType.line,
+                fontResourceId = requireNotNull(musicFont),
+                background = parseColor(if (band.filled) style.palette.sound else style.palette.paper),
+                color = parseColor(if (band.filled) style.palette.soundInk else style.palette.ink),
+                transparentBackground = !band.filled,
+                mode = band.mode,
+                vertical = band.mode == "card",
+                copyRegion = regionRect,
+                playRegion = band.play,
+                band = band,
+            )
             artworkScene = null
         } else {
             val snapshot = requireNotNull(trackSnapshot)

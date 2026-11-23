@@ -46,6 +46,9 @@ interface CapsuleContentReader {
     /** The long note read beside the sheet (manifest field 8), or null. */
     suspend fun letter(capsuleId: String): String? = null
 
+    /** The voice note in the song band (manifest field 9), or null. */
+    suspend fun voice(capsuleId: String): dev.hryshyn.remanence.core.crypto.ManifestVoice? = null
+
     /**
      * Default: a reader that has no content-manifest view is treated as the
      * legacy v1 photo path, so every existing reader/test is unchanged.
@@ -117,6 +120,13 @@ class GrantGuardedCapsuleContentSource(
         val letter = delegate.letter(capsuleId)
         validateLiveGrant()
         return letter
+    }
+
+    override suspend fun voice(capsuleId: String): dev.hryshyn.remanence.core.crypto.ManifestVoice? {
+        validateLiveGrant()
+        val voice = delegate.voice(capsuleId)
+        validateLiveGrant()
+        return voice
     }
 
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {

@@ -170,6 +170,9 @@ class CapsuleContentSource(
 
     override suspend fun letter(capsuleId: String): String? = decryptContent(capsuleId)?.letter
 
+    override suspend fun voice(capsuleId: String): dev.hryshyn.remanence.core.crypto.ManifestVoice? =
+        decryptContent(capsuleId)?.voice
+
     /**
      * ADR-018: a v2 outbox capsule (e.g. a self-send) renders its sealed
      * exact BER1 expression; v1 keeps the existing photo path; an

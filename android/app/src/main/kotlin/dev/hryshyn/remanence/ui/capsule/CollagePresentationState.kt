@@ -24,6 +24,7 @@ import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.collage.CollageCanvas
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
+import dev.hryshyn.remanence.ui.collage.SongBand
 import dev.hryshyn.remanence.ui.collage.rememberCollageTextMeasurer
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
 import dev.hryshyn.remanence.ui.capsule.music.rememberTrackServiceAction
@@ -54,6 +55,8 @@ class CollagePresentationState(
     val track: CapsuleTrackSnapshotV1? = null,
     /** Long note read beside the sheet; never drawn on it. */
     val letter: String? = null,
+    /** The voice note drawn in the song band (ADR-021); its sound is fetched on play. */
+    val voice: dev.hryshyn.remanence.core.crypto.ManifestVoice? = null,
     private val decoder: Ber1PhotoDecoder = DefaultBer1PhotoDecoder,
     /**
      * Direct client-only cover fetcher. Null (or a fetch failure) degrades a
@@ -250,9 +253,10 @@ internal fun CollagePresentationHost(
             val artworkSize = remember(artwork) {
                 artwork?.let { CollageRenderer.SourcePhoto(it.width, it.height) }
             }
-            val result = remember(state.expression, state.note, state.track, sizes, measurer, artworkSize) {
+            val result = remember(state.expression, state.note, state.track, state.voice, sizes, measurer, artworkSize) {
                 CollageRenderer.prepare(
                     state.expression, state.note, state.track, sizes, measurer, artworkSize,
+                    state.voice?.let { SongBand.VoiceWords(it.peaks, it.durationMs) },
                 )
             }
             LaunchedEffect(result) {

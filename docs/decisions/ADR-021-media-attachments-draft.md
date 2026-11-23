@@ -107,7 +107,7 @@ minimum size. `poster_content_id` ties the video to that photo. So:
 - new apps play the video in that tile when the card is open;
 - no new kind of tile in the expression is needed for the circle.
 
-### Server (built 23 November, behind `media_enabled`, not deployed)
+### Server (deployed 23 November, behind `media_enabled`, which is off)
 
 - `ArtifactKind.MEDIA = 4`, ordinal -1 (like the manifests), at most one;
   it sorts after the photos in the canonical artifact order. The publish

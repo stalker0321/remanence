@@ -1,7 +1,7 @@
 {
   "cameraDeniedHelp": "allow camera access for this site in your browser or phone settings, then try again",
   "cameraUnavailableHelp": "make sure no other app is using the camera, then try again",
-  "createMusicTitle": "a song",
+  "createMusicTitle": "sound",
   "createSteps": "making a postcard",
   "createContent": "photos and words",
   "createComposition": "layout",
@@ -352,5 +352,19 @@
   "letterMark": "continued on the back",
   "letterFront": "the front",
   "voiceListen": "listen to the voice note",
-  "voicePause": "pause the voice note"
+  "voicePause": "pause the voice note",
+  "soundSong": "song",
+  "soundVoice": "voice",
+  "voiceRecord": "record",
+  "voiceStop": "stop",
+  "voiceListenOwn": "listen",
+  "voicePauseOwn": "pause",
+  "voiceRerecord": "record again",
+  "voiceDelete": "delete",
+  "voiceHint": "up to a minute. it plays from the band on the card",
+  "voiceReplacesSong": "a card holds one sound: the voice note takes the song's place",
+  "voiceUnsupported": "this browser cannot record a voice note. Chrome and Safari can",
+  "voiceDenied": "no access to the microphone. allow it in the browser and try again",
+  "voiceFailed": "the recording did not work. try again",
+  "voiceTooLarge": "the recording is too large. try a shorter one"
 }

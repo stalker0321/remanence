@@ -181,6 +181,17 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
 .music-draft ul { list-style:none; margin:.8rem 0; padding:0; display:grid; gap:.5rem; }
 .music-draft li button { text-align:start; }
 .music-draft p { font-size:.8rem; color:var(--muted); }
+.sound-tabs { display:inline-flex; gap:2px; padding:2px; margin-bottom:1rem; background:var(--bridge); border-radius:.5rem; }
+.sound-tabs button { border:0; background:transparent; border-radius:.4rem; min-height:var(--touch); padding:.4rem 1.1rem; font-size:.85rem; }
+.sound-tabs button[aria-selected="true"] { background:var(--surface); box-shadow:0 1px 2px var(--shadow); }
+.voice-draft { display:grid; gap:.6rem; max-width:36rem; }
+.voice-row { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem; }
+.voice-record { display:inline-flex; align-items:center; gap:.55rem; }
+.voice-dot { width:.7rem; height:.7rem; border-radius:50%; background:currentColor; }
+.voice-record.is-recording .voice-dot { border-radius:.12rem; animation:voice-pulse 1.2s ease-in-out infinite; }
+.voice-time { font-variant-numeric:tabular-nums; font-size:.9rem; }
+@keyframes voice-pulse { 50% { opacity:.35; } }
+@media (prefers-reduced-motion:reduce) { .voice-record.is-recording .voice-dot { animation:none; } }
 .front-section { margin:1.5rem 0; padding:1.5rem; background:var(--bridge); border-radius:.8rem; overflow-wrap:anywhere; }
 .front-section .preview { max-height:28rem; object-fit:contain; }
 .front-section .camera-feedback { background:var(--paper); }

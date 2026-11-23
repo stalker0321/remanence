@@ -391,6 +391,34 @@ async function readyVisit(h: Harness, files: File[], seed: number): Promise<Uint
   return normalized
 }
 
+/**
+ * A microphone that "records" the committed 2 s AAC tone: this Chromium has no
+ * AAC encoder, so MediaRecorder and getUserMedia are stood in for while the
+ * page decodes, measures, seals and uploads the real MP4.
+ */
+let voiceFixture: Uint8Array = new Uint8Array()
+function fakeMicrophone(): void {
+  class FakeRecorder {
+    static isTypeSupported(type: string): boolean { return type === 'audio/mp4;codecs=mp4a.40.2' }
+    state: 'inactive' | 'recording' = 'inactive'
+    ondataavailable: ((event: { data: Blob }) => void) | null = null
+    onstop: (() => void) | null = null
+    onerror: (() => void) | null = null
+    constructor(_stream: MediaStream, readonly options: { mimeType: string }) {}
+    start(): void { this.state = 'recording' }
+    stop(): void {
+      this.state = 'inactive'
+      this.ondataavailable?.({ data: new Blob([voiceFixture as unknown as BlobPart], { type: 'audio/mp4' }) })
+      this.onstop?.()
+    }
+  }
+  ;(window as unknown as { MediaRecorder: unknown }).MediaRecorder = FakeRecorder
+  Object.defineProperty(navigator, 'mediaDevices', {
+    configurable: true,
+    value: { getUserMedia: async () => ({ getTracks: () => [{ stop: () => undefined }] }) },
+  })
+}
+
 let quadRef: Uint8Array = new Uint8Array()
 function setQuad(bytes: Uint8Array): void { quadRef = bytes }
 
@@ -643,6 +671,50 @@ async function main(): Promise<void> {
     await clickText(t('sendAction'), 'send (alternate order)')
     await waitFor(() => byTest('send_state')?.textContent === t('sendSent'), 'sent state (alternate order)', 60000)
     assert('alternate-order visit reports postcard sent', byTest('send_state')?.textContent === t('sendSent'))
+
+    // ---- scenario 7: a recorded voice note takes the song's place, is sealed
+    // as the one MEDIA artifact and decrypts to the exact MP4 ----
+    h6.unmount()
+    voiceFixture = new Uint8Array(await (await fetch('./voice-2s.m4a')).arrayBuffer())
+    fakeMicrophone()
+    const h7 = harness()
+    h7.create()
+    await waitFor(() => document.querySelector('.photo-draft input[type="file"]') !== null, 'voice create flow')
+    await clickText(t('soundVoice'), 'voice tab')
+    await clickText(t('voiceRecord'), 'record')
+    await waitFor(() => buttonByText(t('voiceStop')) !== null, 'recording')
+    assert('recording shows the stop button and the one-minute limit', bodyText().includes('/ 1:00'))
+    await clickText(t('voiceStop'), 'stop')
+    await waitFor(() => buttonByText(t('voiceListenOwn')) !== null, 'recorded voice note')
+    assert('the recording is measured to its length', document.querySelector('.voice-draft .voice-time')?.textContent === '0:02')
+    assert('recorded voice offers record again and delete', buttonByText(t('voiceRerecord')) !== null && buttonByText(t('voiceDelete')) !== null)
+    const sentBefore = notices.filter((n) => n === 'sendSent').length
+    const before7 = await capture()
+    await readyVisit(h7, files, 61)
+    await clickText(t('sendAction'), 'send voice card')
+    await waitFor(() => byTest('send_state')?.textContent === t('sendSent'), 'voice card sent', 120000)
+    assert('voice card reports sent', notices.filter((n) => n === 'sendSent').length === sentBefore + 1)
+    const after7 = await capture()
+    const voiceDraft = JSON.parse(fromUtf8(fromHex(lastDraft(after7)!.bodyHex)))
+    const voiceBlobs: Array<{ blob_id: string; kind: string; ordinal: number | null }> = voiceDraft.blobs
+    const mediaMeta = voiceBlobs.filter((blob) => blob.kind === 'MEDIA')
+    assert('the draft declares exactly one MEDIA blob with no ordinal', mediaMeta.length === 1 && mediaMeta[0]!.ordinal === null, JSON.stringify(voiceBlobs))
+    assert('the voice card uploads six blobs', after7.uploads.length - before7.uploads.length === 6)
+    const voiceFinalize = JSON.parse(fromUtf8(fromHex(lastFinalize(after7)!.bodyHex)))
+    const voiceEnvelope = await openRecipientEnvelope(HPKE_PRIVATE, recipientEnvelopeInfo({
+      capsuleId: voiceDraft.capsule_id, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID, recipientKeyBundleId: RECIPIENT_BUNDLE,
+    }), fromBase64(voiceFinalize.recipient_envelope.ciphertext))
+    const voiceKeyset = fieldBytes(readMessage(voiceEnvelope, [1, 2, 3, 4, 5, 6, 7, 8]), 7)
+    const mediaUpload = after7.uploads.find((upload) => upload.url.endsWith(`/blobs/${mediaMeta[0]?.blob_id}`))
+    if (mediaUpload && mediaMeta[0]) {
+      const sound = await decryptArtifact(voiceKeyset, artifactAad({
+        capsuleId: voiceDraft.capsule_id, blobId: mediaMeta[0].blob_id, kind: 'MEDIA', ordinal: -1, senderUserId: SENDER_ID, recipientUserId: RECIPIENT_ID,
+      }), fromHex(mediaUpload.bodyHex), 'MEDIA')
+      assert('the MEDIA blob decrypts to the exact recorded MP4', sameBytes(sound, voiceFixture))
+    } else {
+      fail('the MEDIA blob was uploaded', JSON.stringify(after7.uploads.map((upload) => upload.url)))
+    }
+    report.voice = true
 
     report.notices = [...notices]
   } catch (error) {

@@ -9,8 +9,8 @@ import {
   type CropWindowInts,
 } from './crop'
 import type { PhotoShape, Rect } from './model'
-import { markColor, markFits, musicLayers, runWidth, sceneDecor, sourceRect, type TextMeasurer, type TrackWords } from './prepare'
-import { songBandLayout } from './songBand'
+import { markColor, markFits, musicLayers, runWidth, sceneDecor, sourceRect, voiceBandScene, type TextMeasurer, type TrackWords } from './prepare'
+import { songBandLayout, type VoiceWords } from './songBand'
 import {
   ACTIVE_GRAMMAR_IDS,
   applicability,
@@ -407,10 +407,17 @@ export interface CreatorSceneInput {
   photos: ReadonlyMap<string, { width: number; height: number }>
   /** The chosen song's words; required exactly when the view has a song band. */
   track?: TrackWords | null
-  /** Measures the song words against the band; required with `track`. */
+  /** The recorded voice note, painted in the band instead of a song (ADR-021). */
+  voice?: VoiceWords | null
+  /** Measures the song words against the band; required with `track` or `voice`. */
   measurer?: TextMeasurer
   /** The song's checked cover, painted in the bands that hold one. */
   cover?: ArtworkRef | null
+}
+
+/** The voice form of a planned band: the spine stays a spine, every other band is a plate. */
+function voiceMode(planned: string): string {
+  return planned === 'card' ? 'voice-card' : 'voice-plate'
 }
 
 /**
@@ -453,9 +460,17 @@ export function creatorScene(input: CreatorSceneInput): Scene {
         }
       : null
   const track = input.track ?? null
-  if ((track === null) !== (input.view.music === null)) fail('creator song band and chosen song must match')
+  const voice = input.voice ?? null
+  if (track !== null && voice !== null) fail('a card carries a song or a voice note, not both')
+  if ((track === null && voice === null) !== (input.view.music === null)) fail('creator song band and chosen song must match')
   let music: Scene['music'] = null
   let artwork: Scene['artwork'] = null
+  if (voice !== null && input.view.music !== null) {
+    if (!input.measurer) fail('creator voice needs a measurer')
+    const region = { ...input.view.music.region, mode: voiceMode(input.view.music.mode), type: roleTextType(style!.music), artwork: null }
+    // The band is drawn in its song form; the scene keeps the voice mode the sheet seals.
+    music = { ...voiceBandScene(region, style!, voice, input.measurer!), mode: region.mode }
+  }
   if (track !== null && input.view.music !== null) {
     if (!input.measurer) fail('creator song needs a measurer')
     // A band that holds a cover seals the checked cover; without one the band
@@ -535,6 +550,8 @@ export interface ChoicesInput {
   transforms?: ReadonlyMap<string, CropTransform>
   measurer: TextMeasurer
   track: TrackWords | null
+  /** The recorded voice note; the band is planned as for a song without a cover. */
+  voice?: VoiceWords | null
   /** Seeds the order of the offered layouts; one draft keeps one order. */
   seed: string
   /** The chosen song's checked cover; null leaves every band as text. */
@@ -707,6 +724,7 @@ function tryView(
       noteText: input.preview.note,
       photos: new Map(input.preview.photos.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
       track: input.track,
+      voice: input.voice ?? null,
       measurer: input.measurer,
       cover: input.cover ?? null,
     })

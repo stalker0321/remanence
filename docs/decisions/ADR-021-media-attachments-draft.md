@@ -161,6 +161,22 @@ through a `MediaDataSource` (nothing is written to disk) and it is zeroed when
 the card closes. The band is one button with the same pause glyph as the site
 and keeps playing while the card is turned to its letter.
 
+Site, sending (23 November): the content step's "sound" section has two tabs,
+song and voice. Voice: tap to record, tap to stop, at most a minute (the
+recorder stops itself just before 60 s); then listen, record again or delete.
+A recording replaces the chosen song and choosing a song drops the recording.
+Only AAC in MP4 (`audio/mp4;codecs=mp4a.40.2`) is recorded, at 48 kbit/s, so
+the receivers' players need nothing else; a browser without an AAC encoder
+(Firefox, Chrome on Linux) gets a note that this browser cannot record. The
+page decodes the recording once for its length and 48 peaks (the loudest
+sample of each slice, the loudest slice at 255). The layouts are planned as
+for a song without a cover; a plate becomes `voice-plate` and layout 6's spine
+`voice-card` (`voice-caption` is not chosen by the sender yet). The freeze
+binds the MP4's SHA-256, length and peaks; the sealer checks the bytes against
+it, encrypts them as the MEDIA artifact with blob id tag byte 0x03 and writes
+manifest field 9. `createSendCheck.mjs` sends a voice card through the real
+App to a synthetic server and decrypts the MEDIA blob back to the recording.
+
 Firefox records only WebM. The site converts a Firefox recording to MP4 in the
 browser if that is fast and small enough; otherwise recording is not offered
 in Firefox. Playing a received voice note or circle works there either way.

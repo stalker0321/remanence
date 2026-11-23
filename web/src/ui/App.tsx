@@ -68,6 +68,8 @@ import { RecentRecipients } from '../history/RecentRecipients'
 import { SendAccessSection } from '../access/SendAccessSection'
 import { GoogleButton, Icon, StepTrail } from './Primitives'
 import { CameraFeedback, type CameraFailure } from './CameraFeedback'
+import { VoiceDraft } from './VoiceDraft'
+import type { VoiceRecording } from '../create/voice'
 
 export function App({
   store,
@@ -703,6 +705,18 @@ export function Create({
     return () => abort.abort()
   }, [coverTrackId, coverMbid])
   const selectedCover = cover !== null && cover.trackId === selectedTrack?.trackId ? cover : null
+  // The recorded voice note takes the song's place in the band (ADR-021); one sound per card.
+  const [voice, setVoiceState] = useState<VoiceRecording | null>(null)
+  const voiceRef = useRef<VoiceRecording | null>(null)
+  voiceRef.current = voice
+  const creatorVoice = useMemo(() => (voice === null ? null : { sha256Hex: voice.sha256Hex, durationMs: voice.durationMs, peaks: voice.peaks }), [voice])
+  const [soundTab, setSoundTab] = useState<'song' | 'voice'>('song')
+  function setVoice(next: VoiceRecording | null): void {
+    invalidateSend()
+    if (next !== null && music.selected() !== null) music.remove()
+    setVoiceState(next)
+    setStamp((value) => value + 1)
+  }
   const bound = confirmed ? `${confirmed.userId}:${confirmed.keyBundleId}:${confirmed.directoryVersion}` : ''
   useEffect(() => {
     if (pending !== null && confirmed === null) recipientHeading.current?.focus()
@@ -732,6 +746,7 @@ export function Create({
     noteTextCurrent: () => sides(note.accepted()).front,
     letterTextCurrent: () => sides(note.accepted()).letter ?? '',
     trackIdCurrent: () => music.selected()?.id ?? null,
+    voiceCurrent: () => voiceRef.current?.bytes ?? null,
     freezeCurrent: () => frozenRef.current,
     stillCurrent: () => front.current.still(),
     fingerprintCurrent: () => frontFp.current.current(),
@@ -1051,6 +1066,7 @@ export function Create({
       noteText: acceptedNote,
       letterText: acceptedSides.letter ?? '',
       trackId: selectedMusic?.id ?? null,
+      voice: voiceRef.current?.bytes ?? null,
       freeze,
       still,
       fingerprint,
@@ -1422,6 +1438,7 @@ export function Create({
                   note={sides(note.accepted()).front || null}
                   letter={sides(note.accepted()).letter}
                   track={selectedTrack}
+                  voice={creatorVoice}
                   cover={selectedCover}
                   recipient={composerRecipient}
                   ownerId={view.accountId ?? ''}
@@ -1451,6 +1468,16 @@ export function Create({
           </div>
           <details className="music-draft" open hidden={createStep !== 'content'}>
             <summary>{t('createMusicTitle')}</summary>
+            <div className="sound-tabs" role="tablist" aria-label={t('createMusicTitle')}>
+              {(['song', 'voice'] as const).map((tab) => (
+                <button key={tab} type="button" role="tab" id={`sound-tab-${tab}`} aria-controls={`sound-panel-${tab}`} aria-selected={soundTab === tab}
+                  onClick={() => setSoundTab(tab)}>{t(tab === 'song' ? 'soundSong' : 'soundVoice')}</button>
+              ))}
+            </div>
+            <div role="tabpanel" id="sound-panel-voice" aria-labelledby="sound-tab-voice" hidden={soundTab !== 'voice'}>
+              <VoiceDraft voice={voice} onVoice={setVoice} songChosen={selectedMusic !== null} disabled={sendPhase !== 'idle'} t={t} />
+            </div>
+            <div role="tabpanel" id="sound-panel-song" aria-labelledby="sound-tab-song" hidden={soundTab !== 'song'}>
             <label className="handle-form">
               {t('musicLabel')}
               <input
@@ -1477,6 +1504,7 @@ export function Create({
                     onClick={() => {
                       invalidateSend()
                       music.select(hit.id)
+                      setVoiceState(null)
                       setStamp((value) => value + 1)
                       onNotice('errorRegion')
                     }}
@@ -1486,6 +1514,7 @@ export function Create({
                 </li>
               ))}
             </ul>
+            </div>
             </details>
           <div hidden={createStep !== 'content'} className="workspace-next"><p className="field-hint">{t('createContentHint')}</p><button type="button" className="primary" disabled={accepted === null || !noteFits || photoIntakePending || creatorImages === null || sendPhase !== 'idle'} onClick={() => showCreateStep('composition')}>{t('createChooseComposition')}<Icon name="arrow" /></button></div>
           <div hidden={createStep !== 'postcard'} className="postcard-workspace">

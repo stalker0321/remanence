@@ -153,6 +153,29 @@ describe('creator freeze', () => {
     ).toEqual({ ok: false, reason: 'note-overflow' })
   })
 
+  it('freezes a voice note only with a painted voice band, never beside a song', () => {
+    const voice = { sha256Hex: hexHash(5), durationMs: 4200, peaks: new Uint8Array(48) }
+    const band = (mode: string) => Object.freeze({
+      ...plan('editorial-1+2-equal-1', slots()),
+      music: Object.freeze({ region: { x: 16, y: 560, width: 328, height: 64 }, mode, family: 'StudySans', size: 20, weight: 400, italic: false, line: 23, title: '', artist: '', artwork: null }),
+    })
+    const base = {
+      branchId: 'editorial-1+2-equal-1', styleId: 'press', styleVersion: 'style-study-1', senderHandle: 'sergio', slots: slots(),
+      note: null, noteRegion: null, noteFits: true, track: null, ownerId: 'o', sessionGeneration: 1,
+      recipient: { userId: 'u', keyBundleId: 'b', directoryVersion: 'd' }, renderedKey: RENDERED_KEY,
+    }
+    const frozen = freezeSelection({ ...base, voice, renderedPlan: band('voice-plate') })
+    if (!frozen.ok) throw new Error(frozen.reason)
+    expect(frozen.frozen.voice).toEqual(voice)
+    const same: FreezeCurrent = { ...current(), ownerId: 'o', sessionGeneration: 1, recipient: base.recipient, voiceSha256: voice.sha256Hex }
+    expect(freezeValid(frozen.frozen, same)).toEqual({ ok: true })
+    expect(freezeValid(frozen.frozen, { ...same, voiceSha256: null })).toEqual({ ok: false, invalidated: 'voice changed' })
+    expect(freezeSelection({ ...base, voice, renderedPlan: band('plate') })).toEqual({ ok: false, reason: 'music-mismatch' })
+    expect(freezeSelection({ ...base, voice: null, renderedPlan: band('voice-card') })).toEqual({ ok: false, reason: 'music-mismatch' })
+    expect(freezeSelection({ ...base, voice, track: TRACK, renderedPlan: band('voice-plate') })).toEqual({ ok: false, reason: 'music-mismatch' })
+    expect(freezeSelection({ ...base, voice, renderedPlan: plan('editorial-1+2-equal-1', slots()) })).toEqual({ ok: false, reason: 'music-mismatch' })
+  })
+
   it('rejects malformed slot lists instead of freezing them', () => {
     const input = {
       branchId: 'editorial-1+2-equal-1',
@@ -222,6 +245,7 @@ describe('creator freeze', () => {
         [(next) => (next.senderHandle = 'ada'), 'sender changed'],
         [(next) => (next.senderHandle = null), 'sender changed'],
         [(next) => (next.trackId = TRACK.trackId), 'music changed'],
+        [(next) => (next.voiceSha256 = hexHash(7)), 'voice changed'],
       ] as Array<[(next: FreezeCurrent) => void, string]>
     ).forEach(([change, reason]) => mutate(change, reason))
   })

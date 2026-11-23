@@ -9,6 +9,7 @@ import { ACTIVE_GRAMMAR_IDS } from './planGrammars'
 import {
   EXPRESSION_CONTRACT_V4,
   MUSIC_MODES_V4,
+  MUSIC_VOICE_MODES_V4,
   type GeneratorInput,
   type PhotoRef,
   type Placement,
@@ -233,8 +234,26 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
 
   const frozenMusic = frozen.renderedPlan.music
   let musicRegion: ResolvedExpression['musicRegion'] = null
-  if ((frozen.track === null) !== (frozenMusic === null)) return refuse('music-mismatch', 'song without a painted band, or a band without a song')
-  if (frozen.track !== null && frozenMusic !== null) {
+  const voice = frozen.voice ?? null
+  if (voice !== null) {
+    // A voice note paints the band's voice form: no song, no cover, the style's music face.
+    if (frozen.track !== null || frozenMusic === null) return refuse('music-mismatch', 'voice note without a painted band, or beside a song')
+    if (!(MUSIC_VOICE_MODES_V4 as readonly string[]).includes(frozenMusic.mode) || frozenMusic.artwork !== null) {
+      return refuse('music-mismatch', `voice band mode ${frozenMusic.mode}`)
+    }
+    if (!intRect(frozenMusic.region)) return refuse('fraction', 'voice band region is not integral')
+    const type = roleTextType(style.music)
+    if (
+      type.family !== frozenMusic.family || type.size !== frozenMusic.size || type.weight !== frozenMusic.weight
+      || type.italic !== frozenMusic.italic || type.line !== frozenMusic.line
+    ) {
+      return refuse('music-mismatch', 'painted voice band face differs from the style')
+    }
+    musicRegion = { ...copyRect(frozenMusic.region), mode: frozenMusic.mode, type, artwork: null }
+  } else if ((frozen.track === null) !== (frozenMusic === null)) {
+    return refuse('music-mismatch', 'song without a painted band, or a band without a song')
+  } else if (frozen.track !== null && frozenMusic !== null) {
+    if ((MUSIC_VOICE_MODES_V4 as readonly string[]).includes(frozenMusic.mode)) return refuse('music-mismatch', 'a song in a voice band')
     if (frozenMusic.title !== frozen.track.title || frozenMusic.artist !== frozen.track.artistDisplay) {
       return refuse('music-mismatch', 'painted song words differ from the chosen song')
     }

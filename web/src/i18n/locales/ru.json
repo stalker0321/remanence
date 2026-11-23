@@ -1,7 +1,7 @@
 {
   "cameraDeniedHelp": "разрешите доступ к камере для этого сайта в настройках браузера или телефона и попробуйте снова",
   "cameraUnavailableHelp": "проверьте, что камеру не заняло другое приложение, и попробуйте снова",
-  "createMusicTitle": "песня",
+  "createMusicTitle": "звук",
   "createSteps": "создание открытки",
   "createContent": "фото и слова",
   "createComposition": "оформление",
@@ -352,5 +352,19 @@
   "letterMark": "продолжение на обороте",
   "letterFront": "лицевая сторона",
   "voiceListen": "послушать голосовое",
-  "voicePause": "остановить голосовое"
+  "voicePause": "остановить голосовое",
+  "soundSong": "песня",
+  "soundVoice": "голос",
+  "voiceRecord": "записать",
+  "voiceStop": "остановить",
+  "voiceListenOwn": "послушать",
+  "voicePauseOwn": "пауза",
+  "voiceRerecord": "перезаписать",
+  "voiceDelete": "удалить",
+  "voiceHint": "до минуты. его включат прямо с открытки",
+  "voiceReplacesSong": "на открытке один звук: голос займёт место песни",
+  "voiceUnsupported": "этот браузер не умеет записывать голос. это умеют Chrome и Safari",
+  "voiceDenied": "нет доступа к микрофону. разрешите его в браузере и попробуйте ещё раз",
+  "voiceFailed": "запись не получилась. попробуйте ещё раз",
+  "voiceTooLarge": "запись слишком большая. попробуйте покороче"
 }

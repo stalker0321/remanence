@@ -6,7 +6,7 @@ import {
   sceneNoteLayout,
   type CreatorCandidateView,
 } from './creatorPreview'
-import { freezeSelection, freezeValid, type CreatorFreeze, type CreatorSlotFreeze, type FreezeCurrent } from '../create/creatorFreeze'
+import { freezeSelection, freezeValid, type CreatorFreeze, type CreatorSlotFreeze, type CreatorVoice, type FreezeCurrent } from '../create/creatorFreeze'
 import { captureFrozenRenderedPlan, type FrozenRenderedPlan } from './frozenRenderedPlan'
 import { paintCreatorNote, type CreatorNoteFace, type CreatorNoteLayout } from './creatorNote'
 import { bundledFaces } from './fonts'
@@ -46,6 +46,8 @@ export interface CreatorComposerProps {
   letter?: string | null
   /** The chosen song, painted in its band and sealed with the layout. */
   track: TrackSnapshot | null
+  /** The recorded voice note, painted in the band and sealed instead of a song (ADR-021). */
+  voice?: CreatorVoice | null
   /** The song's checked cover and its decoded image; null keeps the band as text. */
   cover?: { ref: ArtworkRef; image: CanvasImageSource } | null
   /** Offer only this style (tests); every bundled style otherwise. */
@@ -281,12 +283,15 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
 
   const cover = props.track === null ? null : props.cover ?? null
   const coverKey = cover === null ? null : bytesToHex(cover.ref.sha256)
+  const voice = props.track === null ? props.voice ?? null : null
+  const voiceKey = voice?.sha256Hex ?? null
+  const voiceWords = useMemo(() => voice === null ? null : { peaks: voice.peaks, durationMs: voice.durationMs }, [voiceKey])
 
   const inputKey = useMemo(() => {
     const photosKey = JSON.stringify(props.photos.map((photo) => [photo.contentId, photo.width, photo.height, photo.contentHash]))
     const transformsKey = JSON.stringify(transforms)
-    return JSON.stringify([photosKey, props.note, transformsKey, onlyStyle, senderHandle, props.track, coverKey])
-  }, [props.photos, props.note, transforms, onlyStyle, senderHandle, props.track, coverKey])
+    return JSON.stringify([photosKey, props.note, transformsKey, onlyStyle, senderHandle, props.track, coverKey, voiceKey])
+  }, [props.photos, props.note, transforms, onlyStyle, senderHandle, props.track, coverKey, voiceKey])
 
   // Fonts gate: the ONLY async step. Required bundled faces load first;
   // its own epoch, never shared with paint (paint is synchronous after
@@ -338,11 +343,12 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
             contentHash: photo.contentHash,
           })),
           note: props.note && props.note.trim() !== '' ? props.note : null,
-          music: props.track === null ? null : { artwork: cover !== null },
+          music: props.track === null ? (voiceWords === null ? null : { artwork: false }) : { artwork: cover !== null },
         },
         transforms: new Map(Object.entries(transforms)),
         measurer: props.measurer,
         track: props.track === null ? null : { title: props.track.title, artistDisplay: props.track.artistDisplay },
+        voice: voiceWords,
         seed,
         analyses,
         cover: cover?.ref ?? null,
@@ -352,7 +358,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
     }
-  }, [tornDown, fontsReady, analysisReady, analyses, cover, inputKey, props.measurer, props.photos, props.note, props.track, transforms, senderHandle, seed, onlyStyle])
+  }, [tornDown, fontsReady, analysisReady, analyses, cover, inputKey, props.measurer, props.photos, props.note, props.track, voiceWords, transforms, senderHandle, seed, onlyStyle])
 
   const views = planned !== null && 'views' in planned ? planned.views : null
   const planError = fontsError ?? (planned !== null && 'error' in planned ? planned.error : null)
@@ -382,8 +388,9 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
           : [props.recipient.userId, props.recipient.keyBundleId, props.recipient.directoryVersion],
       track: props.track,
       cover: coverKey,
+      voice: voiceKey,
     })
-  }, [props.measurer, view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.track, coverKey])
+  }, [props.measurer, view, styleId, senderHandle, props.note, props.ownerId, snap.generation, props.recipient, props.track, coverKey, voiceKey])
 
   const currentFreeze: FreezeCurrent | null = useMemo(() => {
     if (view === null) return null
@@ -393,6 +400,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       styleVersion: styleById(styleId)?.version ?? '',
       senderHandle,
       trackId: props.track?.trackId ?? null,
+      voiceSha256: voiceKey,
       renderedKey,
       slots: view.slots.map((slot, index) => {
         const meta = props.photos.find((photo) => photo.contentId === slot.photoId)
@@ -417,7 +425,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
               directoryVersion: props.recipient.directoryVersion,
             },
     }
-  }, [view, styleId, senderHandle, props.track, renderedKey, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
+  }, [view, styleId, senderHandle, props.track, voiceKey, renderedKey, props.note, props.photos, props.ownerId, props.recipient, snap.generation])
 
   const signature = renderedKey
 
@@ -505,6 +513,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
         noteText: props.note && props.note.trim() !== '' ? props.note : null,
         photos: new Map(props.photos.map((photo) => [photo.contentId, { width: photo.width, height: photo.height }])),
         track: props.track === null ? null : { title: props.track.title, artistDisplay: props.track.artistDisplay },
+        voice: voiceWords,
         measurer: props.measurer,
         cover: cover?.ref ?? null,
       })
@@ -571,7 +580,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       renderedRef.current = null
       setReadySig(null)
     }
-  }, [view, props.photos, props.note, props.track, props.measurer, styleId, tornDown, senderHandle, signature, cover])
+  }, [view, props.photos, props.note, props.track, voiceWords, props.measurer, styleId, tornDown, senderHandle, signature, cover])
 
   // Unmount: release the parent snapshot. Paint is synchronous, so no
   // async fence is needed here; the fonts gate owns its own epoch.
@@ -692,6 +701,7 @@ export function CreatorComposer(props: CreatorComposerProps): React.JSX.Element 
       noteRegion: view.note === null ? null : { ...view.note.region },
       noteFits,
       track: props.track,
+      voice,
       ownerId: props.ownerId,
       sessionGeneration: live.generation,
       recipient:

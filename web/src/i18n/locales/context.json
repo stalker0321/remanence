@@ -1,7 +1,7 @@
 {
   "cameraDeniedHelp": "Camera error hint under the denied-permission title; tells the user to allow camera access in browser or phone settings.",
   "cameraUnavailableHelp": "Camera error hint under the unavailable title; asks the user to close other apps using the camera.",
-  "createMusicTitle": "Create page, content step: music section summary that expands the optional song picker. Short label.",
+  "createMusicTitle": "Create page, content step: summary of the optional sound section, where the sender picks a song or records a voice note. One word.",
   "createSteps": "Create page workspace-nav aria-label for the postcard-making step navigation; screen-reader only.",
   "createContent": "Create page workspace tab label for the content step, meaning photos and words. Short, fits step nav.",
   "createComposition": "Create page workspace tab label for the layout-choice step. Short, fits step nav.",
@@ -352,5 +352,19 @@
   "letterMark": "Postcard viewer: the accessible name and tooltip of the note when its text continues on the back (a small arrow is drawn after the last word); tapping the note turns the card over.",
   "letterFront": "Postcard viewer: button on the back of the card that turns it back to the front.",
   "voiceListen": "Postcard viewer: the accessible name and tooltip of the song band when the card carries a voice note (the band shows a play button, a waveform, a microphone and the length, no words); pressing it plays the sound.",
-  "voicePause": "Postcard viewer: the same band's accessible name and tooltip while the voice note is playing; pressing it pauses."
+  "voicePause": "Postcard viewer: the same band's accessible name and tooltip while the voice note is playing; pressing it pauses.",
+  "soundSong": "Create page, sound section: the tab that shows the song search. One word.",
+  "soundVoice": "Create page, sound section: the tab that records a voice note instead of a song. One word.",
+  "voiceRecord": "Create page, voice tab: the button that starts recording from the microphone.",
+  "voiceStop": "Create page, voice tab: the button that stops the recording; the elapsed time and the one-minute limit stand beside it.",
+  "voiceListenOwn": "Create page, voice tab: plays back the voice note just recorded.",
+  "voicePauseOwn": "Create page, voice tab: pauses the playback of the recorded voice note.",
+  "voiceRerecord": "Create page, voice tab: drops the recording and starts a new one.",
+  "voiceDelete": "Create page, voice tab: removes the recorded voice note from the card.",
+  "voiceHint": "Create page, voice tab: hint under the record button. The voice note sits in the band at the bottom of the postcard and the recipient taps it to listen.",
+  "voiceReplacesSong": "Create page, voice tab: shown when a song is already chosen; recording a voice note removes the song.",
+  "voiceUnsupported": "Create page, voice tab: the browser cannot record AAC audio (Firefox). Browser names stay as they are.",
+  "voiceDenied": "Create page, voice tab: the person or the browser refused the microphone.",
+  "voiceFailed": "Create page, voice tab: recording or reading the recording failed.",
+  "voiceTooLarge": "Create page, voice tab: the recorded file exceeds the size a card can carry."
 }

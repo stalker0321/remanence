@@ -344,6 +344,21 @@ describe('production publishCapsule', () => {
     expect(calls.finalize).toHaveLength(0)
   })
 
+  it('carries one MEDIA blob with a null draft ordinal and refuses a second before any request', async () => {
+    const fixture = await buildSealedCapsuleFixture()
+    const base = fixture.capsule.blobs[0]!
+    const media = (blobId: string) => ({ blobId, kind: 'MEDIA' as const, ordinal: -1, ciphertext: base.ciphertext.slice(), ciphertextSize: base.ciphertextSize, ciphertextSha256: base.ciphertextSha256.slice() })
+    const one = { ...fixture.capsule, blobs: [...fixture.capsule.blobs, media('03b1b2b3-b4b5-b6b7-b8b9-babbbcbdbebf')] }
+    const sent = makeTransport(one)
+    await publish({ ...fixture, capsule: one }, sent.transport).catch(() => undefined)
+    const declared = (sent.calls.draft[0]?.body as { blobs: Array<{ kind: string; ordinal: number | null }> }).blobs
+    expect(declared.filter((blob) => blob.kind === 'MEDIA')).toEqual([expect.objectContaining({ kind: 'MEDIA', ordinal: null })])
+    const two = { ...fixture.capsule, blobs: [...one.blobs, media('04b1b2b3-b4b5-b6b7-b8b9-babbbcbdbebf')] }
+    const refused = makeTransport(two)
+    await expect(publish({ ...fixture, capsule: two }, refused.transport)).rejects.toMatchObject({ stage: 'preflight', category: 'contract' })
+    expect(refused.calls.draft).toHaveLength(0)
+  })
+
   it('maps a transport AuthError STALE to category stale (CANCELLED unchanged) with no later request', async () => {
     const fixture = await buildSealedCapsuleFixture()
     let uploads = 0

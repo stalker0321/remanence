@@ -65,6 +65,7 @@ if (!existsSync(vendor)) throw new Error(`vendored opencv assets missing at ${ve
 await cp(vendor, join(dist, 'opencv'), { recursive: true })
 // The scan path also loads the frozen matcher's vocabulary and model from the same origin.
 await cp(join(web, 'public', 'frozen-matcher'), join(dist, 'frozen-matcher'), { recursive: true })
+await cp(join(web, 'test', 'fixtures', 'voice-2s.m4a'), join(dist, 'voice-2s.m4a'))
 const fontsDir = join(web, 'public', 'fonts')
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.otf': 'font/otf', '.wasm': 'application/wasm' }
 const captured = { drafts: [], uploads: [], finalizes: [] }
@@ -278,9 +279,9 @@ try {
       assert.deepEqual(result.failures, [])
 
       // Independent Node-side checks of the recorded wire across scenarios.
-      assert.equal(captured.drafts.length, 5, 'expected exactly five drafts (happy, lost-finalize, invalidation, draft-edit, alternate-order)')
-      assert.equal(captured.finalizes.length, 4, 'expected exactly four finalize attempts (none for the draft-edit scenario)')
-      assert.equal(captured.uploads.length, 20, 'expected 5 uploads per publication scenario except the draft-edit stop')
+      assert.equal(captured.drafts.length, 6, 'expected exactly six drafts (happy, lost-finalize, invalidation, draft-edit, alternate-order, voice)')
+      assert.equal(captured.finalizes.length, 5, 'expected exactly five finalize attempts (none for the draft-edit scenario)')
+      assert.equal(captured.uploads.length, 26, 'expected 5 uploads per publication scenario except the draft-edit stop, and 6 for the voice card')
       const draftKey = header(captured.drafts[0].rawHeaders, 'idempotency-key')
       const finalizeKey = header(captured.finalizes[0].rawHeaders, 'idempotency-key')
       assert.ok(draftKey && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(draftKey), `draft idempotency key ${draftKey}`)
@@ -299,6 +300,7 @@ try {
       }
       const finalizeBody = JSON.parse(Buffer.from(captured.finalizes[0].bodyHex, 'hex').toString('utf8'))
       const pageReport = result.report ?? {}
+      assert.equal(pageReport.voice, true, 'the voice card was sealed, uploaded and decrypted')
       assert.equal(finalizeBody.signed_publish_statement.statement, pageReport.statementB64, 'finalize statement matches the page-captured sealer output')
       const envelopeHex = Buffer.from(finalizeBody.recipient_envelope.ciphertext, 'base64').toString('hex')
       assert.equal(envelopeHex, pageReport.envelopeHex, 'finalize envelope ciphertext matches the page round trip')
@@ -306,7 +308,7 @@ try {
       assert.equal(pageReport.roundTrip?.note, true, 'receiver round trip recovered the note text')
       const noticeLog = pageReport.notices ?? []
       assert.ok(noticeLog.includes('sendSent'), 'sendSent notice present for the happy paths')
-      assert.equal(noticeLog.filter((n) => n === 'sendSent').length, 2, 'exactly two sendSent (primary + alternate camera-before-freeze order)')
+      assert.equal(noticeLog.filter((n) => n === 'sendSent').length, 3, 'exactly three sendSent (primary, alternate camera-before-freeze order, voice)')
       assert.ok(!noticeLog.includes('sendNotConfirmed') || noticeLog.filter((n) => n === 'sendNotConfirmed').length >= 1, 'lost finalize produced a not-confirmed notice')
     } catch (error) {
       failure = error

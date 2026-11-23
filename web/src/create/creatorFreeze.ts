@@ -1,6 +1,11 @@
 import { CollageError } from '../collage/errors'
 import type { FrozenRenderedPlan } from '../collage/frozenRenderedPlan'
+import { MUSIC_VOICE_MODES_V4 } from '../collage/model'
 import type { TrackSnapshot } from './music'
+
+function isVoiceMode(mode: string): boolean {
+  return (MUSIC_VOICE_MODES_V4 as readonly string[]).includes(mode)
+}
 
 /**
  * Immutable LOCAL creator freeze — a snapshot of the creator's explicit
@@ -28,6 +33,17 @@ export interface CreatorSlotFreeze {
   crop: { x: number; y: number; width: number; height: number }
 }
 
+/**
+ * A recorded voice note as the freeze binds it (ADR-021): the SHA-256 of its
+ * MP4 and what the band paints of it. The sound's bytes stay with the draft.
+ */
+export interface CreatorVoice {
+  readonly sha256Hex: string
+  readonly durationMs: number
+  /** VOICE_PEAKS amplitudes, 0..255. */
+  readonly peaks: Uint8Array
+}
+
 export interface CreatorFreeze {
   readonly grammarId: string;
   readonly branchId: string;
@@ -39,6 +55,8 @@ export interface CreatorFreeze {
   readonly note: string | null;
   /** The chosen song, sealed into the manifest with the painted band. */
   readonly track: Readonly<TrackSnapshot> | null;
+  /** The recorded voice note painted in the band instead of a song. */
+  readonly voice: CreatorVoice | null;
   readonly noteRegion: { x: number; y: number; width: number; height: number } | null;
   readonly ownerId: string;
   readonly sessionGeneration: number;
@@ -72,6 +90,7 @@ export interface FreezeInput {
   noteRegion: { x: number; y: number; width: number; height: number } | null
   noteFits: boolean
   track: TrackSnapshot | null
+  voice?: CreatorVoice | null
   ownerId: string
   sessionGeneration: number
   recipient: CreatorFreezeRecipient | null
@@ -94,7 +113,10 @@ function refuse(reason: FreezeRefusal): FreezeResult {
  */
 export function freezeSelection(input: FreezeInput): FreezeResult {
   const painted = input.renderedPlan.music
-  if ((input.track === null) !== (painted === null)) return refuse('music-mismatch')
+  const voice = input.voice ?? null
+  if (input.track !== null && voice !== null) return refuse('music-mismatch')
+  if ((input.track === null && voice === null) !== (painted === null)) return refuse('music-mismatch')
+  if (painted !== null && (voice !== null) !== isVoiceMode(painted.mode)) return refuse('music-mismatch')
   if (input.track !== null && painted !== null
     && (painted.title !== input.track.title || painted.artist !== input.track.artistDisplay)) return refuse('music-mismatch')
   if (input.recipient === null) return refuse('no-recipient')
@@ -138,6 +160,7 @@ export function freezeSelection(input: FreezeInput): FreezeResult {
     ),
     note: input.note,
     track: input.track === null ? null : Object.freeze({ ...input.track }),
+    voice: voice === null ? null : Object.freeze({ sha256Hex: voice.sha256Hex, durationMs: voice.durationMs, peaks: voice.peaks.slice() }),
     noteRegion: input.noteRegion === null ? null : Object.freeze({ ...input.noteRegion }),
     ownerId: input.ownerId,
     sessionGeneration: input.sessionGeneration,
@@ -156,6 +179,8 @@ export interface FreezeCurrent {
   senderHandle: string | null
   /** Id of the chosen song, or null. */
   trackId: string | null
+  /** SHA-256 of the recorded voice note, or null. */
+  voiceSha256?: string | null
   /** T247: signature of the exact rendered geometry/inputs (null when no view). */
   renderedKey: string | null
   slots: CreatorSlotFreeze[]
@@ -185,6 +210,7 @@ export function freezeValid(frozen: CreatorFreeze, current: FreezeCurrent): { ok
   if (current.renderedKey !== frozen.renderedKey) return bad('render changed')
   if (current.senderHandle !== frozen.senderHandle) return bad('sender changed')
   if (current.trackId !== (frozen.track?.trackId ?? null)) return bad('music changed')
+  if ((current.voiceSha256 ?? null) !== (frozen.voice?.sha256Hex ?? null)) return bad('voice changed')
   if (current.note !== frozen.note) return bad('note changed')
   if (current.ownerId !== frozen.ownerId) return bad('owner changed')
   if (current.sessionGeneration !== frozen.sessionGeneration) return bad('session changed')

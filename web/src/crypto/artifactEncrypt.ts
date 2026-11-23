@@ -41,7 +41,9 @@ export async function encryptArtifact(
       ? limits.recognitionCiphertext
       : kind === 'CONTENT_MANIFEST'
         ? limits.contentCiphertext
-        : 0
+        : kind === 'MEDIA'
+          ? limits.mediaCiphertext
+          : 0
   if (cap === 0) throw new ProtocolError('UNKNOWN_KIND')
   if (!startsWith(aad, PREFIX) || aad[PREFIX.length] !== 0) throw new ProtocolError('AAD_REJECTED')
   if (plaintext.length === 0) throw new ProtocolError('EMPTY')

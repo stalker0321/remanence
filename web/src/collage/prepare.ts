@@ -526,7 +526,7 @@ function songBandLayers(
 }
 
 /** A voice note in the band: the same colours as a song band of that form, bars instead of words. */
-function voiceBandScene(musicRegion: MusicRegion, style: CollageStyle, voice: VoiceWords, measurer: TextMeasurer): SceneMusic {
+export function voiceBandScene(musicRegion: MusicRegion, style: CollageStyle, voice: VoiceWords, measurer: TextMeasurer): SceneMusic {
   const band = voiceBandLayout(musicRegion, voiceBandShape(musicRegion.mode), musicRegion.type, voice, runWidth(measurer))
   const filled = band.filled
   return {

@@ -4,9 +4,11 @@ import { protoBytes, protoVarint, zigzag32 } from '../protocol/proto'
 import { projectionHash } from './codec'
 import { CollageError } from './errors'
 import type { TrackSnapshot } from '../create/music'
-import { letterValid } from './wire'
+import { VOICE_PEAKS } from './songBand'
+import { letterValid, VOICE_MAX_MS } from './wire'
 import {
   EXPRESSION_CONTRACT_V4,
+  MUSIC_VOICE_MODES_V4,
   type ProvenanceMark,
   type ResolvedExpression,
   type TextType,
@@ -46,6 +48,16 @@ export interface ContentManifestInput {
   track?: TrackSnapshot | null
   /** Long note read beside the sheet (root field 8), or null. */
   letter?: string | null
+  /** The voice note in the band (root field 9); required exactly when the band is a voice band. */
+  voice?: ManifestVoiceInput | null
+}
+
+/** A voice note's MEDIA blob and what the sender measured of it (ADR-021). */
+export interface ManifestVoiceInput {
+  blobId: Uint8Array
+  durationMs: number
+  /** VOICE_PEAKS amplitudes, 0..255. */
+  peaks: Uint8Array
 }
 
 export type ContentManifestRefusal =
@@ -214,6 +226,23 @@ function trackMessage(track: TrackSnapshot): Uint8Array {
   return concat(parts)
 }
 
+/** `MediaEntry` kind VOICE: the MEDIA blob, audio/mp4, the length and the peaks. */
+function voiceMessage(voice: ManifestVoiceInput): Uint8Array {
+  return concat([
+    protoVarint(1, 1),
+    protoBytes(2, voice.blobId),
+    protoBytes(3, utf8('audio/mp4')),
+    protoVarint(4, voice.durationMs),
+    protoBytes(8, voice.peaks),
+  ])
+}
+
+function voiceValid(voice: ManifestVoiceInput): boolean {
+  return voice.blobId instanceof Uint8Array && voice.blobId.length === BLOB_ID_BYTES
+    && Number.isInteger(voice.durationMs) && voice.durationMs >= 1 && voice.durationMs <= VOICE_MAX_MS
+    && voice.peaks instanceof Uint8Array && voice.peaks.length === VOICE_PEAKS
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function trackValid(track: TrackSnapshot): boolean {
@@ -269,9 +298,18 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
   const track = input.track ?? null
   const letter = input.letter ?? null
   if (letter !== null && !letterValid(letter)) return refuse('letter', 'letter must be 1..8000 UTF-8 bytes and not blank')
-  if ((track === null) !== (expression.musicRegion === null)) return refuse('music', 'song band and track snapshot must match')
-  if ((track === null) !== (expression.input.music === null)) return refuse('music', 'generator input song and track snapshot must match')
-  if (track !== null && (!trackValid(track) || expression.input.music?.trackId !== track.trackId)) return refuse('music', 'track snapshot is invalid')
+  const voice = input.voice ?? null
+  const voiceBand = expression.musicRegion !== null && (MUSIC_VOICE_MODES_V4 as readonly string[]).includes(expression.musicRegion.mode)
+  if (voice !== null || voiceBand) {
+    // One sound per card: the voice note fills the band and there is no song.
+    if (voice === null || !voiceBand) return refuse('music', 'voice band and voice note must match')
+    if (track !== null || expression.input.music !== null) return refuse('music', 'a card carries a song or a voice note, not both')
+    if (!voiceValid(voice)) return refuse('music', 'voice note is invalid')
+  } else {
+    if ((track === null) !== (expression.musicRegion === null)) return refuse('music', 'song band and track snapshot must match')
+    if ((track === null) !== (expression.input.music === null)) return refuse('music', 'generator input song and track snapshot must match')
+    if (track !== null && (!trackValid(track) || expression.input.music?.trackId !== track.trackId)) return refuse('music', 'track snapshot is invalid')
+  }
   // Manifest contract limits first (existing Android bounds), so a bad
   // dimension/note reports its own typed reason rather than a generic one.
   if (!(capsuleId instanceof Uint8Array) || capsuleId.length !== BLOB_ID_BYTES) return refuse('capsule-id', 'capsuleId must be a 16-byte array')
@@ -335,6 +373,7 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
   const snapshotExpression = structuredClone(expression)
   const snapshotCapsule = capsuleId.slice()
   const snapshotTrack = track === null ? null : { ...track }
+  const snapshotVoice = voice === null ? null : { blobId: voice.blobId.slice(), durationMs: voice.durationMs, peaks: voice.peaks.slice() }
 
   let expressionHash: string
   try {
@@ -359,6 +398,7 @@ export async function encodeContentManifest(input: ContentManifestInput): Promis
     chunks.push(protoBytes(6, expressionMessage(snapshotExpression, candidateId, expressionHash, snapshotBlobs)))
     if (snapshotTrack !== null) chunks.push(protoBytes(7, trackMessage(snapshotTrack)))
     if (letter !== null) chunks.push(protoBytes(8, utf8(letter)))
+    if (snapshotVoice !== null) chunks.push(protoBytes(9, voiceMessage(snapshotVoice)))
     const bytes = concat(chunks)
     // Explicit plaintext-output bound: the existing parser's `MAX_BYTES` (and
     // the manifest contract) cap the FINAL manifest at 65536. The projection

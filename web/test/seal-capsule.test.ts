@@ -15,7 +15,7 @@ import { decryptArtifact } from '../src/crypto/artifact'
 import { openRecipientEnvelope } from '../src/crypto/hpke'
 import type { KeyCapabilities } from '../src/crypto/keyOwner'
 import { signPublishStatement, verifyPublishStatement } from '../src/crypto/publish'
-import { freezeSelection, type CreatorFreeze } from '../src/create/creatorFreeze'
+import { freezeSelection, type CreatorFreeze, type CreatorVoice } from '../src/create/creatorFreeze'
 import type { DraftPhoto } from '../src/create/photos'
 import type { RecipientSnapshot } from '../src/create/recipient'
 import { sealCapsule, SealCapsuleError } from '../src/create/sealCapsule'
@@ -83,17 +83,27 @@ async function realPhoto(id: string, width: number, height: number): Promise<Dra
   return { id, bytes, width, height, contentHash: bytesToHex(await sha256(bytes)) }
 }
 
-function buildFreeze(photos: readonly DraftPhoto[], note: string | null, sessionGeneration: number): CreatorFreeze {
+/** A recorded voice note: an MP4 that is only its `ftyp` box, measured as the recorder would. */
+const VOICE_SOUND = Uint8Array.from([0, 0, 0, 16, ...new TextEncoder().encode('ftypM4A '), 0, 0, 0, 0])
+const VOICE_PEAKS = Uint8Array.from({ length: 48 }, (_value, index) => (index * 37) % 256)
+
+async function creatorVoice(): Promise<CreatorVoice> {
+  return { sha256Hex: bytesToHex(await sha256(VOICE_SOUND)), durationMs: 4200, peaks: VOICE_PEAKS }
+}
+
+function buildFreeze(photos: readonly DraftPhoto[], note: string | null, sessionGeneration: number, voice: CreatorVoice | null = null): CreatorFreeze {
   const source = photos.map((photo) => ({ contentId: photo.id, width: photo.width, height: photo.height, contentHash: photo.contentHash }))
   const byId = new Map(source.map((spec) => [spec.contentId, spec]))
   const style = styleById('press')!
-  const view = previewCandidates({ id: 'creator', sender: SENDER_HANDLE, photos: source, note }, undefined, plannerFromTextMeasurer(measurer, 640, 640, style.note))[0]!
+  const view = previewCandidates({ id: 'creator', sender: SENDER_HANDLE, photos: source, note, music: voice === null ? null : { artwork: false } }, undefined, plannerFromTextMeasurer(measurer, 640, 640, style.note))[0]!
   const scene = creatorScene({
     view,
     styleId: 'press',
     senderHandle: SENDER_HANDLE,
     noteText: note,
     photos: new Map(source.map((spec) => [spec.contentId, { width: spec.width, height: spec.height }])),
+    voice: voice === null ? null : { peaks: voice.peaks, durationMs: voice.durationMs },
+    measurer,
   })
   const noteLayout = scene.note
     ? layoutCreatorNote(
@@ -128,6 +138,7 @@ function buildFreeze(photos: readonly DraftPhoto[], note: string | null, session
     noteRegion: scene.note ? { ...scene.note.region } : null,
     noteFits: true,
     track: null,
+    voice,
     ownerId: SENDER_ID,
     sessionGeneration,
     recipient: { userId: RECIPIENT_ID, keyBundleId: RECIPIENT_BUNDLE, directoryVersion: DIRECTORY_VERSION },
@@ -135,7 +146,7 @@ function buildFreeze(photos: readonly DraftPhoto[], note: string | null, session
     renderedPlan,
     createdAtMs: 1,
   })
-  if (!result.ok) throw new Error('freeze failed')
+  if (!result.ok) throw new Error(`freeze failed: ${result.reason}`)
   return result.frozen
 }
 
@@ -147,7 +158,7 @@ interface SenderFixture {
   photos: DraftPhoto[]
 }
 
-async function senderFixture(note: string | null = 'hello'): Promise<SenderFixture> {
+async function senderFixture(note: string | null = 'hello', voice: CreatorVoice | null = null): Promise<SenderFixture> {
   const photos = [await realPhoto('p0', 1000, 1000), await realPhoto('p1', 1080, 1080), await realPhoto('p2', 1160, 1160)]
   const session = new SessionStore('en')
   session.signIn({
@@ -174,7 +185,7 @@ async function senderFixture(note: string | null = 'hello'): Promise<SenderFixtu
   }
   const keys = new MemoryKeys()
   keys.hold(session.getSnapshot(), caps)
-  const freeze = buildFreeze(photos, note, session.getSnapshot().generation)
+  const freeze = buildFreeze(photos, note, session.getSnapshot().generation, voice)
   // Present photos in the frozen authored slot order (the sealer requires it).
   const orderedPhotos = freeze.slots.map((slot) => photos.find((photo) => photo.id === slot.contentId)!)
   return { session, keys, caps, freeze, photos: orderedPhotos }
@@ -274,7 +285,9 @@ async function openSealed(sealed: Awaited<ReturnType<typeof sealCapsule>>) {
     if (blob.kind !== 'PHOTO') continue
     sealedPhotos.push({ blobId: blob.blobId, ordinal: blob.ordinal, ciphertext: await downloadCiphertext(received.session, transport, item, blob.blobId) })
   }
-  const opened = await openGrantedPostcard(received.session, received.keys, ScanGrant.issue(RECIPIENT_ID, CAPSULE_UUID), item, content, sealedPhotos, measurer)
+  const mediaBlob = sealed.blobs.find((blob) => blob.kind === 'MEDIA')
+  const media = mediaBlob === undefined ? null : { blobId: mediaBlob.blobId, ciphertext: await downloadCiphertext(received.session, transport, item, mediaBlob.blobId) }
+  const opened = await openGrantedPostcard(received.session, received.keys, ScanGrant.issue(RECIPIENT_ID, CAPSULE_UUID), item, content, sealedPhotos, measurer, null, undefined, media)
   return { opened, received }
 }
 
@@ -338,6 +351,31 @@ describe('production sealCapsule', () => {
       expect(returned).toBeDefined()
       expect(bytesToHex(returned!)).toBe(bytesToHex(photo.bytes))
     }
+  })
+
+  it('seals a voice note as the MEDIA artifact the receiver plays from the band', async () => {
+    const sender = await senderFixture('hello', await creatorVoice())
+    expect(sender.freeze.renderedPlan.music?.mode).toMatch(/^voice-/)
+    const sealed = await seal(sender, { voice: VOICE_SOUND })
+    expect(sealed.blobs.map((blob) => `${blob.kind}:${blob.ordinal}`).sort()).toEqual([
+      'CONTENT_MANIFEST:-1', 'MEDIA:-1', 'PHOTO:0', 'PHOTO:1', 'PHOTO:2', 'RECOGNITION_MANIFEST:-1',
+    ])
+    const { opened } = await openSealed(sealed)
+    expect(bytesToHex(opened.sound!)).toBe(bytesToHex(VOICE_SOUND))
+    expect(opened.scene.music?.band?.bars?.length).toBe(48)
+  })
+
+  it('refuses a voice note that is missing, extra or not the frozen one', async () => {
+    const plain = await senderFixture('hello')
+    await expect(seal(plain, { voice: VOICE_SOUND })).rejects.toMatchObject({ code: 'voice' })
+    const voiced = await senderFixture('hello', await creatorVoice())
+    await expect(seal(voiced)).rejects.toMatchObject({ code: 'voice' })
+    const other = VOICE_SOUND.slice()
+    other[15] = 1
+    await expect(seal(voiced, { voice: other })).rejects.toMatchObject({ code: 'voice' })
+    const notMp4 = VOICE_SOUND.slice()
+    notMp4[4] = 0
+    await expect(seal(voiced, { voice: notMp4 })).rejects.toMatchObject({ code: 'voice' })
   })
 
   it('refuses wrong phase/owner/handle/bundle/generation/recipient before any crypto', async () => {

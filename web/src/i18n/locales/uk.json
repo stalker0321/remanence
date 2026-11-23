@@ -1,7 +1,7 @@
 {
   "cameraDeniedHelp": "дозвольте доступ до камери для цього сайту в налаштуваннях браузера або телефона й спробуйте знову",
   "cameraUnavailableHelp": "перевірте, що камеру не зайняв інший застосунок, і спробуйте знову",
-  "createMusicTitle": "пісня",
+  "createMusicTitle": "звук",
   "createSteps": "створення листівки",
   "createContent": "фото й слова",
   "createComposition": "оформлення",
@@ -352,5 +352,19 @@
   "letterMark": "продовження на звороті",
   "letterFront": "лицьовий бік",
   "voiceListen": "послухати голосове",
-  "voicePause": "зупинити голосове"
+  "voicePause": "зупинити голосове",
+  "soundSong": "пісня",
+  "soundVoice": "голос",
+  "voiceRecord": "записати",
+  "voiceStop": "зупинити",
+  "voiceListenOwn": "послухати",
+  "voicePauseOwn": "пауза",
+  "voiceRerecord": "перезаписати",
+  "voiceDelete": "видалити",
+  "voiceHint": "до хвилини. його увімкнуть просто з листівки",
+  "voiceReplacesSong": "на листівці один звук: голос займе місце пісні",
+  "voiceUnsupported": "цей браузер не вміє записувати голос. це вміють Chrome і Safari",
+  "voiceDenied": "немає доступу до мікрофона. дозвольте його в браузері й спробуйте ще раз",
+  "voiceFailed": "запис не вдався. спробуйте ще раз",
+  "voiceTooLarge": "запис завеликий. спробуйте коротший"
 }

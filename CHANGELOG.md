@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.0-beta.16 to 0.2.0-beta.21 — 9 to 23 November 2026
+
+Android versionCodes 51 to 56 (56 is built and tested but waits for its
+internal release). ADR-021 has the design and the wire details.
+
+- **The letter on the back.** One text field: what fits stays on the front
+  with a small turn mark, the whole text is on the back of the card.
+- **Voice notes.** Recorded in the app or the browser (AAC, up to a minute)
+  and played from the song band in its own forms; a card has a song or a
+  voice note.
+- **The video square.** Up to 30 seconds from the front camera, recorded in
+  the app or the browser only. It takes one photo's place in a square tile
+  with viewfinder corners, a red dot and its length; it loops without sound
+  while the card is open and plays with sound when pressed. A card may carry
+  a voice note and a video, and only one of them sounds at a time. Older
+  apps never see such cards until they update.
+- **First gifts** to a phone number carry voice notes and videos too.
+- **Save the whole postcard.** One archive with the picture, the letter as
+  text and the recordings, beside "save as image".
+- **Fix (56).** The making screen crashed on Android 53 to 55 since the
+  letter was turned on: a regular expression flag that Android does not
+  support.
+
 ## 0.2.0-rc.4 to 0.2.0-beta.15 — October and November 2026
 
 Android versionCodes 25 to 50 went to the Play closed and internal tracks. This

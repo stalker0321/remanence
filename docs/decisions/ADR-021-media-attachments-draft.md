@@ -284,7 +284,12 @@ of these is made once and checked on both against the same reference plans.
 ## 6. Export
 
 "Save picture" stays as it is. A new "save postcard" gives a folder with the
-sheet image, the letter as text, and the voice or circle file. For stories, a
+sheet image, the letter as text, and the voice or circle file. Done on
+23 November as one archive, `remanence.zip` with `postcard.png`,
+`letter.txt`, `voice.m4a` and `video.mp4`, offered only when the card has a
+letter or a recording: the site's viewer has a second save button (a stored
+zip written by `zipStore`), Android's share menu a third entry
+(`CapsuleWholeArchive`, through the system's save dialog). For stories, a
 later option is a video of the card with the circle playing in it.
 
 ## 7. Order of work

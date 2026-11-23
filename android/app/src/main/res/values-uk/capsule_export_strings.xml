@@ -5,4 +5,5 @@
     <string name="capsule_export_warning">так збережеться зображення того, що на екрані. його побачить будь-хто, у кого воно опиниться: воно більше не зашифроване</string>
     <string name="capsule_export_working">готуємо…</string>
     <string name="capsule_export_failed">не вдалося зберегти зображення. не закривайте листівку й спробуйте ще раз</string>
+    <string name="capsule_export_whole">зберегти листівку повністю: картинку, лист, голосове і відео</string>
 </resources>

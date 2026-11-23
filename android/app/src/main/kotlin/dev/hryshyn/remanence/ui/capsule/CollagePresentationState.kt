@@ -316,6 +316,15 @@ internal fun CollagePresentationHost(
                     CapsuleSheetFrame(export, enabled = state.status is CollagePresentationState.Status.Ready,
                         ratio = result.scene.canvasWidth.toFloat() / result.scene.canvasHeight,
                         onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_collage_close",
+                        extras = if (letter == null && status.sound == null && status.film == null) null else {
+                            {
+                                listOfNotNull(
+                                    letter?.let { "letter.txt" to it.toByteArray(Charsets.UTF_8) },
+                                    status.sound?.let { "voice.m4a" to it.copy() },
+                                    status.film?.let { "video.mp4" to it.copy() },
+                                )
+                            }
+                        },
                         actions = { CapsuleListenAction(state.track, musicAction) },
                         overlay = {
                             if (!turned) {

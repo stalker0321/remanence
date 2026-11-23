@@ -5,4 +5,5 @@
     <string name="capsule_export_warning">this saves what you see as an image. anyone who gets the image can see it, it’s no longer encrypted</string>
     <string name="capsule_export_working">preparing…</string>
     <string name="capsule_export_failed">couldn’t save the image. keep the postcard open and try again</string>
+    <string name="capsule_export_whole">save the whole postcard: picture, letter, voice and video</string>
 </resources>

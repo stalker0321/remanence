@@ -52,6 +52,9 @@ class VoiceSound(bytes: ByteArray) {
         return count
     }
 
+    /** An owned copy, for the whole-postcard archive. */
+    internal fun copy(): ByteArray = held.copyOf()
+
     fun wipe() = held.fill(0)
 
     override fun toString(): String = "VoiceSound(<redacted>)"

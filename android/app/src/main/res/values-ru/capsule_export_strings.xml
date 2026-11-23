@@ -5,4 +5,5 @@
     <string name="capsule_export_warning">так сохранится картинка того, что на экране. её увидит любой, у кого она окажется: она больше не зашифрована</string>
     <string name="capsule_export_working">готовим…</string>
     <string name="capsule_export_failed">не получилось сохранить картинку. не закрывайте открытку и попробуйте ещё раз</string>
+    <string name="capsule_export_whole">сохранить открытку целиком: картинку, письмо, голосовое и видео</string>
 </resources>

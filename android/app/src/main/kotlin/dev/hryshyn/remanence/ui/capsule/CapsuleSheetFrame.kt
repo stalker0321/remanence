@@ -26,13 +26,14 @@ internal fun capsuleSheetSize(width: Dp, height: Dp, ratio: Float): Pair<Dp, Dp>
 @Composable
 internal fun CapsuleSheetFrame(export: CapsuleImageExport, enabled: Boolean, ratio: Float,
     onClose: () -> Unit, modifier: Modifier = Modifier, closeTag: String,
+    extras: (() -> List<Pair<String, ByteArray>>)? = null,
     actions: @Composable () -> Unit = {},
     overlay: @Composable BoxScope.() -> Unit = {},
     sheet: @Composable (Modifier) -> Unit) {
     Column(modifier.fillMaxSize().background(HoldColors.Field)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            CapsuleImageExportButton(export, enabled)
+            CapsuleImageExportButton(export, enabled, extras = extras)
             HoldIconButton(R.drawable.ic_close, stringResource(R.string.hold_close), onClose, Modifier.testTag(closeTag))
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),

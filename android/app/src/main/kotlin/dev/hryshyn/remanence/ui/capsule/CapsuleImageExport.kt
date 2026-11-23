@@ -93,6 +93,28 @@ internal object CapsuleExportFiles {
     }
 }
 
+/**
+ * ADR-021 §6: the whole postcard as one archive, so nothing the picture cannot
+ * hold is lost: postcard.png, the letter as letter.txt, voice.m4a and video.mp4.
+ * The site's `encodeWhole` writes the same names.
+ */
+internal object CapsuleWholeArchive {
+    fun build(png: ByteArray, extras: List<Pair<String, ByteArray>>): ByteArray =
+        ByteArrayOutputStream().use { out ->
+            java.util.zip.ZipOutputStream(out).use { zip ->
+                for ((name, bytes) in listOf("postcard.png" to png) + extras) {
+                    zip.putNextEntry(java.util.zip.ZipEntry(name).apply { time = FIXED_TIME })
+                    zip.write(bytes)
+                    zip.closeEntry()
+                }
+            }
+            out.toByteArray()
+        }
+
+    /** 1 January 2026, so the same postcard gives the same bytes. */
+    private const val FIXED_TIME = 1_767_225_600_000L
+}
+
 /** Explicit export only. Captures a content layer, never the window or its system bars. */
 internal class CapsuleImageExport(
     val contentModifier: Modifier,
@@ -139,7 +161,13 @@ internal fun rememberCapsuleImageExport(validate: () -> Unit): CapsuleImageExpor
 }
 
 @Composable
-internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boolean, modifier: Modifier = Modifier) {
+internal fun CapsuleImageExportButton(
+    export: CapsuleImageExport,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    /** The letter and recordings of this card, owned copies; null when there are none. */
+    extras: (() -> List<Pair<String, ByteArray>>)? = null,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
@@ -151,9 +179,7 @@ internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boole
     val title = stringResource(R.string.capsule_export_share)
     val working = stringResource(R.string.capsule_export_working)
     DisposableEffect(export) { onDispose { pending.value?.fill(0); pending.value = null } }
-    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
-        val bytes = pending.value
-        pending.value = null
+    fun writeOrForget(bytes: ByteArray?, uri: android.net.Uri?) {
         if (bytes != null) scope.launch {
             try {
                 if (uri != null) {
@@ -171,6 +197,37 @@ internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boole
             // pixels were disposed. Never imply success or persist plaintext
             // to bridge that boundary. A cancelled picker remains silent.
             if (uri != null) interrupted = true
+        }
+    }
+    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
+        val bytes = pending.value
+        pending.value = null
+        writeOrForget(bytes, uri)
+    }
+    val saveWhole = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val bytes = pending.value
+        pending.value = null
+        writeOrForget(bytes, uri)
+    }
+    fun performWhole() {
+        menu = false
+        busy = true
+        failed = false
+        interrupted = false
+        scope.launch {
+            try {
+                val png = export.capture()
+                val parts = checkNotNull(extras)()
+                val zip = try {
+                    withContext(Dispatchers.Default) { CapsuleWholeArchive.build(png, parts) }
+                } finally {
+                    png.fill(0)
+                    parts.forEach { it.second.fill(0) }
+                }
+                pending.value = zip
+                saveWhole.launch("remanence.zip")
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { pending.value?.fill(0); pending.value = null; failed = true; busy = false }
         }
     }
     fun perform(toFile: Boolean) {
@@ -214,6 +271,11 @@ internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boole
             }
             HoldTextButton(onClick = { perform(true) }, modifier = Modifier.testTag("capsule_export_file")) {
                 Text(stringResource(R.string.capsule_export_file))
+            }
+            if (extras != null) {
+                HoldTextButton(onClick = ::performWhole, modifier = Modifier.testTag("capsule_export_whole")) {
+                    Text(stringResource(R.string.capsule_export_whole))
+                }
             }
         } }, confirmButton = {}, dismissButton = {
             HoldTextButton(onClick = { menu = false }) { Text(stringResource(R.string.hold_close)) }

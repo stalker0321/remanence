@@ -97,4 +97,19 @@ describe('delivery v2 wire', () => {
     expect([...await keyCommitment(id('capsule'), id('target'), raw(vector.keyset_b64))]).toEqual([...raw(wire.key_commitment_b64)])
     expect([...await addressCommitment(raw(vector.opening_b64))]).toEqual([...raw(wire.address_commitment_b64)])
   })
+
+  it('binds the voice note and video square of a first gift under kinds 4 and 5 (ADR-021)', () => {
+    const aad = (kind: 'RECOGNITION_MANIFEST' | 'MEDIA' | 'VIDEO') => [...artifactAadV2({
+      capsuleId: id('capsule'), blobId: id('blob'), kind, ordinal: -1, senderUserId: id('sender'), deliveryTargetId: id('target'),
+    })]
+    const recognition = aad('RECOGNITION_MANIFEST')
+    const at = recognition.findIndex((byte, index) => byte === 0x20 && recognition[index + 1] === 1)
+    expect(at).toBeGreaterThan(0)
+    for (const [kind, value] of [['MEDIA', 4], ['VIDEO', 5]] as const) {
+      const bytes = aad(kind)
+      expect(bytes.slice(0, at)).toEqual(recognition.slice(0, at))
+      expect(bytes.slice(at, at + 2)).toEqual([0x20, value])
+      expect(bytes.slice(at + 2)).toEqual(recognition.slice(at + 2))
+    }
+  })
 })

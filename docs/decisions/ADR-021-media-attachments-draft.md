@@ -9,9 +9,12 @@ A postcard keeps 3 to 5 photos and the short note on the front. On top of that:
 
 - **One audio slot:** a song **or** a voice note. Both sit in the song band
   the layouts already have.
-- **A video circle takes the place of one photo.** Its tile is square and
-  plainly visible. It does not have to be the largest or the central tile.
-  A card with a circle has 2 to 4 photos plus the circle.
+- **A video square takes the place of one photo.** (It was a "circle" in the
+  first drafts; on 23 November the owner chose a square, see section 3a.)
+  Its tile is square and plainly visible. It does not have to be the largest
+  or the central tile. A card with a video has 2 to 4 photos plus the video.
+  A card may carry a voice note and a video together; only one of them sounds
+  at a time.
 - **The letter is the back of the card** (section 2), not a separate thing
   beside it.
 
@@ -20,7 +23,7 @@ Proposed bounds, to confirm:
 | Attachment | Length | Format | Size cap (ciphertext) |
 | --- | --- | --- | --- |
 | Voice | up to 60 s | AAC-LC in MP4 (`audio/mp4`), mono, 48 kbit/s | 1 MiB |
-| Circle | up to 30 s | H.264 + AAC in MP4 (`video/mp4`), 480×480, about 1.5 Mbit/s | 8 MiB, the photo cap |
+| Video square | up to 30 s | H.264 + AAC in MP4 (`video/mp4`), square (480 on the site, the camera's SD square on Android, 240..1080), about 1.2 Mbit/s | 6 MiB |
 | Letter | 8000 UTF-8 bytes (about 4000 Cyrillic or 8000 Latin characters) | text | inside the content manifest |
 
 The whole capsule stays under the existing 42 MiB cap
@@ -134,12 +137,47 @@ minimum size. `poster_content_id` ties the video to that photo. So:
 - Not yet: first gifts (`delivery_v2`, the pending services) and the
   sender's history; a pending send with media is not offered.
 
+### 3a. The video square (23 November)
+
+Look (owner, canvas "Видео на открытке", board Г): a square, the October idea
+of page "Капсула из тайлов" — viewfinder corners, a red dot and the length in
+the corner; the tile keeps the style's own photo shape (rect, round or
+ellipse). While the card is open it loops without sound like a live photo; a
+press plays it from the start with sound, a second press or the end returns
+to the silent loop. With reduced motion (and on Android in battery saver) it
+rests on the poster until pressed. The voice note and the video claim the
+card's one sound from each other. Songs do not play in the app. Capture is
+in the app only (front camera, mirrored; the back camera where there is no
+front one), never a file from the gallery.
+
+Wire (server 408e5686, web 389e50e0):
+
+- A separate kind, `ArtifactKind.VIDEO = 5`, ordinal -1, at most one, after
+  MEDIA in the canonical order, so a voice note and a video can travel
+  together and the server can tell them apart: `video_count_max = 1`,
+  `encrypted_video_max_ciphertext_bytes = 6291489` (6 MiB plus the AEAD
+  overhead); the statement takes 5..9 artifacts. Migration
+  `0022_video_blob_kind` as 0021. `video_enabled` gates drafts (on in prod
+  since 23 November).
+- `GET /v1/capsules/incoming?media=video` asks for voice notes and videos;
+  `media=voice` (Android 54, 55) never sees a card with a video.
+- `ContentManifest.video = 10`, a `MediaEntry` of kind VIDEO (renamed from
+  CIRCLE): the VIDEO blob, `video/mp4`, 1..30000 ms, `width == height` in
+  240..1080, and `poster_content_id`, the photo that holds the first frame.
+  That photo must be square. Field 9 holds only a voice note.
+- Blob id tag byte 0x04.
+- The poster is seated only in a tile square within 5% and at least 140
+  units on its short side: Android's matrix gives the poster no cost in any
+  other tile, the site's matching does the same, and without analysis the
+  site moves the poster to the largest such tile. On the reference photo
+  sets 3 to 7 grammars stay offered for every kind of card.
+
 ## 4. Recording and playback
 
 | | Android | Website |
 | --- | --- | --- |
 | Voice | `MediaRecorder`, AAC/MP4, 60 s cap | `MediaRecorder` with `audio/mp4` (Chrome, Safari) |
-| Circle | CameraX `VideoCapture`, front camera, square crop, 30 s cap | `getUserMedia` + `MediaRecorder` `video/mp4` |
+| Video square | CameraX `VideoCapture` + `Preview` in one `UseCaseGroup` with a 1:1 `ViewPort` (the recording itself comes out square, 720×720 on the emulator), SD quality, 1.2 Mbit/s, mirrored front camera, 29.75 s cap; the first frame via `MediaMetadataRetriever` as a 480 JPEG joins the photos as a file URI | `getUserMedia`, the middle square drawn mirrored at 480×480 on a canvas, `captureStream` + microphone into `MediaRecorder` H.264/AAC MP4; the first frame from the canvas joins the photos |
 | Playback | decrypt into app-private cache, play, wipe on close | decrypt into a `blob:` URL, revoke on close |
 
 Site, receiving (23 November): the incoming list asks with `media=voice` and

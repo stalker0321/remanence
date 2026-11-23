@@ -21,7 +21,8 @@ export async function fetchPendingIncoming(
   pin: ServicePin,
   signal?: AbortSignal,
 ): Promise<IncomingCapsule[]> {
-  const feed = await transport.request({ path: '/v2/pending-incoming', method: 'GET', token: token(), signal })
+  // ADR-021: first gifts with a voice note or a video square are listed only to a client that reads them.
+  const feed = await transport.request({ path: '/v2/pending-incoming', method: 'GET', query: { media: 'video' }, token: token(), signal })
   // A server without the feature answers 404: there is simply nothing here.
   if (feed.status !== 200) return []
   const rows = (feed.body as { items?: unknown } | null)?.items

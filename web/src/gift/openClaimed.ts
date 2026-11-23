@@ -44,8 +44,6 @@ export async function openClaimedEnvelope(caps: KeyCapabilities, capsule: Incomi
 /** The artifact AAD for either kind of incoming postcard. */
 export function capsuleArtifactAad(capsule: IncomingCapsule, blobId: string, kind: ArtifactKind, ordinal: number): Uint8Array {
   if (capsule.pending) {
-    // ADR-021: a first gift carries no media yet.
-    if (kind === 'MEDIA' || kind === 'VIDEO') throw new Error('ENVELOPE_REJECTED')
     return artifactAadV2({
       capsuleId: capsule.capsuleId, blobId, kind, ordinal,
       senderUserId: capsule.senderUserId, deliveryTargetId: capsule.pending.deliveryTargetId,

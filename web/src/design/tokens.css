@@ -424,7 +424,8 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
 .card-sides button.video-square video {
   position: absolute;
   max-width: none;
-  object-fit: fill;
+  /* A film that is not quite square keeps its proportions, centred like its poster. */
+  object-fit: cover;
   pointer-events: none;
 }
 .card-sides button.video-square svg {

@@ -4,8 +4,8 @@ import { uuidToBytes } from '../protocol/uuid'
 import type { IncomingBlob } from '../sync/incoming'
 
 /** Hand-rolled delivery_v2 wire, field order as in delivery_v2.proto. */
-const KIND = { 1: 'RECOGNITION_MANIFEST', 2: 'CONTENT_MANIFEST', 3: 'PHOTO' } as const
-const KIND_VALUE = { RECOGNITION_MANIFEST: 1, CONTENT_MANIFEST: 2, PHOTO: 3 } as const
+const KIND = { 1: 'RECOGNITION_MANIFEST', 2: 'CONTENT_MANIFEST', 3: 'PHOTO', 4: 'MEDIA', 5: 'VIDEO' } as const
+const KIND_VALUE = { RECOGNITION_MANIFEST: 1, CONTENT_MANIFEST: 2, PHOTO: 3, MEDIA: 4, VIDEO: 5 } as const
 
 /** The pending API speaks standard base64, unlike the recovery helpers' base64url. */
 export function fromBase64(value: string): Uint8Array {

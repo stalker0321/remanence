@@ -149,6 +149,25 @@ memory on both clients.
 - **Voice:** a new song-band mode with a waveform and the length. Older
   receivers reject an unknown band mode, so this needs an expression contract
   bump (V5) shipped to receivers before senders use it.
+  - Look (owner, 23 November; canvas "Голосовое на открытке"): the voice
+    takes the song band's own three forms. Plate: the play button in the
+    cover square, the waveform where the title was, a microphone and the
+    length where the artist was. Caption: play circle, waveform and length on
+    one line. Card (layout 6): the waveform along the spine, the length, the
+    microphone and the play button at the foot. No word on the card (it would
+    be in one language for every receiver); the button's accessible name is
+    the receiver's own "listen to the voice note".
+  - Wire (proposed): expression V5 is V4 plus the modes `voice-plate`,
+    `voice-caption` and `voice-card`, with the same geometry as `plate`,
+    `caption` and `card`. Only a card with a voice note is sealed as V5, so
+    song cards stay V4 and keep opening in older builds. A voice mode needs
+    `media` with kind VOICE and no `track_snapshot`; a song mode the reverse.
+  - `MediaEntry` gains `bytes peaks = 8`: 48 amplitudes, 0..255, measured by
+    the sender. Both platforms draw the same bars from them, and the band is
+    whole before the voice blob arrives (the button waits for it).
+  - Today's receivers refuse a music region without a track ("music region
+    and track snapshot must match", site `prepare.ts`), so the receiving side
+    ships in a release before any sender can record.
 - **Circle:** a square-tile constraint per grammar. Grammars that cannot give
   one photo a square tile above the minimum are not offered for a card with a
   circle, the way grammars that need a song are not offered without one.

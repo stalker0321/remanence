@@ -34,8 +34,8 @@ val atomicRegistrationEnabled = providers.gradleProperty("remanence.atomicRegist
         "Atomic registration requires Google and recovery; no unprotected fallback"
     }
 }
-// Long note ("letter") beside the sheet. Default OFF; receiving one always works.
-val letterEnabled = (findProperty("remanence.letter.enabled") as? String ?: "false").lowercase().also {
+// The letter on the back of the card. Default ON since 23 November (owner); receiving one always works.
+val letterEnabled = (findProperty("remanence.letter.enabled") as? String ?: "true").lowercase().also {
     require(it == "true" || it == "false") { "remanence.letter.enabled must be true or false" }
 }
 // ADR-020: first gifts by card. Default OFF everywhere; one property turns the

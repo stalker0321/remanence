@@ -587,8 +587,9 @@ export function Scan({
 
 
 
-// The letter on the back of the card: receiving one always works; sending waits for the owner's word.
-export const WEB_SENDS_LETTER = import.meta.env.VITE_SENDS_LETTER === 'true'
+// The letter on the back of the card: receiving one always works; sending is on (owner, 23 November)
+// unless the build sets VITE_SENDS_LETTER=false.
+export const WEB_SENDS_LETTER = import.meta.env.VITE_SENDS_LETTER !== 'false'
 
 /** The one text field's two sides; without the letter the whole text is the note, as before. */
 function sides(text: string | null): LetterSplit {

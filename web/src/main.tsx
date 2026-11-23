@@ -9,7 +9,7 @@ import { PhotoDraft } from './create/photos'
 import { RecipientDraft } from './create/recipient'
 import { readLanguage, type PreferencePort } from './preferences/language'
 import { SessionStore } from './session/session'
-import { App } from './ui/App'
+import { App, WEB_SENDS_LETTER } from './ui/App'
 import { startShell } from './pwa/shell'
 import { loadDeploymentConfig, type DeploymentConfig } from './deployment/config'
 import { deploymentPorts } from './deployment/ports'
@@ -34,7 +34,7 @@ memory.attach(store)
 const recipient = new RecipientDraft()
 recipient.attach(store)
 // With the letter on, the one text field holds the whole letter; the layout takes its start.
-const note = new NoteDraft(import.meta.env.VITE_SENDS_LETTER === 'true' ? LETTER_MAX_UTF8_BYTES : undefined)
+const note = new NoteDraft(WEB_SENDS_LETTER ? LETTER_MAX_UTF8_BYTES : undefined)
 note.attach(store)
 const photos = new PhotoDraft()
 photos.attach(store)

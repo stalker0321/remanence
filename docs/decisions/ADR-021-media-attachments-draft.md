@@ -66,8 +66,8 @@ the whole text in the handwriting font.
   inside it: 12 to 18 px, after the last word. When the last line is full,
   it takes the end of that line on a patch of the note's paper. Site
   `letterMarkPlace`, Android `letterMarkPlace`, the same tests.
-- Writing a long text stays behind `remanence.letter.enabled` on Android and
-  `VITE_SENDS_LETTER` on the site until the owner turns it on.
+- Writing a long text is on since 23 November (owner). `remanence.letter.enabled=false`
+  on Android and `VITE_SENDS_LETTER=false` on the site turn it off again.
 
 ## 3. Media on the wire
 

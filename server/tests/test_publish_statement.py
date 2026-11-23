@@ -596,3 +596,35 @@ def test_one_media_artifact_after_the_photos_verifies_and_a_misplaced_one_fails(
     )
     raw_big = _statement_with(capsule, [*_protocol_layout(declarations), big]).SerializeToString(deterministic=True)
     _assert_invalid(lambda: verify_publish_statement(raw_big, capsule, [*declarations, big]))
+
+
+def test_a_voice_note_and_a_video_square_verify_in_kind_order(fixture: dict) -> None:
+    capsule, declarations = _authoritative_data(fixture)
+
+    def blob(tail: str, kind: CapsuleBlobKind, size: int) -> CapsuleBlob:
+        return CapsuleBlob(
+            id=UUID(f"00000000-0000-0000-0000-0000000000{tail}"),
+            capsule_id=capsule.id,
+            kind=kind,
+            ordinal=None,
+            object_key=f"capsules/{capsule.id}/{tail}.blob",
+            expected_ciphertext_size=size,
+            expected_ciphertext_sha256=hashlib.sha256(tail.encode()).digest(),
+            state=CapsuleBlobState.DECLARED,
+        )
+
+    voice = blob("aa", CapsuleBlobKind.MEDIA, 1_048_609)
+    video = blob("bb", CapsuleBlobKind.VIDEO, 6_291_489)
+    both = [*declarations, voice, video]
+    raw = _statement_with(capsule, [*_protocol_layout(declarations), voice, video]).SerializeToString(deterministic=True)
+    verified = verify_publish_statement(raw, capsule, both)
+    assert [artifact.kind for artifact in verified.artifacts][-2:] == [CapsuleBlobKind.MEDIA, CapsuleBlobKind.VIDEO]
+    # VIDEO (5) sorts after MEDIA (4).
+    swapped = _statement_with(capsule, [*_protocol_layout(declarations), video, voice]).SerializeToString(deterministic=True)
+    _assert_invalid(lambda: verify_publish_statement(swapped, capsule, both))
+    # Video alone verifies; one byte over its cap does not.
+    alone = _statement_with(capsule, [*_protocol_layout(declarations), video]).SerializeToString(deterministic=True)
+    assert verify_publish_statement(alone, capsule, [*declarations, video]).artifacts[-1].kind is CapsuleBlobKind.VIDEO
+    big = blob("bb", CapsuleBlobKind.VIDEO, 6_291_490)
+    raw_big = _statement_with(capsule, [*_protocol_layout(declarations), big]).SerializeToString(deterministic=True)
+    _assert_invalid(lambda: verify_publish_statement(raw_big, capsule, [*declarations, big]))

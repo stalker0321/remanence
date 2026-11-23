@@ -103,6 +103,7 @@ def _add_incoming_ready(
     envelope_key_bundle_id: UUID | None = None,
     publication_sequence: int | None = None,
     with_media: bool = False,
+    with_video: bool = False,
 ) -> Capsule:
     if publication_sequence is None:
         publication_sequence = (
@@ -138,6 +139,8 @@ def _add_incoming_ready(
         specs.append((CapsuleBlobKind.PHOTO, ordinal, f"photo-{ordinal}".encode()))
     if with_media:
         specs.append((CapsuleBlobKind.MEDIA, None, b"voice"))
+    if with_video:
+        specs.append((CapsuleBlobKind.VIDEO, None, b"video"))
     for kind, ordinal, body in specs:
         blob_id = uuid4()
         session.add(
@@ -615,6 +618,41 @@ def test_media_cards_are_listed_only_for_clients_that_read_media(session_factory
         assert page.items[1].blobs[-1].ordinal is None
         with pytest.raises(IncomingCapsuleQueryError):
             service.list_incoming(authenticated_recipient_user_id=recipient.id, limit=10, media="voice")
+
+
+def test_video_cards_are_listed_only_for_clients_that_read_video(session_factory):
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        plain = _add_incoming_ready(
+            session, sender=sender, sender_bundle=sender_bundle,
+            recipient=recipient, recipient_bundle=recipient_bundle, ready_at=_NOW,
+        )
+        voiced = _add_incoming_ready(
+            session, sender=sender, sender_bundle=sender_bundle,
+            recipient=recipient, recipient_bundle=recipient_bundle,
+            ready_at=_NOW + timedelta(seconds=1), with_media=True,
+        )
+        filmed = _add_incoming_ready(
+            session, sender=sender, sender_bundle=sender_bundle,
+            recipient=recipient, recipient_bundle=recipient_bundle,
+            ready_at=_NOW + timedelta(seconds=2), with_media=True, with_video=True,
+        )
+        session.commit()
+
+        service = IncomingCapsuleQueryService(session)
+        assert [item.capsule_id for item in _query(session, recipient.id, limit=10).items] == [plain.id]
+        # Android 54 and 55 read voice notes but not video: they never see the video card.
+        voice_only = service.list_incoming(authenticated_recipient_user_id=recipient.id, limit=10, media=True)
+        assert [item.capsule_id for item in voice_only.items] == [plain.id, voiced.id]
+        page = service.list_incoming(
+            authenticated_recipient_user_id=recipient.id, limit=10, media=True, video=True
+        )
+        assert [item.capsule_id for item in page.items] == [plain.id, voiced.id, filmed.id]
+        kinds = [blob.kind for blob in page.items[2].blobs]
+        assert kinds[-2:] == [CapsuleBlobKind.MEDIA, CapsuleBlobKind.VIDEO]
+        with pytest.raises(IncomingCapsuleQueryError):
+            service.list_incoming(authenticated_recipient_user_id=recipient.id, limit=10, video=True)
 
 
 def test_cross_user_draft_aborted_excluded_and_ciphertext_synced_included(session_factory):

@@ -28,6 +28,8 @@ class CapsuleBlobKind(str, enum.Enum):
     PHOTO = "PHOTO"
     # ADR-021: a voice note, at most one per capsule, ordinal NULL.
     MEDIA = "MEDIA"
+    # ADR-021: the video square, at most one per capsule, ordinal NULL.
+    VIDEO = "VIDEO"
 
 
 class CapsuleBlobState(str, enum.Enum):
@@ -49,7 +51,7 @@ class CapsuleBlob(Base):
         ),
         CheckConstraint(
             "((kind = 'PHOTO' AND ordinal IS NOT NULL AND ordinal BETWEEN 0 AND 4) OR "
-            "(kind IN ('RECOGNITION_MANIFEST', 'CONTENT_MANIFEST', 'MEDIA') AND ordinal IS NULL))",
+            "(kind IN ('RECOGNITION_MANIFEST', 'CONTENT_MANIFEST', 'MEDIA', 'VIDEO') AND ordinal IS NULL))",
             name="ck_capsule_blobs_kind_ordinal_shape",
         ),
         Index("ix_capsule_blobs_capsule_id", "capsule_id"),
@@ -70,6 +72,12 @@ class CapsuleBlob(Base):
             "capsule_id",
             unique=True,
             postgresql_where=text("kind = 'MEDIA'"),
+        ),
+        Index(
+            "uq_capsule_blobs_one_video_per_capsule",
+            "capsule_id",
+            unique=True,
+            postgresql_where=text("kind = 'VIDEO'"),
         ),
         Index(
             "uq_capsule_blobs_photo_ordinal_per_capsule",

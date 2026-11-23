@@ -12,7 +12,8 @@ enum ArtifactKind {
   RECOGNITION_MANIFEST = 1;
   CONTENT_MANIFEST = 2;
   PHOTO = 3;
-  MEDIA = 4; // ADR-021: at most one, ordinal -1; a voice note today
+  MEDIA = 4; // ADR-021: at most one, ordinal -1; a voice note
+  VIDEO = 5; // ADR-021: at most one, ordinal -1; the video square
 }
 
 message ArtifactBinding {
@@ -130,6 +131,11 @@ message ContentManifest {
   // track_snapshot. Released builds refuse such a card: the web parser fails
   // closed on the unknown field, Android on a music region without a track.
   optional MediaEntry media = 9;
+  // ADR-021: v2-only video square (kind VIDEO, the VIDEO artifact). Its first
+  // frame is one of the photos, named by poster_content_id; that photo's tile
+  // is square. It may travel with a voice note. Receivers before it never see
+  // such a card: the server lists it only to clients that ask for video.
+  optional MediaEntry video = 10;
 }
 
 // ADR-021: one MEDIA artifact referenced from the content manifest.
@@ -137,15 +143,15 @@ message MediaEntry {
   enum Kind {
     KIND_UNSPECIFIED = 0;
     VOICE = 1;
-    CIRCLE = 2; // not drawn yet; receivers refuse it as unsupported
+    VIDEO = 2;  // only in ContentManifest.video
   }
   Kind kind = 1;
-  bytes blob_id = 2;            // UUID bytes exactly 16, the MEDIA artifact
-  string mime_type = 3;         // "audio/mp4" for VOICE
-  uint32 duration_ms = 4;       // VOICE 1..60000
-  optional uint32 width = 5;    // CIRCLE only
-  optional uint32 height = 6;   // CIRCLE only
-  optional string poster_content_id = 7; // CIRCLE only
+  bytes blob_id = 2;            // UUID bytes exactly 16, the MEDIA or VIDEO artifact
+  string mime_type = 3;         // "audio/mp4" for VOICE, "video/mp4" for VIDEO
+  uint32 duration_ms = 4;       // VOICE 1..60000, VIDEO 1..30000
+  optional uint32 width = 5;    // VIDEO only, equal to height
+  optional uint32 height = 6;   // VIDEO only
+  optional string poster_content_id = 7; // VIDEO only: the photo holding its first frame
   bytes peaks = 8;              // VOICE: exactly 48 amplitudes 0..255, drawn as the waveform
 }
 

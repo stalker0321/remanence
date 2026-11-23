@@ -19,8 +19,9 @@ from remanence.protocol.v1.remanence_v1_pb2 import (
 
 
 MAX_PUBLISH_STATEMENT_BYTES: Final = 4096
-# 1 recognition + 1 content + 3..5 photos + at most one MEDIA (ADR-021).
-_MAX_ARTIFACTS: Final = 8
+# 1 recognition + 1 content + 3..5 photos + at most one MEDIA and one VIDEO
+# (ADR-021).
+_MAX_ARTIFACTS: Final = 9
 _MIN_ARTIFACTS: Final = 5
 _GENERIC_ERROR = "publish statement is invalid"
 
@@ -29,18 +30,21 @@ _PROTO_KIND_TO_MODEL: Final = {
     ArtifactKind.CONTENT_MANIFEST: CapsuleBlobKind.CONTENT_MANIFEST,
     ArtifactKind.PHOTO: CapsuleBlobKind.PHOTO,
     ArtifactKind.MEDIA: CapsuleBlobKind.MEDIA,
+    ArtifactKind.VIDEO: CapsuleBlobKind.VIDEO,
 }
 _MODEL_KIND_TO_PROTO_NUMBER: Final = {
     CapsuleBlobKind.RECOGNITION_MANIFEST: int(ArtifactKind.RECOGNITION_MANIFEST),
     CapsuleBlobKind.CONTENT_MANIFEST: int(ArtifactKind.CONTENT_MANIFEST),
     CapsuleBlobKind.PHOTO: int(ArtifactKind.PHOTO),
     CapsuleBlobKind.MEDIA: int(ArtifactKind.MEDIA),
+    CapsuleBlobKind.VIDEO: int(ArtifactKind.VIDEO),
 }
 _MODEL_KIND_MAX_SIZE: Final = {
     CapsuleBlobKind.RECOGNITION_MANIFEST: LIMITS_V1.recognition_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.CONTENT_MANIFEST: LIMITS_V1.content_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.PHOTO: LIMITS_V1.encrypted_photo_max_ciphertext_bytes,
     CapsuleBlobKind.MEDIA: LIMITS_V1.encrypted_media_max_ciphertext_bytes,
+    CapsuleBlobKind.VIDEO: LIMITS_V1.encrypted_video_max_ciphertext_bytes,
 }
 
 

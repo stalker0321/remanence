@@ -30,5 +30,7 @@
   "incoming_page_max": 100,
   "mvp_track_attachment_allowed": false,
   "media_count_max": 1,
-  "encrypted_media_max_ciphertext_bytes": 1048609
+  "encrypted_media_max_ciphertext_bytes": 1048609,
+  "video_count_max": 1,
+  "encrypted_video_max_ciphertext_bytes": 6291489
 }

@@ -213,7 +213,7 @@ class IncomingBlobResponse(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
 
     blob_id: uuid.UUID
-    kind: Literal["RECOGNITION_MANIFEST", "CONTENT_MANIFEST", "PHOTO", "MEDIA"]
+    kind: Literal["RECOGNITION_MANIFEST", "CONTENT_MANIFEST", "PHOTO", "MEDIA", "VIDEO"]
     ordinal: int | None
     ciphertext_size: int
     ciphertext_sha256: str
@@ -841,6 +841,10 @@ async def create_capsule_draft(
             blob.kind is CapsuleBlobKind.MEDIA for blob in parsed.blobs
         ):
             raise CapsuleDraftValidationError()
+        if not request.app.state.settings.video_enabled and any(
+            blob.kind is CapsuleBlobKind.VIDEO for blob in parsed.blobs
+        ):
+            raise CapsuleDraftValidationError()
         request_sha256 = hashlib.sha256(raw_body).digest()
         with session.begin():
             if request.app.state.settings.mode is AppMode.BETA:
@@ -1170,8 +1174,9 @@ def _canonical_b64url(value: object) -> str:
     return encoded
 
 
-def _parse_incoming_query(request: Request) -> tuple[str | None, int, bool]:
-    """`cursor`, `limit`, and `media=voice` from a client that reads voice notes (ADR-021)."""
+def _parse_incoming_query(request: Request) -> tuple[str | None, int, bool, bool]:
+    """`cursor`, `limit`, and `media` (ADR-021): `voice` from a client that reads
+    voice notes, `video` from one that reads voice notes and video squares."""
     raw = request.scope.get("query_string", b"")
     if raw is None:
         raw = b""
@@ -1199,7 +1204,7 @@ def _parse_incoming_query(request: Request) -> tuple[str | None, int, bool]:
                 raise CapsuleDraftValidationError()
     if len(cursor_values) > 1 or len(limit_values) > 1 or len(media_values) > 1:
         raise CapsuleDraftValidationError()
-    if media_values and media_values[0] != "voice":
+    if media_values and media_values[0] not in ("voice", "video"):
         raise CapsuleDraftValidationError()
     cursor: str | None = None
     if cursor_values:
@@ -1226,7 +1231,7 @@ def _parse_incoming_query(request: Request) -> tuple[str | None, int, bool]:
         if not 1 <= parsed_limit <= LIMITS_V1.incoming_page_max:
             raise CapsuleDraftValidationError()
         limit = parsed_limit
-    return cursor, limit, bool(media_values)
+    return cursor, limit, bool(media_values), media_values == ["video"]
 
 
 def _parse_tombstone_query(request: Request) -> tuple[str | None, int]:
@@ -1283,7 +1288,7 @@ def _incoming_blob_response(blob: object) -> IncomingBlobResponse:
     if not isinstance(blob.blob_id, uuid.UUID):
         raise IncomingCapsuleQueryError("INTERNAL_ERROR")
     if blob.kind is CapsuleBlobKind.PHOTO:
-        kind: Literal["RECOGNITION_MANIFEST", "CONTENT_MANIFEST", "PHOTO", "MEDIA"] = "PHOTO"
+        kind: Literal["RECOGNITION_MANIFEST", "CONTENT_MANIFEST", "PHOTO", "MEDIA", "VIDEO"] = "PHOTO"
         if type(blob.ordinal) is not int:
             raise IncomingCapsuleQueryError("INTERNAL_ERROR")
         ordinal: int | None = blob.ordinal
@@ -1299,6 +1304,11 @@ def _incoming_blob_response(blob: object) -> IncomingBlobResponse:
         ordinal = None
     elif blob.kind is CapsuleBlobKind.MEDIA:
         kind = "MEDIA"
+        if blob.ordinal is not None:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+        ordinal = None
+    elif blob.kind is CapsuleBlobKind.VIDEO:
+        kind = "VIDEO"
         if blob.ordinal is not None:
             raise IncomingCapsuleQueryError("INTERNAL_ERROR")
         ordinal = None
@@ -1521,13 +1531,14 @@ def list_incoming_capsules(
     session: Session = Depends(get_db_session, use_cache=False),
 ) -> IncomingCapsulesResponse | JSONResponse:
     try:
-        cursor, limit, media = _parse_incoming_query(request)
+        cursor, limit, media, video = _parse_incoming_query(request)
         with session.begin():
             result = IncomingCapsuleQueryService(session).list_incoming(
                 authenticated_recipient_user_id=principal.user_id,
                 cursor=cursor,
                 limit=limit,
                 media=media,
+                video=video,
             )
             dto = _incoming_page_response(
                 result,

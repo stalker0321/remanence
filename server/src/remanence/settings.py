@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     # ADR-021: accepting a MEDIA artifact (a voice note) in a draft. Off until
     # receivers that read media are out; reading media never needs the flag.
     media_enabled: bool = False
+    # ADR-021: accepting a VIDEO artifact (the video square) in a draft. Off
+    # until receivers that draw it are out.
+    video_enabled: bool = False
     pending_sends_enabled: bool = False
     pending_claims_enabled: bool = False
     pending_locator_issuance_enabled: bool = False

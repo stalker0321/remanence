@@ -34,12 +34,14 @@ _KIND_RANK: Final = {
     CapsuleBlobKind.CONTENT_MANIFEST: 2,
     CapsuleBlobKind.PHOTO: 3,
     CapsuleBlobKind.MEDIA: 4,
+    CapsuleBlobKind.VIDEO: 5,
 }
 _KIND_MAX_SIZE: Final = {
     CapsuleBlobKind.RECOGNITION_MANIFEST: LIMITS_V1.recognition_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.CONTENT_MANIFEST: LIMITS_V1.content_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.PHOTO: LIMITS_V1.encrypted_photo_max_ciphertext_bytes,
     CapsuleBlobKind.MEDIA: LIMITS_V1.encrypted_media_max_ciphertext_bytes,
+    CapsuleBlobKind.VIDEO: LIMITS_V1.encrypted_video_max_ciphertext_bytes,
 }
 
 
@@ -164,9 +166,10 @@ class IncomingCapsuleQueryService:
         cursor: str | None = None,
         limit: int = LIMITS_V1.incoming_page_default,
         media: bool = False,
+        video: bool = False,
     ) -> IncomingCapsulePage:
         recipient_id = _require_uuid(authenticated_recipient_user_id)
-        if type(media) is not bool:
+        if type(media) is not bool or type(video) is not bool or (video and not media):
             raise _error("VALIDATION_FAILED")
         after = _require_cursor(cursor)
         limit = _require_limit(limit)
@@ -174,7 +177,7 @@ class IncomingCapsuleQueryService:
         page: IncomingCapsulePage | None = None
         try:
             page = self._list_incoming(
-                recipient_id=recipient_id, after=after, limit=limit, media=media
+                recipient_id=recipient_id, after=after, limit=limit, media=media, video=video
             )
         except IncomingCapsuleQueryError as exc:
             mapped = exc
@@ -193,6 +196,7 @@ class IncomingCapsuleQueryService:
         after: IncomingCursor | None,
         limit: int,
         media: bool,
+        video: bool,
     ) -> IncomingCapsulePage:
         after_sequence: int | None = None
         if after is not None:
@@ -227,6 +231,15 @@ class IncomingCapsuleQueryService:
                 ~select(CapsuleBlob.id).where(
                     CapsuleBlob.capsule_id == Capsule.id,
                     CapsuleBlob.kind == CapsuleBlobKind.MEDIA,
+                ).exists()
+            )
+        if not video:
+            # The same for the video square: clients that read voice notes but
+            # not video (Android 54, 55) never see a card with one.
+            stmt = stmt.where(
+                ~select(CapsuleBlob.id).where(
+                    CapsuleBlob.capsule_id == Capsule.id,
+                    CapsuleBlob.kind == CapsuleBlobKind.VIDEO,
                 ).exists()
             )
         if after is not None:
@@ -470,6 +483,7 @@ class IncomingCapsuleQueryService:
         recognition = 0
         content = 0
         media = 0
+        video = 0
         photos: list[int] = []
         total_size = 0
         for row in rows:
@@ -503,6 +517,8 @@ class IncomingCapsuleQueryService:
                     recognition += 1
                 elif kind is CapsuleBlobKind.MEDIA:
                     media += 1
+                elif kind is CapsuleBlobKind.VIDEO:
+                    video += 1
                 else:
                     content += 1
             snapshots.append(
@@ -518,7 +534,7 @@ class IncomingCapsuleQueryService:
             raise _error("INTERNAL_ERROR")
         if content != LIMITS_V1.content_manifest_count:
             raise _error("INTERNAL_ERROR")
-        if media > LIMITS_V1.media_count_max:
+        if media > LIMITS_V1.media_count_max or video > LIMITS_V1.video_count_max:
             raise _error("INTERNAL_ERROR")
         if not LIMITS_V1.photo_count_min <= len(photos) <= LIMITS_V1.photo_count_max:
             raise _error("INTERNAL_ERROR")

@@ -39,6 +39,10 @@ class ProtocolV1Limits:
     # the AEAD overhead). The server sees ciphertext only, so this is the cap.
     media_count_max: int = 1
     encrypted_media_max_ciphertext_bytes: int = 1_048_609
+    # ADR-021: at most one VIDEO artifact (the video square: 30 s of 480x480
+    # H.264 + AAC fits in 6 MiB plaintext, plus the AEAD overhead).
+    video_count_max: int = 1
+    encrypted_video_max_ciphertext_bytes: int = 6_291_489
 
 
 LIMITS_V1 = ProtocolV1Limits()

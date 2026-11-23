@@ -123,6 +123,9 @@ class CreateCapsuleDraftRequest(BaseModel):
         media = [blob for blob in self.blobs if blob.kind is CapsuleBlobKind.MEDIA]
         if len(media) > LIMITS_V1.media_count_max:
             raise ValueError("invalid media count")
+        video = [blob for blob in self.blobs if blob.kind is CapsuleBlobKind.VIDEO]
+        if len(video) > LIMITS_V1.video_count_max:
+            raise ValueError("invalid video count")
         if len(recognition) != LIMITS_V1.recognition_manifest_count:
             raise ValueError("invalid recognition manifest count")
         if len(content) != LIMITS_V1.content_manifest_count:
@@ -146,6 +149,7 @@ class CreateCapsuleDraftRequest(BaseModel):
             CapsuleBlobKind.CONTENT_MANIFEST: LIMITS_V1.content_manifest_max_ciphertext_bytes,
             CapsuleBlobKind.PHOTO: LIMITS_V1.encrypted_photo_max_ciphertext_bytes,
             CapsuleBlobKind.MEDIA: LIMITS_V1.encrypted_media_max_ciphertext_bytes,
+            CapsuleBlobKind.VIDEO: LIMITS_V1.encrypted_video_max_ciphertext_bytes,
         }
         if any(blob.ciphertext_size > max_sizes[blob.kind] for blob in self.blobs):
             raise ValueError("ciphertext size exceeds limit")

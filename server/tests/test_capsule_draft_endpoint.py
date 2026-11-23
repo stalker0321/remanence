@@ -272,6 +272,42 @@ def test_a_voice_note_is_declared_only_when_media_is_on(client_factory) -> None:
     _assert_problem(_post(client, sender["access_token"], _raw(two)), status=422, code="VALIDATION_FAILED")
 
 
+def test_a_video_square_is_declared_only_when_video_is_on(client_factory) -> None:
+    client, factory = client_factory
+    sender = _register(client, email="alice@example.com", handle="alice")
+    recipient = _register(client, email="bob@example.com", handle="bob")
+    video = {
+        "blob_id": str(uuid4()),
+        "kind": "VIDEO",
+        "ordinal": None,
+        "ciphertext_size": 6_291_489,
+        "ciphertext_sha256": _digest(10),
+    }
+    voice = {**video, "blob_id": str(uuid4()), "kind": "MEDIA", "ciphertext_size": 1_048_609, "ciphertext_sha256": _digest(9)}
+    payload = _draft_payload(sender, recipient)
+    payload["blobs"] += [voice, video]
+    client.app.state.settings = client.app.state.settings.model_copy(update={"media_enabled": True})
+    # Off by default: Android 54 and 55 cannot draw it.
+    _assert_problem(_post(client, sender["access_token"], _raw(payload)), status=422, code="VALIDATION_FAILED")
+    client.app.state.settings = client.app.state.settings.model_copy(update={"video_enabled": True})
+    accepted = _post(client, sender["access_token"], _raw(payload))
+    assert accepted.status_code == 201, accepted.text
+    with factory() as session:
+        kinds = sorted(blob.kind.value for blob in session.scalars(select(CapsuleBlob)))
+        assert kinds.count("VIDEO") == 1 and kinds.count("MEDIA") == 1
+
+    for bad in (
+        {**video, "blob_id": str(uuid4()), "ciphertext_size": 6_291_490},
+        {**video, "blob_id": str(uuid4()), "ordinal": 0},
+    ):
+        refused = _draft_payload(sender, recipient)
+        refused["blobs"].append(bad)
+        _assert_problem(_post(client, sender["access_token"], _raw(refused)), status=422, code="VALIDATION_FAILED")
+    two = _draft_payload(sender, recipient)
+    two["blobs"] += [{**video, "blob_id": str(uuid4())}, {**video, "blob_id": str(uuid4())}]
+    _assert_problem(_post(client, sender["access_token"], _raw(two)), status=422, code="VALIDATION_FAILED")
+
+
 def test_replay_response_uses_current_blob_states(client_factory) -> None:
     client, factory = client_factory
     sender = _register(client, email="state-alice@example.com", handle="statealice")

@@ -59,12 +59,14 @@ def test_blob_enums_members_exact() -> None:
         "CONTENT_MANIFEST",
         "PHOTO",
         "MEDIA",
+        "VIDEO",
     ]
     assert [member.value for member in CapsuleBlobKind] == [
         "RECOGNITION_MANIFEST",
         "CONTENT_MANIFEST",
         "PHOTO",
         "MEDIA",
+        "VIDEO",
     ]
     assert issubclass(CapsuleBlobState, str)
     assert [member.name for member in CapsuleBlobState] == ["DECLARED", "STORED"]
@@ -87,7 +89,7 @@ def test_column_types_and_nullability_exact() -> None:
     assert kind.type.name == "capsule_blob_kind"
     assert kind.type.enum_class is CapsuleBlobKind
     assert kind.type.native_enum is True
-    assert list(kind.type.enums) == ["RECOGNITION_MANIFEST", "CONTENT_MANIFEST", "PHOTO", "MEDIA"]
+    assert list(kind.type.enums) == ["RECOGNITION_MANIFEST", "CONTENT_MANIFEST", "PHOTO", "MEDIA", "VIDEO"]
     ordinal = _column("ordinal")
     assert isinstance(ordinal.type, SmallInteger)
     assert ordinal.type.python_type is int
@@ -161,7 +163,7 @@ def test_exactly_three_named_checks_and_normalized_sql() -> None:
         ),
         "ck_capsule_blobs_kind_ordinal_shape": (
             "((kind = 'PHOTO' AND ordinal IS NOT NULL AND ordinal BETWEEN 0 AND 4) OR "
-            "(kind IN ('RECOGNITION_MANIFEST', 'CONTENT_MANIFEST', 'MEDIA') AND ordinal IS NULL))"
+            "(kind IN ('RECOGNITION_MANIFEST', 'CONTENT_MANIFEST', 'MEDIA', 'VIDEO') AND ordinal IS NULL))"
         ),
     }
 
@@ -174,6 +176,7 @@ def test_capsule_id_index_and_partial_unique_indexes_have_postgresql_ddl() -> No
         "uq_capsule_blobs_one_content_manifest_per_capsule",
         "uq_capsule_blobs_photo_ordinal_per_capsule",
         "uq_capsule_blobs_one_media_per_capsule",
+        "uq_capsule_blobs_one_video_per_capsule",
     }
     assert [column.name for column in indexes["ix_capsule_blobs_capsule_id"].columns] == [
         "capsule_id"
@@ -195,6 +198,10 @@ def test_capsule_id_index_and_partial_unique_indexes_have_postgresql_ddl() -> No
         "uq_capsule_blobs_one_media_per_capsule": (
             ["capsule_id"],
             "kind = 'MEDIA'",
+        ),
+        "uq_capsule_blobs_one_video_per_capsule": (
+            ["capsule_id"],
+            "kind = 'VIDEO'",
         ),
     }
     for name, (columns, predicate) in expected.items():

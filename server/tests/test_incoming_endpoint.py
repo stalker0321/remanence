@@ -230,6 +230,9 @@ def test_auth_and_query_strictness_do_not_need_database() -> None:
         "limit=1&limit=2",
         "limit=1&",
         "page=1",
+        "media=audio",
+        "media=voice,video",
+        "media=voice&media=video",
     ]
     for query in invalid_queries:
         response = client.get(f"/v1/capsules/incoming?{query}")
@@ -573,3 +576,17 @@ def test_live_isolation_ready_only_synced_allow_list_and_bytes(client_factory) -
     assert "object_key" not in leaked
     assert "AVAILABLE" not in leaked
     assert "CIPHERTEXT_SYNCED" not in leaked
+
+
+def test_media_query_says_which_media_the_client_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict] = []
+
+    def fake_list(self, **kwargs):
+        captured.append(kwargs)
+        return IncomingCapsulePage(items=(), has_more=False, next_cursor=None)
+
+    client, _principal_id, _rolled = _mocked_client(monkeypatch, fake_list, user_id=uuid4())
+    for query in ("", "media=voice", "media=video"):
+        response = _get(client, "unused", query)
+        assert response.status_code == 200, response.text
+    assert [(call["media"], call["video"]) for call in captured] == [(False, False), (True, False), (True, True)]

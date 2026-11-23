@@ -394,7 +394,7 @@ class PendingOwnedMaterialRepository internal constructor(
             PendingManifestResult.Manifest(
                 dto.deliveryId,
                 dto.artifacts.map {
-                    require(it.blobId.isNotBlank() && it.kind in 1..3 &&
+                    require(it.blobId.isNotBlank() && it.kind in 1..5 &&
                         it.ciphertextSize >= 0 && it.ciphertextSha256Hex.length == 64)
                     PendingManifestArtifact(
                         it.blobId, it.kind, it.ordinal,

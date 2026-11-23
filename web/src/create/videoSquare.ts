@@ -77,6 +77,7 @@ export class VideoRecorder {
   private finished: Promise<Uint8Array> | null = null
   private startedAt = 0
   private poster: Promise<Blob> | null = null
+  private closed = false
   private readonly canvas = document.createElement('canvas')
 
   async start(preview: HTMLVideoElement): Promise<void> {
@@ -88,6 +89,11 @@ export class VideoRecorder {
       })
     } catch (error) {
       throw new VideoError(error instanceof DOMException && error.name === 'NotAllowedError' ? 'denied' : 'failed')
+    }
+    // Cancelled while the camera was being asked for: free it at once.
+    if (this.closed) {
+      this.release()
+      throw new VideoError('failed')
     }
     preview.srcObject = this.stream
     preview.muted = true
@@ -153,6 +159,7 @@ export class VideoRecorder {
   }
 
   close(): void {
+    this.closed = true
     if (this.recorder !== null) {
       this.recorder.ondataavailable = null
       this.recorder.onstop = null

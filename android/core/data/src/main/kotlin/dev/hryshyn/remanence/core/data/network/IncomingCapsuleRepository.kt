@@ -524,7 +524,8 @@ class IncomingCapsuleRepository internal constructor(
         private const val MAX_VIDEO_BYTES = 6_291_489
         private const val MAX_TOTAL_CIPHERTEXT_BYTES = 44_040_192L
         private const val MIN_BLOB_COUNT = 5
-        private const val MAX_BLOB_COUNT = 8
+        // 1 recognition + 1 content + 3..5 photos + a voice note + a video square (ADR-021).
+        private const val MAX_BLOB_COUNT = 9
         private const val PHOTO_ORDINAL_MIN = 0
         private const val PHOTO_ORDINAL_MAX = 4
         private const val NON_PHOTO_ORDINAL = -1

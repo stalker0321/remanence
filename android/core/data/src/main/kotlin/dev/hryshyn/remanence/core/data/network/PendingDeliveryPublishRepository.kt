@@ -242,7 +242,7 @@ class PendingDeliveryPublishRepository internal constructor(
             return PendingDraftResult.Failure(PendingPublishFailure.VALIDATION_FAILED, retryable = false)
         }
         for (artifact in artifacts) {
-            if (artifact.blobId.isBlank() || artifact.kind !in 1..3 ||
+            if (artifact.blobId.isBlank() || artifact.kind !in 1..5 ||
                 artifact.ciphertextSize < 0 || artifact.ciphertextSize > MAX_PENDING_BLOB_BYTES ||
                 artifact.ciphertextSha256Hex.length != 64
             ) {

@@ -728,18 +728,26 @@ export function Create({
   async function setVideo(next: VideoRecording | null): Promise<void> {
     invalidateSend()
     const previous = videoRef.current
-    if (previous !== null) {
-      photos.remove(previous.posterId)
+    const drop = (held: (VideoRecording & { posterId: string }) | null) => {
+      if (held === null) return
+      photos.remove(held.posterId)
       rememberPhotos()
     }
-    setVideoState(null)
-    videoRef.current = null
-    setStamp((value) => value + 1)
-    if (next === null) return
+    if (next === null) {
+      drop(previous)
+      setVideoState(null)
+      videoRef.current = null
+      setStamp((value) => value + 1)
+      return
+    }
+    // The new first frame joins first; only once it is in does the old take go,
+    // so a refused frame keeps the video the card had.
     const before = new Set(photos.photos().map((photo) => photo.id))
     await addPhotos([new File([next.poster], 'video-first-frame.jpg', { type: 'image/jpeg' })])
-    const poster = photos.photos().find((photo) => !before.has(photo.id))
+    const added = photos.photos().filter((photo) => !before.has(photo.id))
+    const poster = added.find((photo) => photo.width === photo.height && photo.width === next.size) ?? added[added.length - 1]
     if (!poster) return
+    drop(previous)
     const held = { ...next, posterId: poster.id }
     videoRef.current = held
     setVideoState(held)

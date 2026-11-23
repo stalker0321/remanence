@@ -85,7 +85,9 @@ export function VideoSquare({ scene, video, film, watch, mute }: {
         playsInline
         preload="auto"
         aria-hidden="true"
-        onTimeUpdate={(event) => setElapsed(event.currentTarget.currentTime * 1000)}
+        onTimeUpdate={(event) => {
+          if (sound) setElapsed(event.currentTarget.currentTime * 1000)
+        }}
         onEnded={(event) => quiet(event.currentTarget)}
       />
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
@@ -99,17 +101,21 @@ export function VideoSquare({ scene, video, film, watch, mute }: {
   )
 }
 
-function useReducedMotion(): boolean {
-  const query = typeof window === 'undefined' || typeof window.matchMedia !== 'function'
+function reducedMotionQuery(): MediaQueryList | null {
+  return typeof window === 'undefined' || typeof window.matchMedia !== 'function'
     ? null
     : window.matchMedia('(prefers-reduced-motion: reduce)')
-  const [reduced, setReduced] = useState(query?.matches ?? false)
+}
+
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(() => reducedMotionQuery()?.matches ?? false)
   useEffect(() => {
+    const query = reducedMotionQuery()
     if (!query) return
     const update = () => setReduced(query.matches)
     query.addEventListener('change', update)
     return () => query.removeEventListener('change', update)
-  }, [query])
+  }, [])
   return reduced
 }
 

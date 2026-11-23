@@ -217,12 +217,15 @@ internal fun CapsuleImageExportButton(
         scope.launch {
             try {
                 val png = export.capture()
-                val parts = checkNotNull(extras)()
                 val zip = try {
-                    withContext(Dispatchers.Default) { CapsuleWholeArchive.build(png, parts) }
+                    val parts = checkNotNull(extras)()
+                    try {
+                        withContext(Dispatchers.Default) { CapsuleWholeArchive.build(png, parts) }
+                    } finally {
+                        parts.forEach { it.second.fill(0) }
+                    }
                 } finally {
                     png.fill(0)
-                    parts.forEach { it.second.fill(0) }
                 }
                 pending.value = zip
                 saveWhole.launch("remanence.zip")

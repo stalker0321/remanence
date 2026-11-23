@@ -88,6 +88,7 @@ class VideoSquareRecorder(private val context: Context) {
     private var startedAt = 0L
     private var finished: ((Result<Unit>) -> Unit)? = null
     private var outcome: Result<Unit>? = null
+    private var closed = false
 
     /** Opens the front camera into [surface] through [preview]. */
     suspend fun open(owner: LifecycleOwner, preview: Preview.SurfaceProvider, rotation: Int) {
@@ -101,6 +102,8 @@ class VideoSquareRecorder(private val context: Context) {
                 }
             }, ContextCompat.getMainExecutor(context))
         }
+        // Cancelled while the camera provider was loading: never bind it.
+        if (closed) return
         provider = cameraProvider
         val recorder = Recorder.Builder()
             .setQualitySelector(QualitySelector.from(Quality.SD, FallbackStrategy.higherQualityOrLowerThan(Quality.SD)))
@@ -197,6 +200,7 @@ class VideoSquareRecorder(private val context: Context) {
     }
 
     fun close() {
+        closed = true
         recording?.close()
         recording = null
         file?.delete()

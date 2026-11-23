@@ -27,6 +27,7 @@ export function VideoDraft(props: {
 }) {
   const { video, onVideo, t } = props
   const [phase, setPhase] = useState<'idle' | 'camera' | 'recording' | 'measuring'>('idle')
+  const [ready, setReady] = useState(false)
   const [failure, setFailure] = useState<VideoFailure | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [url, setUrl] = useState<string | null>(null)
@@ -60,7 +61,10 @@ export function VideoDraft(props: {
     if (element === null) return
     const next = new VideoRecorder()
     recorder.current = next
-    next.start(element).catch((error: unknown) => {
+    setReady(false)
+    next.start(element).then(() => {
+      if (recorder.current === next) setReady(true)
+    }, (error: unknown) => {
       if (recorder.current !== next) return
       recorder.current = null
       next.close()
@@ -126,7 +130,7 @@ export function VideoDraft(props: {
                 <span className="voice-dot" aria-hidden="true" />{t('videoStop')}
               </button>
             ) : (
-              <button type="button" className="primary voice-record" disabled={phase !== 'camera'} onClick={record}>
+              <button type="button" className="primary voice-record" disabled={phase !== 'camera' || !ready} onClick={record}>
                 <span className="voice-dot" aria-hidden="true" />{t('videoStart')}
               </button>
             )}

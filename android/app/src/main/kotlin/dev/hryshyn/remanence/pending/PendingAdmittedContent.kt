@@ -87,6 +87,10 @@ class PendingAdmittedContent(
          * photo-count fallback.
          */
         val manifest: dev.hryshyn.remanence.core.crypto.ContentManifestContent,
+        /** ADR-021: the voice note's MP4 (the signed kind-4 blob the manifest names), or null. */
+        val sound: ByteArray? = null,
+        /** ADR-021: the video square's MP4 (the signed kind-5 blob the manifest names), or null. */
+        val film: ByteArray? = null,
     )
 
     suspend fun openPhotos(
@@ -181,6 +185,8 @@ class PendingAdmittedContent(
                 var manifests = 0
                 var recognitions = 0
                 val declaredPhotos = LinkedHashMap<Int, String>()
+                // ADR-021: kind 4 (voice note) and kind 5 (video square) -> blob id and MP4.
+                val media = LinkedHashMap<Int, Pair<String, ByteArray>>()
                 var manifestContent: dev.hryshyn.remanence.core.crypto.ContentManifestContent? = null
                 for (binding in statement.artifactsList) {
                     if (binding.kind == 1) {
@@ -191,7 +197,7 @@ class PendingAdmittedContent(
                         recognitions++
                         continue
                     }
-                    if (binding.kind != 2 && binding.kind != 3) continue
+                    if (binding.kind !in 2..5) continue
                     val blobId = uuidString(binding.blobId.toByteArray(), "pending blob id malformed")
                     checkSession(ownerUserId)
                     val ciphertext = when (
@@ -253,6 +259,14 @@ class PendingAdmittedContent(
                         } finally {
                             opened.fill(0)
                         }
+                    } else if (binding.kind == 4 || binding.kind == 5) {
+                        wiped += opened
+                        if (binding.ordinal != -1 || media.put(binding.kind, blobId to opened) != null) {
+                            throw IllegalStateException("pending media duplicated")
+                        }
+                        if (opened.size < 8 || String(opened, 4, 4, Charsets.US_ASCII) != "ftyp") {
+                            throw IllegalStateException("pending media is not an MP4")
+                        }
                     } else {
                         wiped += opened
                         if (photos.put(binding.ordinal, opened) != null) {
@@ -276,7 +290,13 @@ class PendingAdmittedContent(
                     throw IllegalStateException("pending photo map mismatch")
                 }
                 if (photos.isEmpty()) throw IllegalStateException("pending gift has no photos")
-                val result = OpenedPhotos(photos.toMap(), note, manifest)
+                // The manifest names exactly the signed voice note and video, or neither.
+                if (manifest.voice?.blobId?.toString() != media[4]?.first ||
+                    manifest.video?.blobId?.toString() != media[5]?.first
+                ) {
+                    throw IllegalStateException("pending media map mismatch")
+                }
+                val result = OpenedPhotos(photos.toMap(), note, manifest, media[4]?.second, media[5]?.second)
                 wiped.clear()
                 return result
             } catch (cancelled: CancellationException) {

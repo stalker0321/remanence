@@ -93,6 +93,7 @@ object PublishStatementBuilder {
             CapsuleArtifactKind.CONTENT_MANIFEST -> ArtifactKind.CONTENT_MANIFEST
             CapsuleArtifactKind.PHOTO -> ArtifactKind.PHOTO
             CapsuleArtifactKind.MEDIA -> ArtifactKind.MEDIA
+            CapsuleArtifactKind.VIDEO -> ArtifactKind.VIDEO
         }
 
     private fun ciphertextCap(kind: CapsuleArtifactKind): Long =
@@ -105,6 +106,8 @@ object PublishStatementBuilder {
                 ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.MEDIA ->
                 ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.VIDEO ->
+                ProtocolV1Limits.ENCRYPTED_VIDEO_MAX_CIPHERTEXT_BYTES
         }
 
     private const val SHA256_BYTES = 32

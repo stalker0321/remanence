@@ -107,7 +107,12 @@ class CapsulePublisherVoiceTest {
         decor = listOf(GeneratorExpression.SceneDecor(GeneratorExpression.DecorKind.CARRIER, 6, 5, 349, 627)),
     )
 
-    private fun request(mode: String?, voice: CapsuleVoiceNote?, snapshot: CapsuleTrackSnapshotV1? = null): CapsulePublishRequest {
+    private fun request(
+        mode: String?,
+        voice: CapsuleVoiceNote?,
+        snapshot: CapsuleTrackSnapshotV1? = null,
+        video: CapsuleVideoSquare? = null,
+    ): CapsulePublishRequest {
         val resolved = expression(mode)
         return CapsulePublishRequest(
             capsuleId = CapsuleId(capsuleUuid),
@@ -128,6 +133,7 @@ class CapsulePublisherVoiceTest {
             expression = CapsuleExpressionArtifact(GeneratorBer1Provider.candidateIdFor(resolved), contentIds, resolved),
             trackSnapshot = snapshot,
             voice = voice,
+            video = video,
         )
     }
 
@@ -181,5 +187,42 @@ class CapsulePublisherVoiceTest {
         assertThrows(IllegalArgumentException::class.java) { publisher.publish(request("voice-plate", voice, song)) }
         assertThrows(IllegalArgumentException::class.java) { CapsuleVoiceNote(ByteArray(16), 4200, peaks) }
         assertThrows(IllegalArgumentException::class.java) { CapsuleVoiceNote(sound.copyOf(), 60_001, peaks) }
+    }
+
+    private val film = byteArrayOf(0, 0, 0, 16) + "ftypisom".toByteArray() + ByteArray(64) { (it * 3).toByte() }
+
+    @Test
+    fun aVideoSquareIsTheOneVideoArtifactAfterTheVoiceNoteAndOpensToTheExactFilm() {
+        val prepared = publisher.publish(
+            request("voice-plate", CapsuleVoiceNote(sound.copyOf(), 4200, peaks), video = CapsuleVideoSquare(film.copyOf(), 12_300, 720, "c1")),
+        )
+        val video = prepared.artifacts.single { it.kind == OutboxArtifactKind.VIDEO }
+        assertEquals(-1, video.ordinal)
+        assertEquals(0x04.toByte(), BlobId(video.blobId).toProtoBytes().byteAt(0))
+        assertEquals(listOf(OutboxArtifactKind.MEDIA, OutboxArtifactKind.VIDEO), prepared.artifacts.takeLast(2).map { it.kind })
+        val result = open(prepared)
+        val material = (result as? PresentationAcceptancePreparationResult.Prepared)?.material
+            ?: throw AssertionError("expected Prepared, got $result")
+        try {
+            val manifest = requireNotNull(material.video())
+            assertEquals(video.blobId, manifest.blobId)
+            assertEquals(12_300, manifest.durationMs)
+            assertEquals(720, manifest.size)
+            assertEquals("c1", manifest.posterContentId)
+            assertArrayEquals(film, material.loadVideo())
+            assertArrayEquals(sound, material.loadVoice())
+        } finally {
+            material.close()
+        }
+    }
+
+    @Test
+    fun aVideoSquareNeedsItsFirstFrameAmongThePhotosAndAnMp4InBounds() {
+        assertThrows(IllegalArgumentException::class.java) {
+            publisher.publish(request(null, null, video = CapsuleVideoSquare(film.copyOf(), 12_300, 720, "nobody")))
+        }
+        assertThrows(IllegalArgumentException::class.java) { CapsuleVideoSquare(ByteArray(16), 12_300, 720, "c1") }
+        assertThrows(IllegalArgumentException::class.java) { CapsuleVideoSquare(film.copyOf(), 30_001, 720, "c1") }
+        assertThrows(IllegalArgumentException::class.java) { CapsuleVideoSquare(film.copyOf(), 12_300, 100, "c1") }
     }
 }

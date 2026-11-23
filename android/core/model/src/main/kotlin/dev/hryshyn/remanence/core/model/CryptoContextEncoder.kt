@@ -92,6 +92,7 @@ object CryptoContextEncoder {
             CapsuleArtifactKind.RECOGNITION_MANIFEST,
             CapsuleArtifactKind.CONTENT_MANIFEST,
             CapsuleArtifactKind.MEDIA,
+            CapsuleArtifactKind.VIDEO,
             ->
                 ordinal == ProtocolV1Limits.NON_PHOTO_ORDINAL
         }
@@ -106,6 +107,7 @@ object CryptoContextEncoder {
             CapsuleArtifactKind.CONTENT_MANIFEST -> ArtifactKind.CONTENT_MANIFEST
             CapsuleArtifactKind.PHOTO -> ArtifactKind.PHOTO
             CapsuleArtifactKind.MEDIA -> ArtifactKind.MEDIA
+            CapsuleArtifactKind.VIDEO -> ArtifactKind.VIDEO
         }
 
     private fun encode(prefix: String, context: MessageLite): ByteString {

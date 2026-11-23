@@ -66,8 +66,11 @@ interface VoicePlayer {
     fun release()
 }
 
-/** The platform player over the in-memory sound; prepared on the first press. */
-internal class MediaVoicePlayer(private val sound: VoiceSound) : VoicePlayer {
+/**
+ * The platform player over the in-memory sound; prepared on the first press.
+ * Starting it claims the card's sound, so the video square goes quiet.
+ */
+internal class MediaVoicePlayer(private val sound: VoiceSound, private val card: CardSound = CardSound()) : VoicePlayer {
     override var playing by mutableStateOf(false)
         private set
 
@@ -87,11 +90,13 @@ internal class MediaVoicePlayer(private val sound: VoiceSound) : VoicePlayer {
             })
             created.setOnPreparedListener {
                 prepared = true
+                card.claim(this) { pause() }
                 it.start()
                 playing = true
             }
             created.setOnCompletionListener {
                 it.seekTo(0)
+                card.release(this)
                 playing = false
             }
             created.setOnErrorListener { _, _, _ ->
@@ -103,15 +108,22 @@ internal class MediaVoicePlayer(private val sound: VoiceSound) : VoicePlayer {
         }
         if (!prepared) return
         if (current.isPlaying) {
-            current.pause()
-            playing = false
+            pause()
         } else {
+            card.claim(this) { pause() }
             current.start()
             playing = true
         }
     }
 
+    private fun pause() {
+        player?.takeIf { it.isPlaying }?.pause()
+        card.release(this)
+        playing = false
+    }
+
     override fun release() {
+        card.release(this)
         player?.release()
         player = null
         playing = false
@@ -122,7 +134,8 @@ internal class MediaVoicePlayer(private val sound: VoiceSound) : VoicePlayer {
 @Composable
 internal fun rememberVoicePlayer(
     sound: VoiceSound,
-    create: (VoiceSound) -> VoicePlayer = ::MediaVoicePlayer,
+    card: CardSound = remember { CardSound() },
+    create: (VoiceSound) -> VoicePlayer = { MediaVoicePlayer(it, card) },
 ): VoicePlayer {
     val player = remember(sound) { create(sound) }
     DisposableEffect(player) { onDispose { player.release() } }

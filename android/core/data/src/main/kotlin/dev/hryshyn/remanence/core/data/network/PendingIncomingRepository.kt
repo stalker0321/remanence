@@ -136,6 +136,9 @@ class PendingIncomingRepository internal constructor(
         }
         val url = baseUrl.resolve("v2/pending-incoming").newBuilder()
             .addQueryParameter("limit", limit.toString())
+            // ADR-021: first gifts with a voice note or a video square are listed
+            // only to a client that reads them; "video" asks for both.
+            .addQueryParameter("media", "video")
         if (!cursor.isNullOrEmpty()) {
             url.addQueryParameter("cursor", cursor)
         }

@@ -563,7 +563,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
         val kind = CapsuleArtifactKind.valueOf(row.kind)
         require(kind != CapsuleArtifactKind.RECOGNITION_MANIFEST)
         val ordinal = when (kind) {
-                CapsuleArtifactKind.CONTENT_MANIFEST, CapsuleArtifactKind.MEDIA -> {
+                CapsuleArtifactKind.CONTENT_MANIFEST, CapsuleArtifactKind.MEDIA, CapsuleArtifactKind.VIDEO -> {
                     require(row.ordinal == null)
                     ProtocolV1Limits.NON_PHOTO_ORDINAL
                 }
@@ -577,6 +577,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
             CapsuleArtifactKind.CONTENT_MANIFEST -> ProtocolV1Limits.CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.PHOTO -> ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.MEDIA -> ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.VIDEO -> ProtocolV1Limits.ENCRYPTED_VIDEO_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.RECOGNITION_MANIFEST ->
                 throw IllegalArgumentException("recognition is not prefetch work")
         }
@@ -611,6 +612,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
             CapsuleArtifactKind.RECOGNITION_MANIFEST,
             CapsuleArtifactKind.CONTENT_MANIFEST,
             CapsuleArtifactKind.MEDIA,
+            CapsuleArtifactKind.VIDEO,
             -> {
                 require(row.ordinal == null)
                 ProtocolV1Limits.NON_PHOTO_ORDINAL
@@ -622,6 +624,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
             CapsuleArtifactKind.CONTENT_MANIFEST -> ProtocolV1Limits.CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.PHOTO -> ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.MEDIA -> ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.VIDEO -> ProtocolV1Limits.ENCRYPTED_VIDEO_MAX_CIPHERTEXT_BYTES
         }
         require(row.expectedSizeBytes in 1L..maxBytes)
         require(row.expectedSha256.size == SHA256_BYTES)

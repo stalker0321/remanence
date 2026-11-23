@@ -28,7 +28,20 @@ internal data class AllFamilyInput(
     val music: Boolean,
     val artwork: Boolean,
     val photos: List<AllFamilyPhoto>,
+    /**
+     * The video square's first frame (ADR-021): it is seated only in a tile
+     * square within 5% and at least 140 units on its short side, so a layout
+     * without such a tile is not offered. The site's `creatorChoices` matches.
+     */
+    val posterContentId: String? = null,
 )
+
+/** ADR-021 §8: the measured floor for the video square's tile. */
+internal const val VIDEO_TILE_MIN = 140.0
+private const val VIDEO_TILE_SKEW = 0.05
+
+internal fun videoTile(width: Double, height: Double): Boolean =
+    minOf(width, height) >= VIDEO_TILE_MIN && kotlin.math.abs(width - height) <= VIDEO_TILE_SKEW * maxOf(width, height)
 
 /** One matched slot: sealed content + integer canvas cell + frozen envelope-50 crop. */
 internal data class MountedPlacement(
@@ -173,7 +186,14 @@ internal class AllFamilyCandidateProducer(
         for ((gid, plans) in plansByGrammar) {
             val matrices = plans.map { plan -> plan.tiles.map { tile -> input.photos.map { photo ->
                 val cell = cells[CropMatrixRequest(photo.contentId, tile.rect.w, tile.rect.h, tile.shape, tile.zooms, tile.assignmentRole)]
-                if (cell?.feasible == true) cell.cost else null
+                // The video's first frame sits only in a tile that can hold the video square.
+                if (photo.contentId == input.posterContentId && !videoTile(tile.rect.w, tile.rect.h)) {
+                    null
+                } else if (cell?.feasible == true) {
+                    cell.cost
+                } else {
+                    null
+                }
             } } }
             val chosen = ArrayList<SelectedBranch>()
             val seen = HashSet<String>()

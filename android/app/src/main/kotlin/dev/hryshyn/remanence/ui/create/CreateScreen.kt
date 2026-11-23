@@ -558,6 +558,7 @@ private fun ContentStepContent(
     val repository = remember(context) {
         (context.applicationContext as RemanenceApplication).container.apiStack.musicSearchRepository
     }
+    val video by viewModel.videoSquare.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize()) {
         recipient?.let { PersonChip(it.handle.toDisplayString()) }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
@@ -592,7 +593,12 @@ private fun ContentStepContent(
                     Text(stringResource(R.string.hold_choose_photos))
                 }
             } else PickedPhotoTiles(pickedIds, thumbnails, selectedIds.toSet(),
-                onToggle = viewModel::togglePickedPhoto, enabled = !preparing)
+                onToggle = viewModel::togglePickedPhoto, enabled = !preparing,
+                videoId = video?.posterPickerId)
+            // ADR-021: the video square takes one photo's place; its first frame joins the photos.
+            VideoDraft(video, onVideo = viewModel::setVideoSquare,
+                photosFull = selectedIds.size >= PhotoSelectionState.MAX_PHOTOS,
+                enabled = !preparing)
             Spacer(Modifier.height(18.dp))
             OutlinedTextField(
                 value = viewModel.noteEditor.text,
@@ -614,14 +620,11 @@ private fun ContentStepContent(
             Spacer(Modifier.height(12.dp))
             // ADR-021: one sound per card, a song or a recorded voice note.
             val voice by viewModel.voiceNote.collectAsStateWithLifecycle()
-            val route by viewModel.pendingRoute.collectAsStateWithLifecycle()
-            val phoneGift = dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled() &&
-                route is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending
             var voiceTab by rememberSaveable { mutableStateOf(voice != null) }
             SoundTabs(voiceTab, onVoiceTab = { voiceTab = it })
             if (voiceTab) {
                 VoiceDraft(voice, onVoice = viewModel::setVoiceNote, songChosen = selection != null,
-                    phoneGift = phoneGift, enabled = !preparing)
+                    enabled = !preparing)
             } else {
                 MusicPickerContent(
                     search = repository::search, vmSelection = selection, selectedArtwork = artwork,
@@ -657,6 +660,8 @@ internal fun PickedPhotoTiles(
     includedIds: Set<String> = selectedIds.toSet(),
     onToggle: ((String) -> Unit)? = null,
     enabled: Boolean = true,
+    /** The video's first frame: marked with the viewfinder corners. */
+    videoId: String? = null,
 ) {
     if (selectedIds.isEmpty()) return
     Column(Modifier.fillMaxWidth().testTag("create_photo_tiles"),
@@ -697,6 +702,12 @@ internal fun PickedPhotoTiles(
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier.align(Alignment.Center).padding(6.dp)
                                         .testTag("create_photo_tile_failed_$index"))
+                            }
+                            if (uri == videoId) {
+                                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()
+                                    .testTag("create_photo_tile_video_$index")) {
+                                    viewfinder(androidx.compose.ui.graphics.Color.White)
+                                }
                             }
                             Box(Modifier.align(Alignment.BottomEnd).padding(5.dp).size(20.dp)
                                 .background(if (included) HoldColors.Accent else HoldColors.Paper, RoundedCornerShape(50))

@@ -42,7 +42,7 @@ class VoiceDraftTest {
     fun aRecordingIsListenedToRecordedAgainOrDeleted() {
         val voice = RecordedVoice(sound.copyOf(), 4200, IntArray(48) { it * 5 })
         var after: RecordedVoice? = voice
-        composeRule.setContent { VoiceDraft(voice, onVoice = { after = it }, songChosen = false, phoneGift = false, enabled = true) }
+        composeRule.setContent { VoiceDraft(voice, onVoice = { after = it }, songChosen = false, enabled = true) }
         composeRule.onNodeWithTag("voice_listen").assertIsDisplayed()
         composeRule.onNodeWithTag("voice_length").assertTextEquals("0:04")
         composeRule.onNodeWithTag("voice_rerecord").assertIsDisplayed()
@@ -53,16 +53,9 @@ class VoiceDraftTest {
     }
 
     @Test
-    fun aSongIsReplacedAndAPhoneGiftCannotCarryAVoiceNote() {
-        composeRule.setContent { VoiceDraft(null, onVoice = {}, songChosen = true, phoneGift = false, enabled = true) }
+    fun aSongIsReplacedByTheRecording() {
+        composeRule.setContent { VoiceDraft(null, onVoice = {}, songChosen = true, enabled = true) }
         composeRule.onNodeWithText("a card holds one sound: the voice note takes the song's place").assertIsDisplayed()
         composeRule.onNodeWithTag("voice_record").assertIsDisplayed()
-    }
-
-    @Test
-    fun aPhoneGiftOffersNoRecording() {
-        composeRule.setContent { VoiceDraft(null, onVoice = {}, songChosen = false, phoneGift = true, enabled = true) }
-        composeRule.onNodeWithTag("voice_pending_unavailable").assertIsDisplayed()
-        composeRule.onNodeWithTag("voice_record").assertDoesNotExist()
     }
 }

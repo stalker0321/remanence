@@ -59,6 +59,10 @@ class CollagePresentationState(
     val voice: dev.hryshyn.remanence.core.crypto.ManifestVoice? = null,
     /** Decrypts the voice note's MP4 (owned by this state once returned); called only when [voice] is set. */
     private val loadVoice: suspend () -> ByteArray? = { null },
+    /** The video square over its poster's tile (ADR-021). */
+    val video: dev.hryshyn.remanence.core.crypto.ManifestVideo? = null,
+    /** Decrypts the video square's MP4 (owned by this state once returned); called only when [video] is set. */
+    private val loadVideo: suspend () -> ByteArray? = { null },
     private val decoder: Ber1PhotoDecoder = DefaultBer1PhotoDecoder,
     /**
      * Direct client-only cover fetcher. Null (or a fetch failure) degrades a
@@ -80,6 +84,8 @@ class CollagePresentationState(
             val artwork: ImageBitmap? = null,
             /** The voice note's MP4 while the card is open; zeroed by [close]. */
             val sound: VoiceSound? = null,
+            /** The video square's MP4 while the card is open; zeroed by [close]. */
+            val film: VoiceSound? = null,
         ) : Status
 
         data class Unsupported(val reason: String) : Status
@@ -102,6 +108,7 @@ class CollagePresentationState(
     private var closed = false
     private var started = false
     private var heldSound: VoiceSound? = null
+    private var heldFilm: VoiceSound? = null
 
     /**
      * Decrypts (via [loadPhoto]) and decodes every sealed content id exactly
@@ -154,14 +161,22 @@ class CollagePresentationState(
             } else {
                 null
             }
+            val film = try {
+                if (video != null) VoiceSound(loadVideo() ?: throw IllegalStateException("the video is missing")) else null
+            } catch (failure: Exception) {
+                sound?.wipe()
+                throw failure
+            }
             synchronized(lock) {
                 if (closed) {
                     decoded.clear()
                     sound?.wipe()
+                    film?.wipe()
                     return
                 }
                 heldSound = sound
-                status = Status.Ready(decoded, artworkBitmap, sound)
+                heldFilm = film
+                status = Status.Ready(decoded, artworkBitmap, sound, film)
             }
         } catch (cancelled: CancellationException) {
             synchronized(lock) { decoded.clear() }
@@ -220,6 +235,8 @@ class CollagePresentationState(
             status = Status.Loading
             heldSound?.wipe()
             heldSound = null
+            heldFilm?.wipe()
+            heldFilm = null
         }
     }
 
@@ -287,7 +304,10 @@ internal fun CollagePresentationHost(
                     val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
                     val musicLabel = state.track?.let { stringResource(R.string.track_open_action, it.title, it.artistDisplay) }
                     // The voice note plays on while the card is turned; it stops when the card closes.
-                    val voicePlayer = status.sound?.let { rememberVoicePlayer(it) }
+                    val cardSound = remember(state) { CardSound() }
+                    val voicePlayer = status.sound?.let { rememberVoicePlayer(it, cardSound) }
+                    val video = state.video
+                    val posterSide = video?.let { held -> state.expression.input.photos.firstOrNull { it.contentId == held.posterContentId }?.widthPx }
                     // The player cue is viewer furniture, not authored media.
                     // Keep every sealed photo/text/cover rect unchanged.
                     val contentScene = remember(result.scene) {
@@ -302,6 +322,10 @@ internal fun CollagePresentationHost(
                                 CapsuleMusicCue(result.scene, images)
                                 if (letter != null) LetterMark(result.scene, measurer, onTurn = { turned = true })
                                 if (voicePlayer != null) VoiceBand(result.scene, voicePlayer)
+                                val film = status.film
+                                if (video != null && film != null && posterSide != null) {
+                                    VideoSquare(result.scene, video, posterSide, rememberVideoPlayer(film, cardSound))
+                                }
                             }
                         }) { sheetModifier ->
                     CardSides(turned && letter != null, Modifier.fillMaxSize(), front = {

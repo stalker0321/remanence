@@ -25,7 +25,7 @@ import dev.hryshyn.remanence.core.data.db.LocalExactDuplicateProtection
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 
 /** Kind of one declared ciphertext blob in the outbox. */
-enum class OutboxArtifactKind { RECOGNITION_MANIFEST, CONTENT_MANIFEST, PHOTO, MEDIA }
+enum class OutboxArtifactKind { RECOGNITION_MANIFEST, CONTENT_MANIFEST, PHOTO, MEDIA, VIDEO }
 
 /** One already-encrypted artifact ready for the ciphertext-only outbox. */
 data class PreparedOutboxArtifact(
@@ -674,6 +674,8 @@ class CapsuleOutboxStager(
         }
         val media = kinds[OutboxArtifactKind.MEDIA].orEmpty()
         require(media.size <= 1 && media.all { it.ordinal == -1 }) { "at most one voice note, ordinal -1" }
+        val video = kinds[OutboxArtifactKind.VIDEO].orEmpty()
+        require(video.size <= 1 && video.all { it.ordinal == -1 }) { "at most one video square, ordinal -1" }
         val ids = prepared.artifacts.map { it.blobId }
         require(ids.size == ids.distinct().size) { "duplicate blob id" }
         require(prepared.artifacts.all { it.ciphertext.isNotEmpty() }) { "empty ciphertext" }

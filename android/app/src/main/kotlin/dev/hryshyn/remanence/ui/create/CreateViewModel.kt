@@ -482,6 +482,52 @@ class CreateViewModel(
     }
 
     /**
+     * ADR-021: the recorded video square, in memory only. It takes one photo's
+     * place: its first frame joins the picked and selected photos (a square
+     * JPEG in the app's cache) and the layouts seat that photo only in a
+     * square tile. Unselecting or replacing the frame drops the video.
+     */
+    private val _videoSquare = MutableStateFlow<RecordedVideo?>(null)
+    val videoSquare: StateFlow<RecordedVideo?> = _videoSquare.asStateFlow()
+
+    fun setVideoSquare(video: RecordedVideo?) {
+        val previous = _videoSquare.value
+        if (previous === video) return
+        _videoSquare.value = video
+        if (previous != null) {
+            _pickedPhotoIds.value = _pickedPhotoIds.value - previous.posterPickerId
+            if (previous.posterPickerId in photoSelection.selectedIds) photoSelection.toggle(previous.posterPickerId)
+            previous.wipe()
+        }
+        if (video != null) {
+            _pickedPhotoIds.value = _pickedPhotoIds.value + video.posterPickerId
+            if (photoSelection.toggle(video.posterPickerId) == PhotoSelectionState.ToggleResult.RejectedAtLimit) {
+                _pickedPhotoIds.value = _pickedPhotoIds.value - video.posterPickerId
+                _videoSquare.value = null
+                video.wipe()
+            }
+        }
+        collageChoices.clear()
+        frozenCollageSelection = null
+        frozenDrawableInputs = null
+        clearCropState()
+        refreshPickedThumbnails()
+        refreshGeneratorPreview()
+    }
+
+    private fun dropVideoSquare() {
+        _videoSquare.value?.wipe()
+        _videoSquare.value = null
+    }
+
+    /** The sealed content id of the video's first frame in [photos] (authored order), or null. */
+    private fun posterContentId(photos: List<dev.hryshyn.remanence.core.model.GeneratorExpression.PhotoRef>): String? {
+        val video = _videoSquare.value ?: return null
+        val index = photoSelection.selectedIds.indexOf(video.posterPickerId)
+        return photos.firstOrNull { it.ordinal == index }?.contentId
+    }
+
+    /**
      * Resolve the selected recording to a sealable descriptor, or leave the
      * artwork absent (text mode). Failures are swallowed by design: artwork
      * must never block or fail the music flow. T144: every finish publishes
@@ -587,6 +633,7 @@ class CreateViewModel(
         artworkSize = _musicArtworkBitmap.value?.let { "${it.width}x${it.height}" },
         artwork = _musicArtwork.value,
         voice = _voiceNote.value?.sha256Hex,
+        video = _videoSquare.value?.sha256Hex,
     )
 
     /** Positive Ready inputs by candidate id (equality-checked on every use). */
@@ -879,9 +926,17 @@ class CreateViewModel(
         // A voice note is planned as a song without a cover and sealed in a voice band.
         val voice = _voiceNote.value
         val artwork = if (voice != null) null else _musicArtwork.value
+        val inputPhotos = when (val preview = _generatorPreview.value) {
+            is GeneratorPreviewState.Ready -> preview.expression.input.photos
+            is GeneratorPreviewState.NotePending -> preview.input.photos
+            else -> return null
+        }
+        val poster = posterContentId(inputPhotos)
+        if (_videoSquare.value != null && poster == null) return null
         val familyInput = dev.hryshyn.remanence.ui.collage.AllFamilyInput(
             id = input.ownerId, sender = senderHandle, note = input.note,
             music = input.music != null || voice != null, artwork = artwork != null, photos = photos,
+            posterContentId = poster,
         )
         // Production supplies the host's real font measurer. Capture its metrics
         // on the UI thread before moving matching/solver work off-main.
@@ -1437,6 +1492,8 @@ class CreateViewModel(
         val letter: String? = null,
         /** An owned copy of the recorded voice note, captured at publication entry. */
         val voice: dev.hryshyn.remanence.create.CapsuleVoiceNote? = null,
+        /** An owned copy of the video square, captured at publication entry. */
+        val video: dev.hryshyn.remanence.create.CapsuleVideoSquare? = null,
         /**
          * T186 M12e-gap3: immutable route + ORIGINAL lease captured at
          * publication entry (startPublishing, before ANY identity or
@@ -1526,6 +1583,7 @@ class CreateViewModel(
         _musicSelection.value = null
         startMusicArtworkResolution(null)
         dropVoiceNote()
+        dropVideoSquare()
         clearCropState()
         frontAttempt.reset()
         frontFingerprintId = null
@@ -1894,7 +1952,13 @@ class CreateViewModel(
         clearCollageDiagnostics()
         clearCropState()
         photoSelection.clear()
-        _pickedPhotoIds.value = ids.distinct().take(PhotoSelectionState.MAX_PHOTOS)
+        // The video's first frame stays one of the photos across a new picker result.
+        val poster = _videoSquare.value?.posterPickerId
+        _pickedPhotoIds.value = if (poster == null) {
+            ids.distinct().take(PhotoSelectionState.MAX_PHOTOS)
+        } else {
+            (ids.distinct().filter { it != poster }.take(PhotoSelectionState.MAX_PHOTOS - 1)) + poster
+        }
         // One picker result is one edit. The per-toggle hook repeats what this
         // method does itself and would start a preview per photo; where that
         // preview finishes at once, the refresh below became a second attempt
@@ -1913,6 +1977,11 @@ class CreateViewModel(
     fun togglePickedPhoto(id: String) {
         if (!requireStep(Step.CONTENT, "photo selection")) return
         if (id !in _pickedPhotoIds.value) return
+        // Unselecting the video's first frame removes the video with it.
+        if (id == _videoSquare.value?.posterPickerId) {
+            setVideoSquare(null)
+            return
+        }
         // PhotoSelection's edit callback invalidates the frozen choice and
         // bridge proof. Unchecked photos remain thumbnails, never sealed input.
         photoSelection.toggle(id)
@@ -2172,16 +2241,24 @@ class CreateViewModel(
         }
         val pendingRouteForInputs = frozenRouteForPublish as?
             dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending
-        // ADR-021: a first gift to a phone number carries no voice note yet.
+        // ADR-021: the voice note and the video square travel in first gifts too.
         val voiceNote = _voiceNote.value
-        if (voiceNote != null && pendingRouteForInputs != null) {
-            failGuard("a voice note cannot go to a phone number yet; publishing cancelled")
-            return
-        }
         val voiceForInputs = try {
             voiceNote?.note()
         } catch (_: IllegalArgumentException) {
             failGuard("the voice note is invalid; publishing cancelled")
+            return
+        }
+        // The video square is sealed over its first frame's content id.
+        val videoSquare = _videoSquare.value
+        val videoForInputs = try {
+            videoSquare?.let { video ->
+                val poster = posterContentId(frozenForPublish.expression.input.photos)
+                    ?: throw IllegalArgumentException("the video's first frame is not among the photos")
+                video.square(poster)
+            }
+        } catch (_: IllegalArgumentException) {
+            failGuard("the video is invalid; publishing cancelled")
             return
         }
         // T186 M12e-gap3b: the ORIGINAL lease is entry state. When a
@@ -2224,6 +2301,7 @@ class CreateViewModel(
             trackSnapshot = trackSnapshot,
             letter = currentLetter(),
             voice = voiceForInputs,
+            video = videoForInputs,
             // T186 M12e-gap3: capture the immutable route + ORIGINAL
             // lease synchronously here (no awaits above since the
             // guard) so the boundary consumes entry-time state even
@@ -2982,6 +3060,7 @@ class CreateViewModel(
                         trackSnapshot = trackSnapshot,
                         letter = inputs.letter,
                         voice = inputs.voice,
+                        video = inputs.video,
                     ),
                 )
                 }
@@ -3101,6 +3180,16 @@ class CreateViewModel(
                             contentIds = frozenSelection.expression.input.photos.map { it.contentId },
                             trackSnapshot = trackSnapshot,
                             letter = inputs.letter,
+                            voice = inputs.voice?.let {
+                                dev.hryshyn.remanence.core.crypto.PendingCapsulePublisher.MediaInput(
+                                    it.mp4, it.durationMs, peaks = ByteArray(it.peaks.size) { index -> it.peaks[index].toByte() },
+                                )
+                            },
+                            video = inputs.video?.let {
+                                dev.hryshyn.remanence.core.crypto.PendingCapsulePublisher.MediaInput(
+                                    it.mp4, it.durationMs, size = it.size, posterContentId = it.posterContentId,
+                                )
+                            },
                         ),
                     ),
                     claimExpiresAt = frozen.claimDeadline,
@@ -3336,6 +3425,7 @@ class CreateViewModel(
         _musicSelection.value = null
         startMusicArtworkResolution(null)
         dropVoiceNote()
+        dropVideoSquare()
         frontAttempt.reset()
         frontFingerprintId = null
         clearCropState()

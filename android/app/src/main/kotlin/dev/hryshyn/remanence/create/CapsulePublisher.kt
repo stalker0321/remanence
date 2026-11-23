@@ -8,6 +8,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import dev.hryshyn.remanence.core.crypto.CapsuleArtifactCryptor
 import dev.hryshyn.remanence.core.crypto.CapsuleKeysetGenerator
+import dev.hryshyn.remanence.core.crypto.ManifestVideo
 import dev.hryshyn.remanence.core.crypto.ManifestVoice
 import dev.hryshyn.remanence.core.crypto.ContentManifestCodec
 import dev.hryshyn.remanence.core.crypto.ManifestPhoto
@@ -103,6 +104,8 @@ data class CapsulePublishRequest(
     val letter: String? = null,
     /** The recorded voice note (ADR-021); requires [expression] with a voice band and no song. */
     val voice: CapsuleVoiceNote? = null,
+    /** The video square (ADR-021); requires [expression] with its square poster among the photos. */
+    val video: CapsuleVideoSquare? = null,
 ) {
     /** Redacted so note text / photo bytes / keys can never reach logs. */
     override fun toString(): String =
@@ -113,7 +116,7 @@ data class CapsulePublishRequest(
             "photoCount=${photoJpegs.size}, notePresent=${noteUtf8 != null}, " +
             "expression=${if (expression == null) "v1" else "v2"}, " +
             "trackSnapshot=${if (trackSnapshot == null) "absent" else "present"}, " +
-            "letterPresent=${letter != null}, voicePresent=${voice != null}, " +
+            "letterPresent=${letter != null}, voicePresent=${voice != null}, videoPresent=${video != null}, " +
             "frontFingerprintProfileId=$frontFingerprintProfileId)"
 }
 
@@ -134,6 +137,27 @@ class CapsuleVoiceNote(
     }
 
     override fun toString(): String = "CapsuleVoiceNote(<redacted>, durationMs=$durationMs)"
+}
+
+/**
+ * A recorded video square: the H.264 + AAC MP4 the recipient plays over its
+ * first frame's tile, its length, square side, and that photo's content id.
+ */
+class CapsuleVideoSquare(
+    val mp4: ByteArray,
+    val durationMs: Int,
+    val size: Int,
+    val posterContentId: String,
+) {
+    init {
+        require(mp4.size >= 8 && String(mp4, 4, 4, Charsets.US_ASCII) == "ftyp") { "video square must be an MP4" }
+        require(mp4.size + ProtocolV1Limits.ARTIFACT_AEAD_OVERHEAD_BYTES <= ProtocolV1Limits.ENCRYPTED_VIDEO_MAX_CIPHERTEXT_BYTES) { "video square is too large" }
+        require(durationMs in 1..ManifestVideo.MAX_MS) { "video square length out of bounds" }
+        require(size in ManifestVideo.MIN_SIZE..ManifestVideo.MAX_SIZE) { "video square side out of bounds" }
+        require(posterContentId.isNotBlank()) { "video square needs its first frame" }
+    }
+
+    override fun toString(): String = "CapsuleVideoSquare(<redacted>, durationMs=$durationMs, size=$size)"
 }
 
 /** ADR-018 v2 expression payload; [contentIds] are authored order, one per photoJpeg. */
@@ -217,6 +241,9 @@ class CapsulePublisher(
         require(request.voice == null || (request.expression != null && request.trackSnapshot == null)) {
             "a voice note requires the v2 expression frame and no song"
         }
+        require(request.video == null || request.expression?.contentIds?.contains(request.video.posterContentId) == true) {
+            "a video square requires the v2 expression frame with its first frame among the photos"
+        }
         // M2-P08: the current sender owns the retry key; ownerUserId
         // must equal senderUserId before any crypto work begins.
         require(request.ownerUserId == request.senderUserId.value.toString()) {
@@ -272,6 +299,8 @@ class CapsulePublisher(
         }
         val mediaBlob = blob(MEDIA_BLOB_BYTE)
         val manifestVoice = request.voice?.let { ManifestVoice(mediaBlob.value, it.durationMs, ByteArray(it.peaks.size) { index -> it.peaks[index].toByte() }) }
+        val videoBlob = blob(VIDEO_BLOB_BYTE)
+        val manifestVideo = request.video?.let { ManifestVideo(videoBlob.value, it.durationMs, it.size, it.posterContentId) }
         val contentCiphertext = if (request.expression != null) {
             val artifact = request.expression
             require(artifact.contentIds.size == request.photoJpegs.size) {
@@ -297,6 +326,7 @@ class CapsulePublisher(
                 request.trackSnapshot,
                 request.letter,
                 manifestVoice,
+                manifestVideo,
             )
         } else {
             ContentManifestCodec().buildAndEncrypt(
@@ -352,6 +382,28 @@ class CapsulePublisher(
             artifacts += PreparedOutboxArtifact(mediaBlob.value, OutboxArtifactKind.MEDIA, NON_PHOTO_ORDINAL, ciphertext)
             bindings += PublishArtifact(
                 ArtifactSlot(mediaBlob, CapsuleArtifactKind.MEDIA, NON_PHOTO_ORDINAL),
+                ciphertext.size.toLong(),
+                ByteString.copyFrom(sha256(ciphertext)),
+            )
+        }
+
+        // 3c. The video square, one VIDEO artifact after the voice note.
+        request.video?.let { video ->
+            val ciphertext = CapsuleArtifactCryptor().encrypt(
+                capsuleKeyset,
+                ArtifactAadInput(
+                    capsuleId = request.capsuleId,
+                    blobId = videoBlob,
+                    artifactKind = CapsuleArtifactKind.VIDEO,
+                    ordinal = NON_PHOTO_ORDINAL,
+                    senderUserId = senderUser,
+                    recipientUserId = recipientUser,
+                ),
+                video.mp4,
+            )
+            artifacts += PreparedOutboxArtifact(videoBlob.value, OutboxArtifactKind.VIDEO, NON_PHOTO_ORDINAL, ciphertext)
+            bindings += PublishArtifact(
+                ArtifactSlot(videoBlob, CapsuleArtifactKind.VIDEO, NON_PHOTO_ORDINAL),
                 ciphertext.size.toLong(),
                 ByteString.copyFrom(sha256(ciphertext)),
             )
@@ -497,6 +549,7 @@ class CapsulePublisher(
         const val RECOGNITION_BLOB_BYTE = 0x01
         const val CONTENT_BLOB_BYTE = 0x02
         const val MEDIA_BLOB_BYTE = 0x03
+        const val VIDEO_BLOB_BYTE = 0x04
         const val PHOTO_BLOB_BASE = 0x10
         const val NON_PHOTO_ORDINAL = -1
     }

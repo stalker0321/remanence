@@ -238,6 +238,8 @@ internal fun CapsuleRoute(
                             letter = source.letter(binding.capsuleId),
                             voice = source.voice(binding.capsuleId),
                             loadVoice = { source.loadVoice(binding.capsuleId) },
+                            video = source.video(binding.capsuleId),
+                            loadVideo = { source.loadVideo(binding.capsuleId) },
                             // Client-only verified cover fetch; failure degrades
                             // to the text/no-art layout.
                             artworkFetcher = ArtworkFetcher.Default,

@@ -176,24 +176,40 @@ class CapsuleContentSource(
     /** The sender's own voice note: the MEDIA blob the manifest names, decrypted on demand. */
     override suspend fun loadVoice(capsuleId: String): ByteArray? {
         val voice = voice(capsuleId) ?: return null
-        return withContext(Dispatchers.IO) {
-            val row = database.outboxBlobDao()
-                .getAllByCapsuleIdAndOwner(capsuleId, requireOwnerUserId())
-                .single { it.kind == OutboxArtifactKind.MEDIA.name && UUID.fromString(it.blobId) == voice.blobId }
-            val routing = routing(capsuleId)
-            CapsuleArtifactCryptor().decrypt(
-                capsuleKeyset(capsuleId),
-                ArtifactAadInput(
-                    capsuleId = CapsuleId(UUID.fromString(capsuleId)),
-                    blobId = BlobId(voice.blobId),
-                    artifactKind = CapsuleArtifactKind.MEDIA,
-                    ordinal = -1,
-                    senderUserId = routing.senderUserId,
-                    recipientUserId = routing.recipientUserId,
-                ),
-                java.io.File(row.localCiphertextPath).readBytes(),
-            )
-        }
+        return loadOwnMedia(capsuleId, voice.blobId, OutboxArtifactKind.MEDIA, CapsuleArtifactKind.MEDIA)
+    }
+
+    override suspend fun video(capsuleId: String): dev.hryshyn.remanence.core.crypto.ManifestVideo? =
+        decryptContent(capsuleId)?.video
+
+    /** The sender's own video square: the VIDEO blob the manifest names, decrypted on demand. */
+    override suspend fun loadVideo(capsuleId: String): ByteArray? {
+        val video = video(capsuleId) ?: return null
+        return loadOwnMedia(capsuleId, video.blobId, OutboxArtifactKind.VIDEO, CapsuleArtifactKind.VIDEO)
+    }
+
+    private suspend fun loadOwnMedia(
+        capsuleId: String,
+        blobId: UUID,
+        outboxKind: OutboxArtifactKind,
+        kind: CapsuleArtifactKind,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        val row = database.outboxBlobDao()
+            .getAllByCapsuleIdAndOwner(capsuleId, requireOwnerUserId())
+            .single { it.kind == outboxKind.name && UUID.fromString(it.blobId) == blobId }
+        val routing = routing(capsuleId)
+        CapsuleArtifactCryptor().decrypt(
+            capsuleKeyset(capsuleId),
+            ArtifactAadInput(
+                capsuleId = CapsuleId(UUID.fromString(capsuleId)),
+                blobId = BlobId(blobId),
+                artifactKind = kind,
+                ordinal = -1,
+                senderUserId = routing.senderUserId,
+                recipientUserId = routing.recipientUserId,
+            ),
+            java.io.File(row.localCiphertextPath).readBytes(),
+        )
     }
 
     /**

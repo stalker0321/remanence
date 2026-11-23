@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ADR-021: the video square on the card and recording it in the photo step. -->
+    <string name="capsule_video_watch">watch the video with sound</string>
+    <string name="capsule_video_mute">turn the video sound off</string>
+    <string name="video_record">record a video</string>
+    <string name="video_start">start</string>
+    <string name="video_stop">stop</string>
+    <string name="video_cancel">cancel</string>
+    <string name="video_rerecord">record again</string>
+    <string name="video_delete">delete</string>
+    <string name="video_hint">up to 30 seconds from the front camera. it takes one photo\'s place, and its first frame shows until it plays</string>
+    <string name="video_photos_full">the video takes one photo\'s place. remove a photo to record one</string>
+    <string name="video_denied">no access to the camera. allow it in settings and try again</string>
+    <string name="video_failed">the video did not record. try again</string>
+    <string name="video_too_large">the video came out too large. record a shorter one</string>
+    <string name="video_too_short">the video is too short. record at least a second</string>
+    <string name="video_mark">video</string>
+</resources>

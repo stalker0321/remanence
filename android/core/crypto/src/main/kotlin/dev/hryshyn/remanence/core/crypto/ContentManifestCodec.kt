@@ -53,7 +53,27 @@ data class ContentManifestContent(
     val letter: String? = null,
     /** v2-only voice note in the song band (field 9, ADR-021); null when absent. */
     val voice: ManifestVoice? = null,
+    /** v2-only video square over its poster's tile (field 10, ADR-021); null when absent. */
+    val video: ManifestVideo? = null,
 )
+
+/**
+ * The video square: its VIDEO blob, length, square side, and the photo whose
+ * tile it plays in (that photo is its first frame and is square too).
+ */
+data class ManifestVideo(
+    val blobId: UUID,
+    val durationMs: Int,
+    val size: Int,
+    val posterContentId: String,
+) {
+    companion object {
+        const val MAX_MS = 30_000
+        const val MIN_SIZE = 240
+        const val MAX_SIZE = 1080
+        const val MIME_TYPE = "video/mp4"
+    }
+}
 
 /** A voice note: its MEDIA blob, length and the 48 bars the sender measured. */
 class ManifestVoice(
@@ -128,6 +148,7 @@ class ContentManifestCodec {
         trackSnapshot: CapsuleTrackSnapshotV1?,
         letter: String? = null,
         voice: ManifestVoice? = null,
+        video: ManifestVideo? = null,
     ): ByteArray {
         require(
             expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V2 ||
@@ -146,7 +167,7 @@ class ContentManifestCodec {
         return build(
             capsuleKeyset, routingContext, photos, note,
             Triple(candidateId, projectionHash, expression), blobIdByContentId,
-            trackSnapshot, letter, voice,
+            trackSnapshot, letter, voice, video,
         )
     }
 
@@ -160,12 +181,13 @@ class ContentManifestCodec {
         trackSnapshot: CapsuleTrackSnapshotV1? = null,
         letter: String? = null,
         voice: ManifestVoice? = null,
+        video: ManifestVideo? = null,
     ): ByteArray = CapsuleArtifactCryptor().encrypt(
         capsuleKeyset = capsuleKeyset,
         context = contentContext(routingContext),
         plaintext = buildPlaintext(
             routingContext.capsuleId, photos, note,
-            expression, blobIdByContentId, trackSnapshot, letter, voice,
+            expression, blobIdByContentId, trackSnapshot, letter, voice, video,
         ),
     )
 
@@ -184,6 +206,7 @@ class ContentManifestCodec {
         trackSnapshot: CapsuleTrackSnapshotV1? = null,
         letter: String? = null,
         voice: ManifestVoice? = null,
+        video: ManifestVideo? = null,
     ): ByteArray {
         validatePhotos(photos)
         validateNote(note)
@@ -201,6 +224,7 @@ class ContentManifestCodec {
         require(voice == null || (voice.durationMs in 1..ManifestVoice.MAX_MS && voice.peaks.size == ManifestVoice.PEAKS)) {
             "voice note is out of bounds"
         }
+        require(video == null || videoValid(video, expression?.third)) { "video square is out of bounds" }
 
         val builder = ContentManifest.newBuilder()
             .setProtocolVersion(if (expression == null) PROTOCOL_VERSION else PROTOCOL_VERSION_V2)
@@ -246,6 +270,18 @@ class ContentManifestCodec {
                     .setMimeType(ManifestVoice.MIME_TYPE)
                     .setDurationMs(held.durationMs)
                     .setPeaks(com.google.protobuf.ByteString.copyFrom(ByteArray(ManifestVoice.PEAKS) { held.peaks[it].toByte() })),
+            )
+        }
+        video?.let { held ->
+            builder.setVideo(
+                MediaEntry.newBuilder()
+                    .setKind(MediaEntry.Kind.VIDEO)
+                    .setBlobId(com.google.protobuf.ByteString.copyFrom(longToBytes(held.blobId)))
+                    .setMimeType(ManifestVideo.MIME_TYPE)
+                    .setDurationMs(held.durationMs)
+                    .setWidth(held.size)
+                    .setHeight(held.size)
+                    .setPosterContentId(held.posterContentId),
             )
         }
 
@@ -347,7 +383,7 @@ class ContentManifestCodec {
             if (manifest.hasLetter()) {
                 throw GeneralSecurityException("v1 content manifest must not carry a letter")
             }
-            if (manifest.hasMedia()) {
+            if (manifest.hasMedia() || manifest.hasVideo()) {
                 throw GeneralSecurityException("v1 content manifest must not carry media")
             }
             ContentManifestContent(protocolVersion = manifest.protocolVersion, photos = parsed, note = note)
@@ -373,11 +409,16 @@ class ContentManifestCodec {
             if (manifest.hasLetter() && !CapsuleLetter.valid(manifest.letter)) {
                 throw GeneralSecurityException("content manifest letter is out of bounds")
             }
+            val expression = parseExpression(manifest.expression, parsed, note)
+            val video = if (manifest.hasVideo()) parseVideo(manifest.video) else null
+            if (video != null && !videoValid(video, expression.expression)) {
+                throw GeneralSecurityException("video square poster is not a square photo of this card")
+            }
             ContentManifestContent(
                 protocolVersion = manifest.protocolVersion,
                 photos = parsed,
                 note = note,
-                expression = parseExpression(manifest.expression, parsed, note),
+                expression = expression,
                 trackSnapshot = if (manifest.hasTrackSnapshot()) {
                     parseTrackSnapshot(manifest.trackSnapshot)
                 } else {
@@ -385,6 +426,7 @@ class ContentManifestCodec {
                 },
                 letter = if (manifest.hasLetter()) manifest.letter else null,
                 voice = if (manifest.hasMedia()) parseVoice(manifest.media) else null,
+                video = video,
             )
         }
     } catch (failure: GeneralSecurityException) {
@@ -801,10 +843,10 @@ class ContentManifestCodec {
     }
 
     private fun parseVoice(proto: MediaEntry): ManifestVoice {
-        // A circle is not drawn yet; it waits for its own release.
-        if (proto.kind != MediaEntry.Kind.VOICE) throw GeneralSecurityException("content manifest media kind is not supported")
+        // Field 9 holds only a voice note; the video square has field 10.
+        if (proto.kind != MediaEntry.Kind.VOICE) throw GeneralSecurityException("content manifest media kind is not a voice note")
         if (proto.hasWidth() || proto.hasHeight() || proto.hasPosterContentId()) {
-            throw GeneralSecurityException("voice media must not carry circle fields")
+            throw GeneralSecurityException("voice media must not carry video fields")
         }
         val blob = proto.blobId.toByteArray()
         if (blob.size != PHOTO_BLOB_ID_BYTES || proto.mimeType != ManifestVoice.MIME_TYPE ||
@@ -814,6 +856,27 @@ class ContentManifestCodec {
         }
         val buffer = java.nio.ByteBuffer.wrap(blob)
         return ManifestVoice(UUID(buffer.long, buffer.long), proto.durationMs, proto.peaks.toByteArray())
+    }
+
+    private fun parseVideo(proto: MediaEntry): ManifestVideo {
+        if (proto.kind != MediaEntry.Kind.VIDEO || !proto.peaks.isEmpty ||
+            !proto.hasWidth() || !proto.hasHeight() || !proto.hasPosterContentId() || proto.width != proto.height
+        ) {
+            throw GeneralSecurityException("content manifest video is malformed")
+        }
+        val blob = proto.blobId.toByteArray()
+        if (blob.size != PHOTO_BLOB_ID_BYTES || proto.mimeType != ManifestVideo.MIME_TYPE) {
+            throw GeneralSecurityException("content manifest video is out of bounds")
+        }
+        val buffer = java.nio.ByteBuffer.wrap(blob)
+        return ManifestVideo(UUID(buffer.long, buffer.long), proto.durationMs, proto.width, proto.posterContentId)
+    }
+
+    private fun videoValid(video: ManifestVideo, expression: GeneratorExpression.ResolvedExpression?): Boolean {
+        val poster = expression?.input?.photos?.firstOrNull { it.contentId == video.posterContentId } ?: return false
+        return video.durationMs in 1..ManifestVideo.MAX_MS &&
+            video.size in ManifestVideo.MIN_SIZE..ManifestVideo.MAX_SIZE &&
+            poster.widthPx == poster.heightPx
     }
 
     private fun parseTrackSnapshot(proto: ProtoTrackSnapshot): CapsuleTrackSnapshotV1 {

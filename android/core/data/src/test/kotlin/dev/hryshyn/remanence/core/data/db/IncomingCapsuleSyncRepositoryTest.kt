@@ -68,7 +68,7 @@ class IncomingCapsuleSyncRepositoryTest {
         val request = server.takeRequest()
         assertEquals("/v1/capsules/incoming", request.url.encodedPath)
         assertEquals("50", request.url.queryParameter("limit"))
-        assertEquals("voice", request.url.queryParameter("media"))
+        assertEquals("video", request.url.queryParameter("media"))
         assertEquals("Bearer access-token", request.headers["Authorization"])
         assertEquals(1, countRows("incoming_capsule"))
         assertEquals(1, countRows("incoming_envelope"))

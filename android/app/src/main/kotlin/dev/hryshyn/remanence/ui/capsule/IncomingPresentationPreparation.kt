@@ -141,6 +141,10 @@ internal class PreparedIncomingPresentation internal constructor(
 
     internal fun loadVoice(): ByteArray? = material.loadVoice()
 
+    internal fun video(): dev.hryshyn.remanence.core.crypto.ManifestVideo? = material.video()
+
+    internal fun loadVideo(): ByteArray? = material.loadVideo()
+
     /** Used only while the owner/capsule boundary is held before grant issue. */
     internal fun isOpenForGrant(): Boolean = !closed.get()
 
@@ -810,6 +814,7 @@ internal class IncomingPresentationPreparation(
             ArtifactKind.CONTENT_MANIFEST -> CapsuleArtifactKind.CONTENT_MANIFEST
             ArtifactKind.PHOTO -> CapsuleArtifactKind.PHOTO
             ArtifactKind.MEDIA -> CapsuleArtifactKind.MEDIA
+            ArtifactKind.VIDEO -> CapsuleArtifactKind.VIDEO
             else -> return null
         }
         val expectedOrdinal = if (kind == CapsuleArtifactKind.PHOTO) binding.ordinal else null
@@ -823,6 +828,7 @@ internal class IncomingPresentationPreparation(
             CapsuleArtifactKind.CONTENT_MANIFEST -> ProtocolV1Limits.CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.PHOTO -> ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.MEDIA -> ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.VIDEO -> ProtocolV1Limits.ENCRYPTED_VIDEO_MAX_CIPHERTEXT_BYTES
         }
         if (blob.expectedSizeBytes !in 1L..maximum) return null
 

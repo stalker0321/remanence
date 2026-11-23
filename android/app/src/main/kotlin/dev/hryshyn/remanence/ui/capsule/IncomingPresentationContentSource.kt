@@ -47,6 +47,16 @@ internal class IncomingPresentationContentSource(
         return prepared.loadVoice()
     }
 
+    override suspend fun video(capsuleId: String): dev.hryshyn.remanence.core.crypto.ManifestVideo? {
+        require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
+        return prepared.video()
+    }
+
+    override suspend fun loadVideo(capsuleId: String): ByteArray? {
+        require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
+        return prepared.loadVideo()
+    }
+
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {
         require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
         if (prepared.protocolVersion == 1) return CapsulePresentationAdmission.LegacyV1

@@ -17,6 +17,5 @@
     <string name="voice_denied">нет доступа к микрофону. разрешите его в настройках и попробуйте ещё раз</string>
     <string name="voice_failed">запись не получилась. попробуйте ещё раз</string>
     <string name="voice_too_large">запись слишком большая. попробуйте покороче</string>
-    <string name="voice_pending_unavailable">на номер телефона голос пока не отправить</string>
     <string name="voice_elapsed">%1$s / %2$s</string>
 </resources>

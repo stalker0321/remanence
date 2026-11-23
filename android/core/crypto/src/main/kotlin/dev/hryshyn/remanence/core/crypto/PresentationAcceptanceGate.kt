@@ -113,6 +113,9 @@ class PreparedPresentationMaterial internal constructor(
     /** The voice note in the song band (ADR-021), or null when absent. */
     fun voice(): ManifestVoice? = requireOpen().voice
 
+    /** The video square over its poster's tile (ADR-021), or null when absent. */
+    fun video(): ManifestVideo? = requireOpen().video
+
     /** Decrypts one verified photo from the exact snapshot captured at prepare time. */
     fun loadPhoto(ordinal: Int): ByteArray {
         val manifest = requireOpen()
@@ -177,6 +180,41 @@ class PreparedPresentationMaterial internal constructor(
             throw GeneralSecurityException("voice note is not an MP4")
         }
         return sound
+    }
+
+    /**
+     * Decrypts the video square (ADR-021) the same way, or null when the card
+     * has none. The gate tied it to the one signed VIDEO binding.
+     */
+    fun loadVideo(): ByteArray? {
+        val video = requireOpen().video ?: return null
+        val capsuleKeyset = capsuleKeysetValue ?: error("prepared material is closed")
+        val blobId = BlobId(video.blobId)
+        val ciphertext = ciphertexts[blobId]?.copyOf()
+            ?: throw IllegalStateException("verified video ciphertext is unavailable")
+        val film = try {
+            CapsuleArtifactCryptor().decrypt(
+                capsuleKeyset,
+                ArtifactAadInput(
+                    capsuleId = CapsuleId.fromProtoBytes(statement.capsuleId),
+                    blobId = blobId,
+                    artifactKind = CapsuleArtifactKind.VIDEO,
+                    ordinal = NON_PHOTO_ORDINAL,
+                    senderUserId = UserId.fromProtoBytes(statement.senderUserId),
+                    recipientUserId = UserId.fromProtoBytes(statement.recipientUserId),
+                ),
+                ciphertext,
+            )
+        } finally {
+            ciphertext.fill(0)
+        }
+        if (film.size < 8 || film[4] != 'f'.code.toByte() || film[5] != 't'.code.toByte() ||
+            film[6] != 'y'.code.toByte() || film[7] != 'p'.code.toByte()
+        ) {
+            film.fill(0)
+            throw GeneralSecurityException("video square is not an MP4")
+        }
+        return film
     }
 
     override fun close() {
@@ -352,6 +390,16 @@ class PresentationAcceptanceGate(
                 return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
             }
         } else if (mediaBindings.size != 1 || BlobId.fromProtoBytes(mediaBindings.single().blobId) != BlobId(voice.blobId)) {
+            return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
+        }
+        // The same for the video square and its one signed VIDEO binding.
+        val videoBindings = verified.statement.artifactsList.filter { it.kind == ArtifactKind.VIDEO }
+        val video = manifest.video
+        if (video == null) {
+            if (videoBindings.isNotEmpty()) {
+                return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
+            }
+        } else if (videoBindings.size != 1 || BlobId.fromProtoBytes(videoBindings.single().blobId) != BlobId(video.blobId)) {
             return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
         }
 

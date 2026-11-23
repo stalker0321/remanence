@@ -7,6 +7,9 @@ enum class CapsuleArtifactKind {
 
     /** ADR-021: one voice note (ordinal -1), sorted after the photos. */
     MEDIA,
+
+    /** ADR-021: one video square (ordinal -1), sorted after the voice note. */
+    VIDEO,
 }
 
 data class ArtifactSlot(
@@ -23,6 +26,7 @@ enum class ArtifactLayoutError {
     NON_PHOTO_ORDINAL,
     PHOTO_ORDINAL_SEQUENCE,
     MEDIA_CARDINALITY,
+    VIDEO_CARDINALITY,
 }
 
 sealed interface ArtifactLayoutValidation {
@@ -55,9 +59,14 @@ object ArtifactLayoutValidator {
         if (media.size > ProtocolV1Limits.MEDIA_COUNT_MAX) {
             return ArtifactLayoutValidation.Invalid(ArtifactLayoutError.MEDIA_CARDINALITY)
         }
+        val video = slots.filter { it.kind == CapsuleArtifactKind.VIDEO }
+        if (video.size > ProtocolV1Limits.VIDEO_COUNT_MAX) {
+            return ArtifactLayoutValidation.Invalid(ArtifactLayoutError.VIDEO_CARDINALITY)
+        }
         if (recognition.any { it.ordinal != ProtocolV1Limits.NON_PHOTO_ORDINAL } ||
             content.any { it.ordinal != ProtocolV1Limits.NON_PHOTO_ORDINAL } ||
-            media.any { it.ordinal != ProtocolV1Limits.NON_PHOTO_ORDINAL }
+            media.any { it.ordinal != ProtocolV1Limits.NON_PHOTO_ORDINAL } ||
+            video.any { it.ordinal != ProtocolV1Limits.NON_PHOTO_ORDINAL }
         ) {
             return ArtifactLayoutValidation.Invalid(ArtifactLayoutError.NON_PHOTO_ORDINAL)
         }

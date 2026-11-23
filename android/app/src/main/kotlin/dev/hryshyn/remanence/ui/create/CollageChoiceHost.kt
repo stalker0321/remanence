@@ -50,6 +50,8 @@ internal data class PrepareInputs(
     val artwork: GeneratorExpression.ArtworkRef? = null,
     /** SHA-256 of the recorded voice note, or null. */
     val voice: String? = null,
+    /** SHA-256 of the recorded video square, or null. */
+    val video: String? = null,
 )
 
 /**

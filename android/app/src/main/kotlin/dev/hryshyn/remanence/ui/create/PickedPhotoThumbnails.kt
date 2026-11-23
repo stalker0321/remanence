@@ -42,7 +42,8 @@ object PickedPhotoThumbnails {
     fun load(resolver: ContentResolver, uriString: String): ImageBitmap? {
         val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return null
         return try {
-            if (Build.VERSION.SDK_INT >= 29) {
+            // The video's first frame is a file of this app, which has no thumbnail provider.
+            if (Build.VERSION.SDK_INT >= 29 && uri.scheme != "file") {
                 adoptOrRecycle(resolver.loadThumbnail(uri, Size(MAX_TILE_PX, MAX_TILE_PX), null))
             } else {
                 val bitmap = decodeBounded(openStream = {

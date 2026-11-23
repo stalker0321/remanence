@@ -211,6 +211,7 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+    implementation(libs.androidx.camera.video)
     implementation(libs.androidx.work.runtime)
     // C2 generator wiring: real EXIF-upright decoder (GeneratorExifDecoder).
     implementation(libs.androidx.exifinterface)

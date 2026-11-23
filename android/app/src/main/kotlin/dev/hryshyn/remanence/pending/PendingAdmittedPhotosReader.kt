@@ -66,6 +66,21 @@ internal class PendingAdmittedPhotosReader(
         return opened.manifest.voice
     }
 
+    override suspend fun loadVoice(capsuleId: String): ByteArray? {
+        requireId(capsuleId)
+        return opened.sound?.copyOf()
+    }
+
+    override suspend fun video(capsuleId: String): dev.hryshyn.remanence.core.crypto.ManifestVideo? {
+        requireId(capsuleId)
+        return opened.manifest.video
+    }
+
+    override suspend fun loadVideo(capsuleId: String): ByteArray? {
+        requireId(capsuleId)
+        return opened.film?.copyOf()
+    }
+
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {
         requireId(capsuleId)
         val manifest = opened.manifest

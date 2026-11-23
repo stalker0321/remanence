@@ -30,6 +30,10 @@ object ProtocolV1Limits {
     /** ADR-021: at most one MEDIA artifact, a voice note (1 MiB plus the AEAD overhead). */
     const val MEDIA_COUNT_MAX = 1
     const val ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES = 1_048_609L
+
+    /** ADR-021: at most one VIDEO artifact, the video square (6 MiB plus the AEAD overhead). */
+    const val VIDEO_COUNT_MAX = 1
+    const val ENCRYPTED_VIDEO_MAX_CIPHERTEXT_BYTES = 6_291_489L
     const val DRAFT_LIFETIME_SECONDS = 604_800L
     const val INCOMING_PAGE_DEFAULT = 50
     const val INCOMING_PAGE_MAX = 100

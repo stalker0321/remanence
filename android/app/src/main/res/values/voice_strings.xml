@@ -17,6 +17,5 @@
     <string name="voice_denied">no access to the microphone. allow it in settings and try again</string>
     <string name="voice_failed">the recording did not work. try again</string>
     <string name="voice_too_large">the recording is too large. try a shorter one</string>
-    <string name="voice_pending_unavailable">a voice note cannot go to a phone number yet</string>
     <string name="voice_elapsed">%1$s / %2$s</string>
 </resources>

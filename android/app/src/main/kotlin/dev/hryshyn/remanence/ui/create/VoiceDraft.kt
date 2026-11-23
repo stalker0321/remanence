@@ -86,21 +86,15 @@ private fun SoundTab(label: String, chosen: Boolean, tag: String, onClick: () ->
 /**
  * The voice tab, the owner's look of 23 November: tap to record, tap to stop,
  * at most a minute; then listen, record again or delete. The recording
- * replaces the song. Nothing is recorded for a gift to a phone number yet.
+ * replaces the song.
  */
 @Composable
 internal fun VoiceDraft(
     voice: RecordedVoice?,
     onVoice: (RecordedVoice?) -> Unit,
     songChosen: Boolean,
-    phoneGift: Boolean,
     enabled: Boolean,
 ) {
-    if (phoneGift) {
-        Text(stringResource(R.string.voice_pending_unavailable), color = HoldColors.Muted,
-            style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("voice_pending_unavailable"))
-        return
-    }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var recorder by remember { mutableStateOf<VoiceRecorder?>(null) }

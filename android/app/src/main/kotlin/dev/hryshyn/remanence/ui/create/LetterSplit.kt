@@ -17,8 +17,10 @@ internal object LetterSplit {
     /** The front's share of a longer text. */
     const val FRONT_LEAD_CHARS = 160
 
-    private val SENTENCE = Regex("(?U)[^.!?…]+(?:[.!?…]+[\"»”)]*|$)\\s*")
-    private val TRAILING = Regex("(?U)[\\s,;:—–-]+$")
+    // No (?U): Android's ICU regex refuses that flag (the create step crashed
+    // on every device). [\\s\\p{Z}] is Unicode white space on the JVM and ICU alike.
+    private val SENTENCE = Regex("[^.!?…]+(?:[.!?…]+[\"»”)]*|$)[\\s\\p{Z}]*")
+    private val TRAILING = Regex("[\\s\\p{Z},;:—–-]+$")
 
     fun split(text: String): Sides {
         val whole = text.trim()
@@ -45,7 +47,7 @@ internal object LetterSplit {
         out = out.trimEnd()
         if (out.isNotEmpty()) return out
         // The first sentence alone is too long: whole words, then an ellipsis.
-        for (word in paragraph.split(Regex("(?U)\\s+"))) {
+        for (word in paragraph.split(Regex("[\\s\\p{Z}]+"))) {
             val next = if (out.isEmpty()) word else "$out $word"
             if (chars(next) > FRONT_LEAD_CHARS - 1) break
             out = next

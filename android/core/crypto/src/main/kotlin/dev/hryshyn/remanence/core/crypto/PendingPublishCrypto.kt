@@ -54,8 +54,9 @@ object PendingPublishCrypto {
     /** Normalization version for the address opening (frozen §1). */
     const val ADDRESS_NORMALIZATION_VERSION: Int = 1
 
-    /** Artifact kinds reuse the existing numbers 1, 2, 3. */
-    val ARTIFACT_KINDS: Set<Int> = setOf(1, 2, 3)
+    /** Artifact kinds reuse the v1 numbers. */
+    // ADR-021: 4 is the voice note (MEDIA), 5 the video square (VIDEO).
+    val ARTIFACT_KINDS: Set<Int> = setOf(1, 2, 3, 4, 5)
 
     fun addressOpening(
         channel: Int,
@@ -116,7 +117,7 @@ object PendingPublishCrypto {
         senderUserId: String,
         deliveryTargetId: String,
     ): ByteArray {
-        require(artifactKind in ARTIFACT_KINDS) { "pending artifact kind must be 1, 2, or 3" }
+        require(artifactKind in ARTIFACT_KINDS) { "pending artifact kind must be 1..5" }
         require(ordinal == -1 || ordinal in 0..4) { "pending artifact ordinal must be -1 or 0..4" }
         return ArtifactAadV2.newBuilder()
             .setProtocolVersion(2)
@@ -181,7 +182,7 @@ object PendingPublishCrypto {
             .setClaimPolicyVersion(1)
             .setClaimSigningKeyId(ByteString.copyFrom(uuid16(serviceKeyId, "service-key")))
         for (artifact in artifacts) {
-            require(artifact.kind in ARTIFACT_KINDS) { "pending artifact kind must be 1, 2, or 3" }
+            require(artifact.kind in ARTIFACT_KINDS) { "pending artifact kind must be 1..5" }
             require(artifact.ciphertextSize >= 0) { "pending artifact size must be non-negative" }
             require(artifact.ciphertextSha256.size == 32) { "pending artifact hash must be 32 bytes" }
             builder.addArtifacts(

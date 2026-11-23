@@ -68,6 +68,22 @@ object PendingCapsulePublisher {
         val trackSnapshot: CapsuleTrackSnapshotV1?,
         /** Long note read beside the sheet (manifest field 8). */
         val letter: String? = null,
+        /** ADR-021: the voice note, sealed as the MEDIA artifact (kind 4). */
+        val voice: MediaInput? = null,
+        /** ADR-021: the video square, sealed as the VIDEO artifact (kind 5). */
+        val video: MediaInput? = null,
+    )
+
+    /**
+     * A voice note or a video square: its MP4 and the manifest entry fields.
+     * [peaks] is a voice note's; [size] and [posterContentId] a video's.
+     */
+    class MediaInput(
+        val mp4: ByteArray,
+        val durationMs: Int,
+        val peaks: ByteArray? = null,
+        val size: Int = 0,
+        val posterContentId: String? = null,
     )
 
     data class Publication(
@@ -221,6 +237,14 @@ object PendingCapsulePublisher {
             )
         }
         val contentBlob = blobWithTag(capsule, CONTENT_BLOB_BYTE).toRestString()
+        val mediaBlob = blobWithTag(capsule, MEDIA_BLOB_BYTE)
+        val videoBlob = blobWithTag(capsule, VIDEO_BLOB_BYTE)
+        val manifestVoice = expression?.voice?.let {
+            ManifestVoice(mediaBlob.value, it.durationMs, requireNotNull(it.peaks) { "a voice note needs its peaks" })
+        }
+        val manifestVideo = expression?.video?.let {
+            ManifestVideo(videoBlob.value, it.durationMs, it.size, requireNotNull(it.posterContentId) { "a video needs its first frame" })
+        }
         val contentPlaintext = if (expression == null) {
             ContentManifestCodec().buildPlaintext(
                 capsule, manifestPhotos, noteUtf8, null, null, null,
@@ -236,6 +260,7 @@ object PendingCapsulePublisher {
                 capsule, manifestPhotos, noteUtf8,
                 Triple(expression.candidateId, projectionHash, expression.expression),
                 blobIdByContentId, expression.trackSnapshot, expression.letter,
+                manifestVoice, manifestVideo,
             )
         }
         val contentCiphertext = PendingArtifactCryptor.encrypt(
@@ -255,6 +280,22 @@ object PendingCapsulePublisher {
             sealed += sealPhoto(
                 capsuleKeyset, capsuleId, capsule, senderUserId, deliveryTargetId,
                 index, photo.jpeg,
+            )
+        }
+        // ADR-021: the voice note (kind 4) and the video square (kind 5), each MP4.
+        for ((kind, blob, media) in listOf(
+            Triple(MEDIA_KIND, mediaBlob, expression?.voice),
+            Triple(VIDEO_KIND, videoBlob, expression?.video),
+        )) {
+            if (media == null) continue
+            require(media.mp4.size >= 8 && String(media.mp4, 4, 4, Charsets.US_ASCII) == "ftyp") { "pending media must be an MP4" }
+            val ciphertext = PendingArtifactCryptor.encrypt(
+                capsuleKeyset, capsuleId, blob.toRestString(), kind, NON_PHOTO_ORDINAL,
+                senderUserId, deliveryTargetId, media.mp4,
+            )
+            sealed += SealedArtifact(
+                blob.toRestString(), kind, NON_PHOTO_ORDINAL, ciphertext,
+                MessageDigest.getInstance("SHA-256").digest(ciphertext),
             )
         }
         // Server-frozen declaration order: (kind, ordinal, blob_id).
@@ -391,5 +432,9 @@ object PendingCapsulePublisher {
 
     private const val RECOGNITION_BLOB_BYTE: Int = 0x01
     private const val CONTENT_BLOB_BYTE: Int = 0x02
+    private const val MEDIA_BLOB_BYTE: Int = 0x03
+    private const val VIDEO_BLOB_BYTE: Int = 0x04
+    private const val MEDIA_KIND: Int = 4
+    private const val VIDEO_KIND: Int = 5
     private const val NON_PHOTO_ORDINAL: Int = -1
 }

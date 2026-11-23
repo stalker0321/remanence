@@ -182,8 +182,9 @@ class IncomingCapsuleRepository internal constructor(
         val url = baseUrl.resolve(PATH).newBuilder().apply {
             if (cursor != null) addQueryParameter("cursor", cursor)
             addQueryParameter("limit", limit.toString())
-            // ADR-021: the server lists a card with a voice note only to a client that reads it.
-            addQueryParameter("media", "voice")
+            // ADR-021: the server lists a card with a voice note or a video square
+            // only to a client that reads them; "video" asks for both.
+            addQueryParameter("media", "video")
         }.build()
         val requestBuilder = Request.Builder()
             .url(url)
@@ -382,6 +383,7 @@ class IncomingCapsuleRepository internal constructor(
                 CapsuleArtifactKind.RECOGNITION_MANIFEST,
                 CapsuleArtifactKind.CONTENT_MANIFEST,
                 CapsuleArtifactKind.MEDIA,
+                CapsuleArtifactKind.VIDEO,
                 -> blob.ordinal.also { require(it == null) }
             }
             val maxBytes = when (kind) {
@@ -389,6 +391,7 @@ class IncomingCapsuleRepository internal constructor(
                 CapsuleArtifactKind.CONTENT_MANIFEST -> MAX_CONTENT_BYTES
                 CapsuleArtifactKind.PHOTO -> MAX_PHOTO_BYTES
                 CapsuleArtifactKind.MEDIA -> MAX_MEDIA_BYTES
+                CapsuleArtifactKind.VIDEO -> MAX_VIDEO_BYTES
             }
             require(blob.ciphertextSize in 1..maxBytes)
             val digest = decodeBase64Url(blob.ciphertextSha256, expectedBytes = SHA256_BYTES)
@@ -518,6 +521,7 @@ class IncomingCapsuleRepository internal constructor(
         private const val MAX_CONTENT_BYTES = 65_536
         private const val MAX_PHOTO_BYTES = 8_388_641
         private const val MAX_MEDIA_BYTES = 1_048_609
+        private const val MAX_VIDEO_BYTES = 6_291_489
         private const val MAX_TOTAL_CIPHERTEXT_BYTES = 44_040_192L
         private const val MIN_BLOB_COUNT = 5
         private const val MAX_BLOB_COUNT = 8

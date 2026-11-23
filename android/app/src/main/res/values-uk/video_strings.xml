@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="capsule_video_watch">подивитися відео зі звуком</string>
+    <string name="capsule_video_mute">вимкнути звук відео</string>
+    <string name="video_record">зняти відео</string>
+    <string name="video_start">почати</string>
+    <string name="video_stop">стоп</string>
+    <string name="video_cancel">скасувати</string>
+    <string name="video_rerecord">перезняти</string>
+    <string name="video_delete">видалити</string>
+    <string name="video_hint">до 30 секунд з фронтальної камери. відео займе місце однієї фотографії, а поки не грає, видно його перший кадр</string>
+    <string name="video_photos_full">відео займає місце однієї фотографії. приберіть одну, щоб зняти відео</string>
+    <string name="video_denied">немає доступу до камери. дозвольте його в налаштуваннях і спробуйте знову</string>
+    <string name="video_failed">відео не записалося. спробуйте ще раз</string>
+    <string name="video_too_large">відео вийшло завеликим. зніміть коротше</string>
+    <string name="video_too_short">відео закоротке. зніміть хоча б секунду</string>
+    <string name="video_mark">відео</string>
+</resources>

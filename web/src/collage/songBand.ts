@@ -55,6 +55,10 @@ export interface SongBandLayout {
   /** The band is filled with the sound colour (plate, card) or left as paper under a rule (caption). */
   filled: boolean
   runs: SongRun[]
+  /** A voice note's waveform, one bar per peak; empty for a song. */
+  bars?: Rect[]
+  /** The microphone beside a voice note's length (plate, card). */
+  mic?: Rect | null
 }
 
 export interface SongWords {
@@ -175,4 +179,96 @@ function card(region: Rect, type: SongFace, words: SongWords, measure: RunWidth)
   }]
   if (artist !== null) runs.push({ text: artist, face: ARTIST, x: region.x + Math.floor((region.width - ARTIST.line) / 2), y: foot, vertical: true })
   return { mode: 'card', cover: null, play, playStyle: 'ring', divider: null, filled: true, runs }
+}
+
+/**
+ * A voice note in the song band (ADR-021 §5, the owner's look of 23
+ * November): the band's own three forms with the waveform where the title
+ * was and the length (with a microphone on the plate and the spine) where
+ * the artist was. No words, so it never needs to fit and never refuses.
+ */
+export const VOICE_PEAKS = 48
+
+/** The song band form a `voice-` mode borrows. */
+export function voiceBandShape(mode: string): SongBandMode {
+  return mode === 'voice-card' ? 'card' : mode === 'voice-caption' ? 'caption' : 'plate'
+}
+
+export interface VoiceWords {
+  /** 0..255 amplitudes the sender measured, VOICE_PEAKS of them. */
+  peaks: Uint8Array
+  durationMs: number
+}
+
+/** "0:42": whole seconds, at least one. */
+export function voiceLength(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(durationMs / 1000))
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+const MIC = 12
+
+/** Bars across `span` (horizontal: along x, vertical: along y), each centred on the band's axis. */
+function waveBars(peaks: Uint8Array, along: number, span: number, across: number, depth: number, vertical: boolean): Rect[] {
+  const count = peaks.length
+  if (count === 0 || span < count * 2) return []
+  const step = span / count
+  const thick = Math.max(2, Math.min(4, Math.floor(step * 0.6)))
+  const least = 3
+  return [...peaks].map((peak, index) => {
+    const size = Math.max(least, Math.round(least + (depth - least) * peak / 255))
+    const start = Math.round(along + index * step + (step - thick) / 2)
+    const side = Math.round(across - size / 2)
+    return vertical
+      ? { x: side, y: start, width: size, height: thick }
+      : { x: start, y: side, width: thick, height: size }
+  })
+}
+
+export function voiceBandLayout(region: Rect, mode: SongBandMode, type: SongFace, voice: VoiceWords, measure: RunWidth): SongBandLayout {
+  const length = voiceLength(voice.durationMs)
+  if (mode === 'card') {
+    const button = 34
+    const play = { x: region.x + Math.floor((region.width - button) / 2), y: region.y + region.height - 14 - button, width: button, height: button }
+    const mic = { x: region.x + Math.floor((region.width - MIC) / 2), y: play.y - 12 - MIC, width: MIC, height: MIC }
+    const foot = mic.y - 6
+    const run: SongRun = { text: length, face: ARTIST, x: region.x + Math.floor((region.width - ARTIST.line) / 2), y: foot, vertical: true }
+    const top = region.y + 24
+    const bottom = foot - measure(length, ARTIST) - 18
+    const bars = waveBars(voice.peaks, top, bottom - top, region.x + region.width / 2, Math.min(34, region.width - 16), true)
+    return { mode: 'card', cover: null, play, playStyle: 'ring', divider: null, filled: true, runs: [run], bars, mic }
+  }
+  if (mode === 'caption') {
+    const body = { x: region.x, y: region.y + 8, width: region.width, height: region.height - 8 }
+    const lead = 36
+    const play = { x: body.x, y: body.y + Math.floor((body.height - lead) / 2), width: lead, height: lead }
+    const lengthWidth = measure(length, type)
+    const top = body.y + Math.floor((body.height - type.line) / 2)
+    const run: SongRun = { text: length, face: type, x: body.x + body.width - lengthWidth, y: top, vertical: false }
+    const left = play.x + lead + 12
+    const right = run.x - 12
+    const bars = waveBars(voice.peaks, left, right - left, body.y + body.height / 2, Math.min(22, body.height - 8), false)
+    return { mode: 'caption', cover: null, play, playStyle: 'circle', divider: null, filled: false, runs: [run], bars, mic: null }
+  }
+  const side = region.height
+  const left = region.x + side + 12
+  const right = region.x + region.width - 14
+  const waveDepth = Math.min(28, side - ARTIST.line - 20)
+  const block = waveDepth + 6 + ARTIST.line
+  const top = region.y + Math.floor((side - block) / 2)
+  const lineTop = top + waveDepth + 6
+  const mic = { x: left, y: lineTop + Math.floor((ARTIST.line - MIC) / 2), width: MIC, height: MIC }
+  const run: SongRun = { text: length, face: ARTIST, x: left + MIC + 5, y: lineTop, vertical: false }
+  const bars = waveBars(voice.peaks, left, right - left, top + waveDepth / 2, waveDepth, false)
+  return {
+    mode: 'plate',
+    cover: null,
+    play: { x: region.x + Math.floor((side - 20) / 2), y: region.y + Math.floor((side - 22) / 2), width: 20, height: 22 },
+    playStyle: 'glyph',
+    divider: { x: region.x + side - 1, y: region.y, width: 1, height: side },
+    filled: true,
+    runs: [run],
+    bars,
+    mic,
+  }
 }

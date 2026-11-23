@@ -231,6 +231,8 @@ function paintSongBand(context: CanvasRenderingContext2D, track: NonNullable<Sce
       context.fillText(run.text, run.x, run.y + run.face.size)
     }
   }
+  for (const bar of band.bars ?? []) pill(context, bar)
+  if (band.mic) paintMic(context, band.mic, track.color)
   const play = band.play
   const cx = play.x + play.width / 2
   const cy = play.y + play.height / 2
@@ -260,6 +262,44 @@ function paintSongBand(context: CanvasRenderingContext2D, track: NonNullable<Sce
     context.fill()
     triangle(radius * 0.7, track.background)
   }
+}
+
+/** One waveform bar: a rectangle with fully rounded ends, in the current fill. */
+function pill(context: CanvasRenderingContext2D, bar: { x: number; y: number; width: number; height: number }): void {
+  const radius = Math.min(bar.width, bar.height) / 2
+  context.beginPath()
+  if (bar.width >= bar.height) {
+    context.arc(bar.x + radius, bar.y + radius, radius, Math.PI / 2, Math.PI * 1.5)
+    context.arc(bar.x + bar.width - radius, bar.y + radius, radius, -Math.PI / 2, Math.PI / 2)
+  } else {
+    context.arc(bar.x + radius, bar.y + radius, radius, Math.PI, 0)
+    context.arc(bar.x + radius, bar.y + bar.height - radius, radius, 0, Math.PI)
+  }
+  context.closePath()
+  context.fill()
+}
+
+/** The microphone of the app's icons (24-unit grid, 1.7 stroke) at the box's size. */
+function paintMic(context: CanvasRenderingContext2D, box: { x: number; y: number; width: number; height: number }, color: number): void {
+  const unit = box.width / 24
+  const at = (x: number, y: number): [number, number] => [box.x + x * unit, box.y + y * unit]
+  context.save()
+  context.strokeStyle = css(color)
+  context.lineWidth = Math.max(1, 2.2 * unit)
+  context.lineCap = 'round'
+  context.beginPath()
+  // The capsule: x 9..15, y 3..14, ends rounded.
+  context.arc(...at(12, 6), 3 * unit, Math.PI, 0)
+  context.lineTo(...at(15, 11))
+  context.arc(...at(12, 11), 3 * unit, 0, Math.PI)
+  context.closePath()
+  context.stroke()
+  context.beginPath()
+  context.arc(...at(12, 11), 7 * unit, 0, Math.PI)
+  context.moveTo(...at(12, 18))
+  context.lineTo(...at(12, 21))
+  context.stroke()
+  context.restore()
 }
 
 function paintMark(context: CanvasRenderingContext2D, mark: Scene['provenance'][number]): void {

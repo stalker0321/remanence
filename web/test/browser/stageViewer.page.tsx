@@ -75,6 +75,7 @@ async function buildHeld(tint: string, labels: string[]): Promise<Fixture> {
       photos: new Map(photos.map((photo, index) => [photo.contentId, urls[index]!])),
       artwork: null,
       letter: null,
+      voice: null,
     },
     urls,
   }

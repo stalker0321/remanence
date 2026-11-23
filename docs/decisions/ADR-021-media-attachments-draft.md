@@ -146,9 +146,9 @@ memory on both clients.
 
 ## 5. In the layouts
 
-- **Voice:** a new song-band mode with a waveform and the length. Older
-  receivers reject an unknown band mode, so this needs an expression contract
-  bump (V5) shipped to receivers before senders use it.
+- **Voice:** new song-band modes with a waveform and the length. Older
+  receivers reject an unknown band mode, so the receiving side ships before
+  senders can record.
   - Look (owner, 23 November; canvas "Голосовое на открытке"): the voice
     takes the song band's own three forms. Plate: the play button in the
     cover square, the waveform where the title was, a microphone and the
@@ -157,11 +157,18 @@ memory on both clients.
     microphone and the play button at the foot. No word on the card (it would
     be in one language for every receiver); the button's accessible name is
     the receiver's own "listen to the voice note".
-  - Wire (proposed): expression V5 is V4 plus the modes `voice-plate`,
-    `voice-caption` and `voice-card`, with the same geometry as `plate`,
-    `caption` and `card`. Only a card with a voice note is sealed as V5, so
-    song cards stay V4 and keep opening in older builds. A voice mode needs
-    `media` with kind VOICE and no `track_snapshot`; a song mode the reverse.
+  - Wire: no contract bump after all. V4 gains the music modes
+    `voice-plate`, `voice-caption` and `voice-card` (no artwork), with the
+    same geometry as `plate`, `caption` and `card` — the way those three
+    joined V4 on 9 November. Older receivers refuse a mode they do not know,
+    exactly as they would refuse a V5, while the expression codec, its
+    projection and the server stay as they are. Only cards with a voice note
+    use these modes, so song cards keep opening in older builds. A voice mode
+    needs `media` with kind VOICE and no `track_snapshot`; a song mode the
+    reverse; a manifest with both is refused. A circle (kind 2) is refused as
+    unsupported until it is drawn. Site: `wire.ts` `parseVoice`,
+    `songBand.ts` `voiceBandLayout`, `prepare.ts` `voiceBandScene` (23
+    November).
   - `MediaEntry` gains `bytes peaks = 8`: 48 amplitudes, 0..255, measured by
     the sender. Both platforms draw the same bars from them, and the band is
     whole before the voice blob arrives (the button waits for it).

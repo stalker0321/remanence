@@ -11,10 +11,17 @@ export const SENDER_PREFIX = 'From '
 export const TEXT_FAMILIES = ['StudySans', 'StudySerif', 'StudyMono', 'Narrow', 'Gothic'] as const
 export const MUSIC_MODES_V3 = ['text', 'thumbnail'] as const
 // `plate`, `caption` and `card` are the 9 November 2026 song bands (songBand.ts).
-export const MUSIC_MODES_V4 = ['text', 'thumbnail', 'inline', 'tile-art', 'tile-text', 'sleeve', 'sleeve-empty', 'spine', 'pulse', 'plate', 'caption', 'card'] as const
+// The `voice-` modes (23 November, ADR-021 §5) draw a voice note in the same three
+// forms; older receivers refuse an unknown mode, so voice cards never half-open there.
+export const MUSIC_VOICE_MODES_V4 = ['voice-plate', 'voice-caption', 'voice-card'] as const
+export const MUSIC_MODES_V4 = ['text', 'thumbnail', 'inline', 'tile-art', 'tile-text', 'sleeve', 'sleeve-empty', 'spine', 'pulse', 'plate', 'caption', 'card', ...MUSIC_VOICE_MODES_V4] as const
 export const MUSIC_COVER_MODES_V4 = ['thumbnail', 'inline', 'tile-art', 'sleeve', 'pulse', 'plate', 'caption'] as const
 export const MUSIC_ARTWORK_REQUIRED_MODES_V4 = ['thumbnail', 'tile-art', 'sleeve'] as const
-export const MUSIC_TEXT_ONLY_MODES_V4 = ['text', 'tile-text', 'sleeve-empty', 'spine', 'card'] as const
+export const MUSIC_TEXT_ONLY_MODES_V4 = ['text', 'tile-text', 'sleeve-empty', 'spine', 'card', ...MUSIC_VOICE_MODES_V4] as const
+
+export function isVoiceMode(mode: string): mode is typeof MUSIC_VOICE_MODES_V4[number] {
+  return (MUSIC_VOICE_MODES_V4 as readonly string[]).includes(mode)
+}
 export const MUSIC_BARE_TEXT_OK_MODES_V4 = ['inline', 'pulse'] as const
 export const ARTWORK_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
 export const ARTWORK_PROVIDERS = ['catalog-sample', 'coverartarchive'] as const

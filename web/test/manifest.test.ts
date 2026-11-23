@@ -7,6 +7,8 @@ import { buildFrozenExpression } from '../src/collage/frozenExpression'
 import { encodeContentManifest, type ContentManifestRefusal } from '../src/collage/manifest'
 import { prepare } from '../src/collage/prepare'
 import { parseContentManifest } from '../src/collage/wire'
+import { VOICE_PEAKS } from '../src/collage/songBand'
+import { protoBytes, protoVarint } from '../src/protocol/proto'
 import { clipLetter } from '../src/create/letter'
 import { styleById } from '../src/collage/styles'
 import { freezeSelection } from '../src/create/creatorFreeze'
@@ -295,6 +297,61 @@ describe('content manifest encoder', () => {
     await expect(parseContentManifest(forged)).rejects.toThrow()
     expect(clipLetter('ж'.repeat(5000)).length).toBe(4000)
     expect(clipLetter('a' + '😀'.repeat(2500))).toBe('a' + '😀'.repeat(1999))
+  })
+
+  it('reads a voice note from field 9 and draws it in the band instead of a song', async () => {
+    const peaks = Uint8Array.from({ length: VOICE_PEAKS }, (_, index) => (index * 53) % 256)
+    const blobId = Uint8Array.from({ length: 16 }, (_, index) => 0x30 + index)
+    const entry = (fields: Uint8Array[]) => protoBytes(9, Uint8Array.from(fields.flatMap((field) => [...field])))
+    const voiceEntry = (over: { kind?: number; mime?: string; ms?: number; peaks?: Uint8Array; extra?: Uint8Array[] } = {}) => entry([
+      protoVarint(1, over.kind ?? 1),
+      protoBytes(2, blobId),
+      protoBytes(3, new TextEncoder().encode(over.mime ?? 'audio/mp4')),
+      protoVarint(4, over.ms ?? 42_400),
+      ...(over.extra ?? []),
+      protoBytes(8, over.peaks ?? peaks),
+    ])
+    const plainExpression = await expressionFor('Probe note text.')
+    const plain = await encodeContentManifest({ expression: plainExpression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobsFor(plainExpression) })
+    if (!plain.ok) throw new Error('plain encode failed')
+    const parsed = await parseContentManifest(new Uint8Array([...plain.bytes, ...voiceEntry()]))
+    expect(parsed.voice).toEqual({ blobId, mimeType: 'audio/mp4', durationMs: 42_400, peaks })
+    expect((await parseContentManifest(plain.bytes)).voice).toBeNull()
+    for (const bad of [
+      voiceEntry({ mime: 'audio/webm' }),
+      voiceEntry({ ms: 0 }),
+      voiceEntry({ ms: 60_001 }),
+      voiceEntry({ peaks: peaks.slice(1) }),
+      voiceEntry({ extra: [protoVarint(5, 480)] }),
+    ]) {
+      await expect(parseContentManifest(new Uint8Array([...plain.bytes, ...bad]))).rejects.toThrow()
+    }
+    // A circle is not drawn yet: the card is refused as unsupported, not opened without it.
+    await expect(parseContentManifest(new Uint8Array([...plain.bytes, ...voiceEntry({ kind: 2 })]))).rejects.toMatchObject({ code: 'UNSUPPORTED' })
+    // A song and a voice note never share one card.
+    const songExpression = await expressionFor('Probe note text.', 3, TRACK)
+    const song = await encodeContentManifest({ expression: songExpression, capsuleId: CAPSULE, candidateId: CANDIDATE, blobIdByContentId: blobsFor(songExpression), track: TRACK })
+    if (!song.ok) throw new Error('song encode failed')
+    await expect(parseContentManifest(new Uint8Array([...song.bytes, ...voiceEntry()]))).rejects.toThrow()
+
+    const voiceExpression = clone(songExpression)
+    voiceExpression.musicRegion = { ...voiceExpression.musicRegion!, mode: 'voice-plate' }
+    expect(validateResolved(voiceExpression).ok).toBe(true)
+    const sources = new Map(voiceExpression.input.photos.map((photo) => [photo.contentId, { width: photo.widthPx, height: photo.heightPx }]))
+    const voice = parsed.voice!
+    const ready = await prepare(voiceExpression, voiceExpression.input.note, null, sources, measurer, null, voice)
+    if (ready.kind !== 'ready') throw new Error(`prepare refused: ${ready.reason}`)
+    expect(ready.scene.music?.band?.bars).toHaveLength(VOICE_PEAKS)
+    expect(ready.scene.music?.band?.runs.map((run) => run.text)).toEqual(['0:42'])
+    expect(ready.scene.music?.band?.mic).not.toBeNull()
+    // The band and the sound must agree both ways.
+    expect((await prepare(voiceExpression, voiceExpression.input.note, TRACK, sources, measurer, null, voice)).kind).toBe('rejected')
+    expect((await prepare(voiceExpression, voiceExpression.input.note, null, sources, measurer)).kind).toBe('rejected')
+    expect((await prepare(songExpression, songExpression.input.note, TRACK, sources, measurer, null, voice)).kind).toBe('rejected')
+    const caption = clone(voiceExpression)
+    caption.musicRegion = { ...caption.musicRegion!, mode: 'voice-caption' }
+    const captionScene = await prepare(caption, caption.input.note, null, sources, measurer, null, voice)
+    expect(captionScene.kind === 'ready' && captionScene.scene.music?.band?.mode).toBe('caption')
   })
 
   it('refuses a song band and a track snapshot that disagree', async () => {

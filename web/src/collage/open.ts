@@ -14,7 +14,7 @@ import { CollageError } from './errors'
 import { jpegSize } from './jpeg'
 import { prepare, type Scene, type TextMeasurer } from './prepare'
 import { equalBytes } from './styles'
-import { parseContentManifest } from './wire'
+import { parseContentManifest, type ManifestVoice } from './wire'
 
 export interface SealedBlob {
   blobId: string
@@ -40,6 +40,8 @@ export interface OpenedPostcard {
   artwork: Uint8Array | null
   /** Long note read beside the sheet, or null. */
   letter: string | null
+  /** The voice note in the band; its MEDIA blob is fetched when the receiver presses play. */
+  voice: ManifestVoice | null
 }
 
 /**
@@ -161,12 +163,13 @@ export async function openGrantedPostcard(
       new Map(manifest.expression.input.photos.map((photo) => [photo.contentId, { width: photo.widthPx, height: photo.heightPx }])),
       measurer,
       cover,
+      manifest.voice,
     )
     fresh()
     if (prepared.kind !== 'ready') throw new CollageError('REJECTED')
     const kept = new Map<string, Uint8Array>()
     for (const [id, bytes] of photoPlain) kept.set(id, bytes.slice())
-    return { scene: prepared.scene, photos: kept, artwork: cover && held ? held.bytes.slice() : null, letter: manifest.letter }
+    return { scene: prepared.scene, photos: kept, artwork: cover && held ? held.bytes.slice() : null, letter: manifest.letter, voice: manifest.voice }
   } catch (error) {
     if (error instanceof CollageError || error instanceof ProtocolError) throw error
     throw new CollageError('INTEGRITY')

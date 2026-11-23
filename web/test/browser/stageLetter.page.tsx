@@ -109,6 +109,7 @@ async function buildHeld(tint: string, text: string): Promise<HeldSheet> {
     photos: new Map(photos.map((photo, index) => [photo.contentId, urls[index]!])),
     artwork: null,
     letter: split.letter,
+    voice: null,
   }
 }
 

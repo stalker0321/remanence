@@ -16,6 +16,7 @@ import {
   CANVAS_WIDTH,
   EXPRESSION_CONTRACT_V3,
   EXPRESSION_CONTRACT_V4,
+  isVoiceMode,
   MUSIC_COVER_MODES_V4,
   type MusicRegion,
   type PhotoShape,
@@ -26,7 +27,7 @@ import {
 } from './model'
 import { equalBytes, opaqueColor, PALETTE_VERSION, styleById, styleDigest, type CollageStyle } from './styles'
 import { layoutCreatorNote, type CreatorNoteLayout } from './creatorNote'
-import { isSongBandMode, songBandLayout, type RunWidth, type SongBandLayout, type SongBandMode } from './songBand'
+import { isSongBandMode, songBandLayout, voiceBandLayout, voiceBandShape, type RunWidth, type SongBandLayout, type SongBandMode, type VoiceWords } from './songBand'
 
 export interface SourcePhoto {
   width: number
@@ -187,6 +188,7 @@ export async function prepare(
   sources: ReadonlyMap<string, SourcePhoto>,
   measurer: TextMeasurer,
   artwork: SourcePhoto | null = null,
+  voice: VoiceWords | null = null,
 ): Promise<SceneResult> {
   if (expression.expressionContractVersion !== EXPRESSION_CONTRACT_V3 && expression.expressionContractVersion !== EXPRESSION_CONTRACT_V4) {
     return reject(`collage renderer requires a contract V3 or V4 expression, got ${expression.expressionContractVersion}`)
@@ -215,7 +217,12 @@ export async function prepare(
   if (musicRegion && !fontFile(musicRegion.type.family, musicRegion.type.weight, musicRegion.type.italic)) {
     return reject('font face for the music is not bundled')
   }
-  if ((musicRegion !== null) !== (track !== null)) return reject('music region and track snapshot must match')
+  if (musicRegion !== null && isVoiceMode(musicRegion.mode)) {
+    if (voice === null || track !== null) return reject('a voice band needs the voice note and no song')
+  } else {
+    if (voice !== null) return reject('a voice note needs a voice band')
+    if ((musicRegion !== null) !== (track !== null)) return reject('music region and track snapshot must match')
+  }
   const isV4 = expression.expressionContractVersion === EXPRESSION_CONTRACT_V4
   for (const [index, placement] of expression.placements.entries()) {
     if (placement.maskId !== null) return reject(`placement ${index} carries a mask`)
@@ -291,7 +298,9 @@ export async function prepare(
   }
   let musicScene: SceneMusic | null = null
   let artworkScene: SceneArtwork | null = null
-  if (musicRegion && track) {
+  if (musicRegion && voice) {
+    musicScene = voiceBandScene(musicRegion, style, voice, measurer)
+  } else if (musicRegion && track) {
     const descriptor = musicRegion.artwork
     const verified = descriptor !== null && artwork !== null && artwork.width === descriptor.width && artwork.height === descriptor.height
     const layers = musicLayers(musicRegion, expression.grammarId, style, isV4, verified, track, measurer)
@@ -514,6 +523,28 @@ function songBandLayers(
     band,
   }
   return { music, artwork: band.cover === null ? null : { region: band.cover, background: opaqueColor(style.palette.sound) } }
+}
+
+/** A voice note in the band: the same colours as a song band of that form, bars instead of words. */
+function voiceBandScene(musicRegion: MusicRegion, style: CollageStyle, voice: VoiceWords, measurer: TextMeasurer): SceneMusic {
+  const band = voiceBandLayout(musicRegion, voiceBandShape(musicRegion.mode), musicRegion.type, voice, runWidth(measurer))
+  const filled = band.filled
+  return {
+    ...musicLayer(
+      { title: '', artistDisplay: '' },
+      '',
+      musicRegion,
+      musicRegion.type,
+      opaqueColor(filled ? style.palette.sound : style.palette.paper),
+      opaqueColor(filled ? style.palette.soundInk : style.palette.ink),
+      !filled,
+      band.mode,
+      band.mode === 'card',
+      musicRegion,
+      band.play,
+    ),
+    band,
+  }
 }
 
 /** One unwrapped run's width through the recipient's measurer. */

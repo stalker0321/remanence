@@ -4,6 +4,7 @@ import type { PublicSession } from '../session/session'
 import { CollageError } from './errors'
 import type { OpenedPostcard } from './open'
 import type { Scene } from './prepare'
+import type { ManifestVoice } from './wire'
 
 export interface UrlPort {
   create(bytes: Uint8Array, type: string): string
@@ -15,6 +16,8 @@ export interface HeldSheet {
   photos: ReadonlyMap<string, string>
   artwork: string | null
   letter: string | null
+  /** The voice note's MEDIA blob and length; its sound is fetched on play. */
+  voice: ManifestVoice | null
 }
 
 export const browserUrls: UrlPort = {
@@ -67,7 +70,7 @@ export class PresentationMemory {
         artwork = this.urls.create(copy, 'image/webp')
         this.#urls.push(artwork)
       }
-      const held = { scene: opened.scene, photos, artwork, letter: opened.letter }
+      const held = { scene: opened.scene, photos, artwork, letter: opened.letter, voice: opened.voice }
       this.#sheet = held
       this.#emit()
       return held

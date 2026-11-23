@@ -14,6 +14,7 @@ import {
   validateResolved,
 } from './model'
 import type { TrackWords } from './prepare'
+import { VOICE_PEAKS } from './songBand'
 import { equalBytes } from './styles'
 
 const MAX_BYTES = 65536
@@ -44,7 +45,20 @@ export interface ParsedManifest {
   track: TrackWords | null
   /** Long note read beside the sheet (field 8), or null. */
   letter: string | null
+  /** The voice note in the song band (field 9, ADR-021), or null. */
+  voice: ManifestVoice | null
 }
+
+/** A voice note: its MEDIA blob, length and the bars the sender measured. */
+export interface ManifestVoice {
+  blobId: Uint8Array
+  mimeType: 'audio/mp4'
+  durationMs: number
+  peaks: Uint8Array
+}
+
+const MEDIA_VOICE = 1
+export const VOICE_MAX_MS = 60_000
 
 interface Part {
   field: number
@@ -57,7 +71,7 @@ interface Part {
  * and 3 (GENEX04) are refused before a scene exists.
  */
 export async function parseContentManifest(bytes: Uint8Array): Promise<ParsedManifest> {
-  const root = readParts(bytes, [1, 2, 3, 4, 5, 6, 7, 8], [3])
+  const root = readParts(bytes, [1, 2, 3, 4, 5, 6, 7, 8, 9], [3])
   if (root.some((part) => part.field === 5)) throw new ProtocolError('INVALID_PROTO')
   const version = requiredNumber(root, 1)
   if (version === 1) throw new CollageError('UNSUPPORTED')
@@ -80,6 +94,10 @@ export async function parseContentManifest(bytes: Uint8Array): Promise<ParsedMan
   const letterPart = optional(root, 8)
   const letter = letterPart ? text(asBytes(letterPart)) : null
   if (letter !== null && !letterValid(letter)) throw new ProtocolError('INVALID_ENCODING')
+  const mediaPart = optional(root, 9)
+  const voice = mediaPart ? parseVoice(asBytes(mediaPart)) : null
+  // One sound per card: a voice note in the band, or a song.
+  if (voice !== null && track !== null) throw new ProtocolError('INVALID_ENCODING')
   const expressionPart = optional(root, 6)
   if (!expressionPart) throw new ProtocolError('INVALID_ENCODING')
   const parsed = parseExpression(asBytes(expressionPart), photos, note)
@@ -94,7 +112,23 @@ export async function parseContentManifest(bytes: Uint8Array): Promise<ParsedMan
     note,
     track,
     letter,
+    voice,
   }
+}
+
+function parseVoice(bytes: Uint8Array): ManifestVoice {
+  const fields = readParts(bytes, [1, 2, 3, 4, 5, 6, 7, 8], [])
+  // A circle (kind 2) is not drawn yet; it waits for its own release.
+  if (requiredNumber(fields, 1) !== MEDIA_VOICE) throw new CollageError('UNSUPPORTED')
+  if (optional(fields, 5) || optional(fields, 6) || optional(fields, 7)) throw new ProtocolError('INVALID_ENCODING')
+  const blobId = requiredBytes(fields, 2)
+  const mimeType = text(requiredBytes(fields, 3))
+  const durationMs = requiredNumber(fields, 4)
+  const peaks = requiredBytes(fields, 8)
+  if (blobId.length !== 16 || mimeType !== 'audio/mp4' || durationMs < 1 || durationMs > VOICE_MAX_MS || peaks.length !== VOICE_PEAKS) {
+    throw new ProtocolError('INVALID_ENCODING')
+  }
+  return { blobId, mimeType, durationMs, peaks: peaks.slice() }
 }
 
 function parsePhoto(bytes: Uint8Array): ManifestPhoto {

@@ -426,6 +426,65 @@ class PendingAdmittedContentTest {
         assertEquals(track, reader.trackSnapshot(capsule))
     }
 
+    /** ADR-021: a first gift's video square opens with the photos and reaches the reader. */
+    @Test
+    fun aFirstGiftWithAVideoSquareOpensItsFilm() = runTest {
+        dev.hryshyn.remanence.core.crypto.TinkPrimitives.ensureRegistered()
+        val signing = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val capsuleKey = CapsuleKeysetGenerator().generate()
+        val film = byteArrayOf(0, 0, 0, 16) + "ftypisom".toByteArray() + ByteArray(32) { 5 }
+        val publication = PendingCapsulePublisher.publishFull(
+            capsuleId = capsule,
+            senderUserId = sender,
+            senderKeyBundleId = senderBundle,
+            deliveryTargetId = target,
+            serviceKeyId = serviceKey,
+            channel = PendingPublishCrypto.CHANNEL_EMAIL,
+            normalizedDestination = "a42@example.test",
+            salt32 = ByteArray(32).also { SecureRandom().nextBytes(it) },
+            claimExpiresAt = 1814317432L,
+            createdAtEpochSeconds = 1798765432L,
+            signingHandle = signing,
+            capsuleKeyset = capsuleKey,
+            senderHandleSnapshot = "mykola",
+            frontFingerprintBytes = ByteArray(96) { (it * 3).toByte() },
+            photos = listOf(
+                PendingCapsulePublisher.PhotoInput("photo-bytes".toByteArray(), 1000, 1000),
+                PendingCapsulePublisher.PhotoInput("photo-two".toByteArray(), 1000, 1000),
+                PendingCapsulePublisher.PhotoInput("photo-three".toByteArray(), 1000, 1000),
+            ),
+            noteUtf8 = null,
+            expression = PendingCapsulePublisher.ExpressionInput(
+                "cand-1",
+                testV2Expression(),
+                listOf("p1", "p2", "p3"),
+                null,
+                video = PendingCapsulePublisher.MediaInput(film, 9_000, size = 480, posterContentId = "p2"),
+            ),
+        )
+        val gift = Sealed(publication, signing, capsuleKey, "photo-bytes".toByteArray())
+        val opened = content(gift).openPhotos(
+            rowOf(gift), owner, "token",
+            PendingAdmittedContent.EnvelopeOpener { keyOf(gift) },
+        )
+        assertEquals(3, opened.photosByOrdinal.size)
+        val reader = dev.hryshyn.remanence.pending.PendingAdmittedPhotosReader(capsule, opened)
+        assertEquals("p2", reader.video(capsule)?.posterContentId)
+        assertEquals(9_000, reader.video(capsule)?.durationMs)
+        assertTrue(film.contentEquals(reader.loadVideo(capsule)))
+        assertNull(reader.loadVoice(capsule))
+
+        // A missing film fails the whole gift closed.
+        val withoutFilm = publication.artifacts.filter { it.kind != 5 }.associate { it.blobId to it.ciphertext }
+        val refused = runCatching {
+            content(gift, blobs = withoutFilm).openPhotos(
+                rowOf(gift), owner, "token",
+                PendingAdmittedContent.EnvelopeOpener { keyOf(gift) },
+            )
+        }
+        assertTrue(refused.isFailure)
+    }
+
     /**
      * T186 (T187 qualifier): a directory bundle owned by someone
      * other than the statement sender is rejected before any byte is

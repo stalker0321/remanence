@@ -102,6 +102,7 @@ async function buildHeld(tint: string): Promise<{ held: HeldSheet; urls: string[
       artwork: null,
       letter: null,
       voice: null,
+      sound: null,
     },
     urls,
   }

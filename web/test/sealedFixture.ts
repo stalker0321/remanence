@@ -36,6 +36,7 @@ export const jsPressIds = {
   senderBundle: '30313233-3435-3637-3839-3a3b3c3d3e3f',
   capsule: '00010203-0405-0607-0809-0a0b0c0d0e0f',
   content: '00000000-0000-0000-0000-0000000000c0',
+  media: '00000000-0000-0000-0000-0000000000d0',
   photos: [
     '00000000-0000-0000-0000-000000000001',
     '00000000-0000-0000-0000-000000000002',
@@ -87,7 +88,15 @@ function textType(type: { family: string; size: number; weight: number; italic: 
   ])
 }
 
-export async function jsPressPlain(rawNote = 'hello'): Promise<{ plain: Uint8Array; photos: Uint8Array[] }> {
+/** A voice note's sound: an MP4 that is only its `ftyp` box. */
+export const jsVoiceSound = concat([new Uint8Array([0, 0, 0, 16]), utf8('ftypM4A '), new Uint8Array([0, 0, 0, 0])])
+
+/**
+ * `voice` swaps the song for a voice note (ADR-021). The press sheet is a V3
+ * expression whose band cannot draw one, so such a card opens up to its
+ * sound and is then refused by `prepare`.
+ */
+export async function jsPressPlain(rawNote = 'hello', voice = false): Promise<{ plain: Uint8Array; photos: Uint8Array[] }> {
   const expression = await pressSheet()
   const blobIds = new Map(expression.input.photos.map((photo, index) => [photo.contentId, uuidToBytes(jsPressIds.photos[index] ?? '')]))
   const hash = await projectionHash(expression, 'sheet-1', blobIds)
@@ -156,12 +165,19 @@ export async function jsPressPlain(rawNote = 'hello'): Promise<{ plain: Uint8Arr
     ...photos,
     str(4, rawNote),
     protoBytes(6, encoded),
-    protoBytes(7, concat([
+    ...voice ? [] : [protoBytes(7, concat([
       protoVarint(1, 1),
       str(2, '11111111-1111-4111-8111-111111111111'),
       str(3, 'Hi'),
       str(4, 'Ada'),
-    ])),
+    ]))],
+    ...voice ? [protoBytes(9, concat([
+      protoVarint(1, 1),
+      protoBytes(2, uuidToBytes(jsPressIds.media)),
+      str(3, 'audio/mp4'),
+      protoVarint(4, 4200),
+      protoBytes(8, new Uint8Array(48).map((_, index) => (index * 37) % 256)),
+    ]))] : [],
   ])
   return {
     plain,
@@ -192,15 +208,17 @@ export interface JsPressMaterial {
   capsule: IncomingCapsule
   content: SealedBlob
   photos: SealedPhoto[]
+  /** The sealed voice note, when the card carries one. */
+  media: SealedBlob | null
   capabilities: () => KeyCapabilities
   ciphertext: (blobId: string) => Uint8Array
 }
 
-export async function jsPressMaterial(): Promise<JsPressMaterial> {
+export async function jsPressMaterial(voice = false): Promise<JsPressMaterial> {
   const raw = crypto.getRandomValues(new Uint8Array(32))
   const keyset = aesKeyset(raw)
   const statement = new Uint8Array(32).fill(9)
-  const body = await jsPressPlain()
+  const body = await jsPressPlain('hello', voice)
   const contentCiphertext = await framed(raw, body.plain, artifactAad({
     capsuleId: jsPressIds.capsule,
     blobId: jsPressIds.content,
@@ -217,8 +235,17 @@ export async function jsPressMaterial(): Promise<JsPressMaterial> {
     senderUserId: jsPressIds.sender,
     recipientUserId: jsPressIds.account,
   }))))
+  const mediaCiphertext = voice ? await framed(raw, jsVoiceSound, artifactAad({
+    capsuleId: jsPressIds.capsule,
+    blobId: jsPressIds.media,
+    kind: 'MEDIA',
+    ordinal: -1,
+    senderUserId: jsPressIds.sender,
+    recipientUserId: jsPressIds.account,
+  })) : null
   const stored = new Map<string, Uint8Array>([[jsPressIds.content, contentCiphertext]])
   photoCiphertexts.forEach((bytes, index) => stored.set(jsPressIds.photos[index] ?? '', bytes))
+  if (mediaCiphertext) stored.set(jsPressIds.media, mediaCiphertext)
   const capsule: IncomingCapsule = {
     capsuleId: jsPressIds.capsule,
     senderUserId: jsPressIds.sender,
@@ -242,10 +269,17 @@ export async function jsPressMaterial(): Promise<JsPressMaterial> {
         ciphertextSize: photoCiphertexts[ordinal]?.length ?? 0,
         ciphertextSha256: '',
       })),
+      ...mediaCiphertext ? [{
+        blobId: jsPressIds.media,
+        kind: 'MEDIA' as const,
+        ordinal: null,
+        ciphertextSize: mediaCiphertext.length,
+        ciphertextSha256: '',
+      }] : [],
     ],
   }
   for (const blob of capsule.blobs) {
-    if (blob.kind === 'PHOTO') blob.ciphertextSha256 = await sha256(stored.get(blob.blobId) ?? new Uint8Array())
+    if (blob.kind === 'PHOTO' || blob.kind === 'MEDIA') blob.ciphertextSha256 = await sha256(stored.get(blob.blobId) ?? new Uint8Array())
   }
   return {
     plain: body.plain,
@@ -257,6 +291,7 @@ export async function jsPressMaterial(): Promise<JsPressMaterial> {
       ordinal,
       ciphertext: photoCiphertexts[ordinal] ?? new Uint8Array(),
     })),
+    media: mediaCiphertext ? { blobId: jsPressIds.media, ciphertext: mediaCiphertext } : null,
     capabilities: () => ({
       accountId: jsPressIds.account,
       bundleId: jsPressIds.bundle,

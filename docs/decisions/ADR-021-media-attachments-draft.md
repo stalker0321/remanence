@@ -142,6 +142,15 @@ minimum size. `poster_content_id` ties the video to that photo. So:
 | Circle | CameraX `VideoCapture`, front camera, square crop, 30 s cap | `getUserMedia` + `MediaRecorder` `video/mp4` |
 | Playback | decrypt into app-private cache, play, wipe on close | decrypt into a `blob:` URL, revoke on close |
 
+Site, receiving (23 November): the incoming list asks with `media=voice` and
+takes one signed MEDIA blob; opening the card downloads and decrypts the voice
+note with the photos (it must be the one MEDIA blob the manifest names, and an
+MP4), and the held sheet keeps it as an `audio/mp4` object URL revoked on
+close. The whole band is the button ("listen to the voice note" / "pause the
+voice note"); while it plays a pause glyph in the band's own form covers the
+play button the card draws. `stageVoiceCheck.mjs` plays a real AAC tone in all
+three forms. A first gift carries no media yet.
+
 Firefox records only WebM. The site converts a Firefox recording to MP4 in the
 browser if that is fast and small enough; otherwise recording is not offered
 in Firefox. Playing a received voice note or circle works there either way.

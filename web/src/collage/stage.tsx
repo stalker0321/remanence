@@ -6,6 +6,7 @@ import type { HeldSheet } from './memory'
 import type { Scene } from './prepare'
 import { PhotoViewer } from './PhotoViewer'
 import { CardBack, LetterMark } from './CardBack'
+import { VoiceBand } from './VoiceBand'
 import { Icon } from '../ui/Primitives'
 
 export interface StagePorts {
@@ -241,6 +242,7 @@ export function CollageStage({
               </button>
             ))}
             {held.letter !== null ? <LetterMark scene={held.scene} label={t('letterMark')} onTurn={() => setTurnedOwner(held)} /> : null}
+            {held.sound !== null ? <VoiceBand scene={held.scene} sound={held.sound} listen={t('voiceListen')} pause={t('voicePause')} /> : null}
             </div>
             {held.letter !== null ? (
               <div className="sheet-back" inert={!turned}>

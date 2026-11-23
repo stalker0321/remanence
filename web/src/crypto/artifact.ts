@@ -19,7 +19,9 @@ export async function decryptArtifact(
       ? limits.recognitionCiphertext
       : kind === 'CONTENT_MANIFEST'
         ? limits.contentCiphertext
-        : 0
+        : kind === 'MEDIA'
+          ? limits.mediaCiphertext
+          : 0
   if (cap === 0) throw new ProtocolError('UNKNOWN_KIND')
   if (ciphertext.length < limits.artifactOverhead || ciphertext.length > cap) throw new ProtocolError('OVERSIZED')
   const known = [prefix, prefixV2].some((head) => startsWith(aad, head) && aad[head.length] === 0)

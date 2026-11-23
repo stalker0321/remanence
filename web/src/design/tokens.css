@@ -362,7 +362,8 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
 }
 
 /* The note itself turns the card; the small arrow at its end is the mark. */
-.card-sides button.letter-mark {
+.card-sides button.letter-mark,
+.card-sides button.voice-band {
   position: absolute;
   padding: 0;
   border: 0;
@@ -383,8 +384,12 @@ video.preview { display:block; width:100%; margin-top:1rem; background:var(--ink
   stroke-linejoin: round;
 }
 
+/* The pause glyph covers the play glyph the card draws while the voice note plays. */
+.card-sides button.voice-band svg { position: absolute; }
+
 /* The site's button hover paints a panel; over the card it would cover the note. */
 .card-sides button.letter-mark:hover,
+.card-sides button.voice-band:hover,
 .card-sides button.card-back-turn:hover { background: transparent; }
 
 .card-back {

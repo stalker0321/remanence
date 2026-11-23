@@ -16,8 +16,10 @@ export interface HeldSheet {
   photos: ReadonlyMap<string, string>
   artwork: string | null
   letter: string | null
-  /** The voice note's MEDIA blob and length; its sound is fetched on play. */
+  /** The voice note's length and peaks (drawn in the band). */
   voice: ManifestVoice | null
+  /** The voice note's sound as an object URL, revoked with the sheet. */
+  sound: string | null
 }
 
 export const browserUrls: UrlPort = {
@@ -70,7 +72,14 @@ export class PresentationMemory {
         artwork = this.urls.create(copy, 'image/webp')
         this.#urls.push(artwork)
       }
-      const held = { scene: opened.scene, photos, artwork, letter: opened.letter, voice: opened.voice }
+      let sound: string | null = null
+      if (opened.sound) {
+        const copy = opened.sound.slice()
+        this.#bytes.push(copy)
+        sound = this.urls.create(copy, 'audio/mp4')
+        this.#urls.push(sound)
+      }
+      const held = { scene: opened.scene, photos, artwork, letter: opened.letter, voice: opened.voice, sound }
       this.#sheet = held
       this.#emit()
       return held
@@ -118,5 +127,6 @@ export function showGrantedPostcard(session: SessionStore, memory: PresentationM
   } finally {
     for (const bytes of opened.photos.values()) bytes.fill(0)
     opened.artwork?.fill(0)
+    opened.sound?.fill(0)
   }
 }

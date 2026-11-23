@@ -350,5 +350,7 @@
   "letterTitle": "the back of the postcard",
   "createLetterHint": "the start goes on the postcard, the whole text on its back",
   "letterMark": "continued on the back",
-  "letterFront": "the front"
+  "letterFront": "the front",
+  "voiceListen": "listen to the voice note",
+  "voicePause": "pause the voice note"
 }

@@ -40,8 +40,10 @@ export interface OpenedPostcard {
   artwork: Uint8Array | null
   /** Long note read beside the sheet, or null. */
   letter: string | null
-  /** The voice note in the band; its MEDIA blob is fetched when the receiver presses play. */
+  /** The voice note in the band. */
   voice: ManifestVoice | null
+  /** The voice note's decrypted MP4, played when the receiver presses the band. */
+  sound: Uint8Array | null
 }
 
 /**
@@ -59,6 +61,7 @@ export async function openGrantedPostcard(
   measurer: TextMeasurer,
   artwork: HeldArtwork | ArtworkSource | null = null,
   signal?: AbortSignal,
+  media: SealedBlob | null = null,
 ): Promise<OpenedPostcard> {
   const view = session.getSnapshot()
   const caps = keys.capabilities(view)
@@ -150,6 +153,13 @@ export async function openGrantedPostcard(
       fresh()
       photoPlain.set(authored.contentId, plain)
     }
+    const mediaKey = keyset
+    const sound = await openVoice(manifest.voice, capsule, media, async (aad, ciphertext) => {
+      const plain = await fresh().decryptArtifact(mediaKey, aad, ciphertext, 'MEDIA')
+      plains.push(plain)
+      fresh()
+      return plain
+    })
     const held = typeof artwork === 'function' && manifest.expression.musicRegion?.artwork
       ? await artwork(manifest.expression.musicRegion.artwork, signal)
       : typeof artwork === 'function' ? null : artwork
@@ -169,7 +179,14 @@ export async function openGrantedPostcard(
     if (prepared.kind !== 'ready') throw new CollageError('REJECTED')
     const kept = new Map<string, Uint8Array>()
     for (const [id, bytes] of photoPlain) kept.set(id, bytes.slice())
-    return { scene: prepared.scene, photos: kept, artwork: cover && held ? held.bytes.slice() : null, letter: manifest.letter, voice: manifest.voice }
+    return {
+      scene: prepared.scene,
+      photos: kept,
+      artwork: cover && held ? held.bytes.slice() : null,
+      letter: manifest.letter,
+      voice: manifest.voice,
+      sound: sound ? sound.slice() : null,
+    }
   } catch (error) {
     if (error instanceof CollageError || error instanceof ProtocolError) throw error
     throw new CollageError('INTEGRITY')
@@ -178,6 +195,29 @@ export async function openGrantedPostcard(
     keyset?.fill(0)
     for (const plain of plains) plain.fill(0)
   }
+}
+
+/**
+ * The voice note's sound. The manifest names the one MEDIA blob the capsule
+ * lists, and the blob is an MP4 (an `ftyp` box first); a MEDIA blob the
+ * manifest does not name, or a named one that is missing, fails closed.
+ */
+async function openVoice(
+  voice: ManifestVoice | null,
+  capsule: IncomingCapsule,
+  media: SealedBlob | null,
+  decrypt: (aad: Uint8Array, ciphertext: Uint8Array) => Promise<Uint8Array>,
+): Promise<Uint8Array | null> {
+  const declared = capsule.blobs.filter((blob) => blob.kind === 'MEDIA')
+  if (voice === null) {
+    if (declared.length > 0 || media !== null) throw new CollageError('INTEGRITY')
+    return null
+  }
+  const blobId = formatUuid(voice.blobId)
+  if (declared.length !== 1 || declared[0]!.blobId !== blobId || media?.blobId !== blobId) throw new CollageError('INTEGRITY')
+  const plain = await decrypt(capsuleArtifactAad(capsule, blobId, 'MEDIA', -1), media.ciphertext)
+  if (plain.length < 8 || plain[4] !== 0x66 || plain[5] !== 0x74 || plain[6] !== 0x79 || plain[7] !== 0x70) throw new CollageError('INTEGRITY')
+  return plain
 }
 
 async function coverFor(manifest: Awaited<ReturnType<typeof parseContentManifest>>, artwork: HeldArtwork | null): Promise<{ width: number; height: number } | null> {

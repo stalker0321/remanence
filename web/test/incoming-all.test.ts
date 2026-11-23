@@ -54,14 +54,16 @@ function cursorFor(sequence: number): string {
   return base64url(payload)
 }
 
-async function signedItem(index: number, recognitionSize = 101): Promise<Record<string, unknown>> {
+async function signedItem(index: number, recognitionSize = 101, media = 0): Promise<Record<string, unknown>> {
   const id = capsuleId(index)
+  const voices = Array.from({ length: media }, (_, slot) => ({ id: blobId(index, 5 + slot), size: 4096 + slot, fill: 0x40 + slot }))
   const artifacts = [
     { blobId: uuidToBytes(blobId(index, 0)), kind: 'RECOGNITION_MANIFEST' as const, ordinal: -1, ciphertextSize: recognitionSize, ciphertextSha256: digest(0x11) },
     { blobId: uuidToBytes(blobId(index, 1)), kind: 'CONTENT_MANIFEST' as const, ordinal: -1, ciphertextSize: 202, ciphertextSha256: digest(0x22) },
     { blobId: uuidToBytes(blobId(index, 2)), kind: 'PHOTO' as const, ordinal: 0, ciphertextSize: 303, ciphertextSha256: digest(0x33) },
     { blobId: uuidToBytes(blobId(index, 3)), kind: 'PHOTO' as const, ordinal: 1, ciphertextSize: 304, ciphertextSha256: digest(0x34) },
     { blobId: uuidToBytes(blobId(index, 4)), kind: 'PHOTO' as const, ordinal: 2, ciphertextSize: 305, ciphertextSha256: digest(0x35) },
+    ...voices.map((voice) => ({ blobId: uuidToBytes(voice.id), kind: 'MEDIA' as const, ordinal: -1, ciphertextSize: voice.size, ciphertextSha256: digest(voice.fill) })),
   ]
   const statement = buildPublishStatement({
     capsuleId: uuidToBytes(id),
@@ -101,6 +103,7 @@ async function signedItem(index: number, recognitionSize = 101): Promise<Record<
       { blob_id: blobId(index, 2), kind: 'PHOTO', ordinal: 0, ciphertext_size: 303, ciphertext_sha256: b64(digest(0x33)) },
       { blob_id: blobId(index, 3), kind: 'PHOTO', ordinal: 1, ciphertext_size: 304, ciphertext_sha256: b64(digest(0x34)) },
       { blob_id: blobId(index, 4), kind: 'PHOTO', ordinal: 2, ciphertext_size: 305, ciphertext_sha256: b64(digest(0x35)) },
+      ...voices.map((voice) => ({ blob_id: voice.id, kind: 'MEDIA', ordinal: null, ciphertext_size: voice.size, ciphertext_sha256: b64(digest(voice.fill)) })),
     ],
   }
 }
@@ -162,9 +165,29 @@ describe('T353 complete incoming collector', () => {
     expect(result.nextCursor).toBeNull()
     expect(result.items.map((entry) => entry.capsuleId)).toEqual([capsuleId(0)])
     expect(incoming).toHaveLength(1)
-    expect(incoming[0]!.query).toEqual({ limit: '25' })
+    expect(incoming[0]!.query).toEqual({ media: 'voice', limit: '25' })
     expect(isCanonicalIncomingCursor(terminal)).toBe(true)
     wipeIncomingCatalog(result.items)
+  })
+
+  it('asks for cards with a voice note and keeps their one signed MEDIA blob', async () => {
+    const voiced = await signedItem(0, 101, 1)
+    const { transport, incoming } = transportFor(new Map([[null, page([voiced], false, null)]]))
+    const result = await fetchCompleteIncoming(session(), transport)
+    expect(incoming[0]!.query?.media).toBe('voice')
+    expect(result.items[0]!.blobs.filter((blob) => blob.kind === 'MEDIA')).toEqual([
+      { blobId: blobId(0, 5), kind: 'MEDIA', ordinal: null, ciphertextSize: 4096, ciphertextSha256: b64(digest(0x40)) },
+    ])
+    wipeIncomingCatalog(result.items)
+
+    // A MEDIA blob the statement does not bind, or a second one, refuses the page.
+    const unbound = await signedItem(0)
+    ;(unbound.blobs as unknown[]).push((voiced.blobs as unknown[])[5])
+    await expect(fetchCompleteIncoming(session(), transportFor(new Map([[null, page([unbound], false, null)]])).transport)).rejects.toBeDefined()
+    const twice = await signedItem(0, 101, 1)
+    ;(twice.blobs as unknown[]).push({ ...((twice.blobs as Record<string, unknown>[])[5]), blob_id: blobId(0, 7) })
+    await expect(fetchCompleteIncoming(session(), transportFor(new Map([[null, page([twice], false, null)]])).transport)).rejects.toBeDefined()
+    await expect(signedItem(0, 101, 2)).rejects.toMatchObject({ code: 'INVALID_ENCODING' })
   })
 
   it('preserves server order across pages and sends the canonical cursor', async () => {

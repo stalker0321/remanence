@@ -2,7 +2,7 @@ import type { MemoryKeys } from '../auth/memoryKeys'
 import type { ApiTransport } from '../auth/http'
 import { CollageError } from '../collage/errors'
 import { showGrantedPostcard, type PresentationMemory } from '../collage/memory'
-import { openGrantedPostcard, type OpenedPostcard, type SealedPhoto } from '../collage/open'
+import { openGrantedPostcard, type OpenedPostcard, type SealedBlob, type SealedPhoto } from '../collage/open'
 import { fetchSealedCover } from '../collage/cover'
 import type { TextMeasurer } from '../collage/prepare'
 import { arrayBuffer, bytesToHex } from '../protocol/bytes'
@@ -51,6 +51,7 @@ export async function receivePostcard(
   if (!item) throw new ScanError('BODY_MISSING')
   const content = item.blobs.find((blob) => blob.kind === 'CONTENT_MANIFEST')
   const photos = item.blobs.filter((blob) => blob.kind === 'PHOTO' && blob.ordinal !== null)
+  const media = item.blobs.find((blob) => blob.kind === 'MEDIA') ?? null
   if (!content || photos.length === 0 || item.envelopeCiphertext.length === 0) throw new ScanError('BODY_MISSING')
   const downloaded: Uint8Array[] = []
   let matchedGeneration: number | null = null
@@ -66,6 +67,14 @@ export async function receivePostcard(
       downloaded.push(bytes)
       stillUnlocked(session, generation)
       sealedPhotos.push({ blobId: photo.blobId, ordinal: photo.ordinal ?? 0, ciphertext: bytes })
+    }
+    let sealedMedia: SealedBlob | null = null
+    if (media) {
+      if (signal.aborted) throw new ScanError('CANCELLED')
+      const bytes = await readChecked(blobs, item, media, signal)
+      downloaded.push(bytes)
+      stillUnlocked(session, generation)
+      sealedMedia = { blobId: media.blobId, ciphertext: bytes }
     }
     if (signal.aborted) throw new ScanError('CANCELLED')
     const caps = keys.capabilities(session.getSnapshot())
@@ -89,7 +98,7 @@ export async function receivePostcard(
     opened = await openGrantedPostcard(session, keys, grant, item, {
       blobId: content.blobId,
       ciphertext: contentBytes,
-    }, sealedPhotos, measurer, fetchSealedCover, signal)
+    }, sealedPhotos, measurer, fetchSealedCover, signal, sealedMedia)
     currentToken()
     onAdmission?.()
     currentToken()
@@ -104,6 +113,7 @@ export async function receivePostcard(
     if (opened) {
       for (const bytes of opened.photos.values()) bytes.fill(0)
       opened.artwork?.fill(0)
+      opened.sound?.fill(0)
     }
     for (const bytes of downloaded) bytes.fill(0)
   }

@@ -12,7 +12,7 @@ import { ScanGrant } from '../src/scan/grant'
 import { SessionStore } from '../src/session/session'
 import type { IncomingCapsule } from '../src/sync/incoming'
 import { fitText } from './sheets'
-import { jsPressIds, jsPressMaterial, jsPressPlain } from './sealedFixture'
+import { jsPressIds, jsPressMaterial, jsPressPlain, jsVoiceSound } from './sealedFixture'
 
 // The sealed bytes come from the JS producer in sealedFixture.ts. They are not Android output.
 
@@ -119,6 +119,77 @@ describe('granted postcard', () => {
     await expect(openGrantedPostcard(
       locked.session, keys, grant, material.capsule, material.content, [], fitText,
     )).rejects.toMatchObject({ code: 'GRANT' })
+  })
+
+  it('decrypts the voice note with the card, wipes it after, and holds it as audio until the sheet closes', async () => {
+    const material = await jsPressMaterial(true)
+    const { session, keys, grant } = matched()
+    const capabilities = material.capabilities()
+    const sounds: Uint8Array[] = []
+    keys.hold(session.getSnapshot(), {
+      ...capabilities,
+      decryptArtifact: async (held, aad, ciphertext, kind) => {
+        const plainBytes = await capabilities.decryptArtifact(held, aad, ciphertext, kind)
+        if (kind === 'MEDIA') sounds.push(plainBytes)
+        return plainBytes
+      },
+    })
+    // The press sheet's band cannot draw a voice note, so the card is refused after its sound opened.
+    await expect(openGrantedPostcard(
+      session, keys, grant, material.capsule, material.content, material.photos, fitText, null, undefined, material.media,
+    )).rejects.toMatchObject({ code: 'REJECTED' })
+    expect(sounds).toHaveLength(1)
+    expect(sounds[0]!.length).toBe(jsVoiceSound.length)
+    expect(sounds[0]!.every((n) => n === 0)).toBe(true)
+
+    const plain = await jsPressMaterial()
+    const shown = matched()
+    shown.keys.hold(shown.session.getSnapshot(), plain.capabilities())
+    const opened = await openGrantedPostcard(shown.session, shown.keys, shown.grant, plain.capsule, plain.content, plain.photos, fitText)
+    expect(opened.sound).toBeNull()
+    const sound = jsVoiceSound.slice()
+    const live = new Map<string, string>()
+    const memory = new PresentationMemory({
+      create(_bytes, type) { const url = `mem:${live.size}`; live.set(url, type); return url },
+      revoke(url) { live.delete(url) },
+    })
+    memory.attach(shown.session)
+    showGrantedPostcard(shown.session, memory, { ...opened, sound })
+    const held = memory.getSnapshot()!
+    expect(held.sound).not.toBeNull()
+    expect(live.get(held.sound!)).toBe('audio/mp4')
+    expect(sound.every((n) => n === 0)).toBe(true)
+    shown.session.signOut()
+    expect(live.size).toBe(0)
+  })
+
+  it('refuses a voice note that is missing, swapped, or not named by the card', async () => {
+    const voiced = await jsPressMaterial(true)
+    const plain = await jsPressMaterial()
+    const attempt = async (material: typeof voiced, capsule: IncomingCapsule, media: typeof voiced.media) => {
+      const { session, keys, grant } = matched()
+      keys.hold(session.getSnapshot(), material.capabilities())
+      return openGrantedPostcard(session, keys, grant, capsule, material.content, material.photos, fitText, null, undefined, media)
+    }
+    // The card names a voice note the sender never listed or the receiver never fetched.
+    await expect(attempt(voiced, voiced.capsule, null)).rejects.toMatchObject({ code: 'INTEGRITY' })
+    await expect(attempt(voiced, { ...voiced.capsule, blobs: voiced.capsule.blobs.filter((blob) => blob.kind !== 'MEDIA') }, voiced.media))
+      .rejects.toMatchObject({ code: 'INTEGRITY' })
+    // A MEDIA blob the card does not name.
+    const extra = voiced.capsule.blobs.find((blob) => blob.kind === 'MEDIA')!
+    await expect(attempt(plain, { ...plain.capsule, blobs: [...plain.capsule.blobs, extra] }, null)).rejects.toMatchObject({ code: 'INTEGRITY' })
+    // The sound is not an MP4.
+    const capabilities = voiced.capabilities()
+    const { session, keys, grant } = matched()
+    keys.hold(session.getSnapshot(), {
+      ...capabilities,
+      decryptArtifact: async (held, aad, ciphertext, kind) => {
+        const plainBytes = await capabilities.decryptArtifact(held, aad, ciphertext, kind)
+        return kind === 'MEDIA' ? new Uint8Array(plainBytes.length) : plainBytes
+      },
+    })
+    await expect(openGrantedPostcard(session, keys, grant, voiced.capsule, voiced.content, voiced.photos, fitText, null, undefined, voiced.media))
+      .rejects.toMatchObject({ code: 'INTEGRITY' })
   })
 
   it('does not admit when the statement, the bytes, or the phase change', async () => {

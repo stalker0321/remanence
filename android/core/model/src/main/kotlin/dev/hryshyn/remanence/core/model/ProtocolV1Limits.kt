@@ -26,6 +26,10 @@ object ProtocolV1Limits {
     const val CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES = 65_536L
     const val RECIPIENT_ENVELOPE_MAX_CIPHERTEXT_BYTES = 16_384L
     const val TOTAL_CAPSULE_MAX_CIPHERTEXT_BYTES = 44_040_192L
+
+    /** ADR-021: at most one MEDIA artifact, a voice note (1 MiB plus the AEAD overhead). */
+    const val MEDIA_COUNT_MAX = 1
+    const val ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES = 1_048_609L
     const val DRAFT_LIFETIME_SECONDS = 604_800L
     const val INCOMING_PAGE_DEFAULT = 50
     const val INCOMING_PAGE_MAX = 100

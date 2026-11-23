@@ -28,5 +28,7 @@
   "draft_lifetime_seconds": 604800,
   "incoming_page_default": 50,
   "incoming_page_max": 100,
-  "mvp_track_attachment_allowed": false
+  "mvp_track_attachment_allowed": false,
+  "media_count_max": 1,
+  "encrypted_media_max_ciphertext_bytes": 1048609
 }

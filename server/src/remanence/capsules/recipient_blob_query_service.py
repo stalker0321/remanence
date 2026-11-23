@@ -20,6 +20,7 @@ _KIND_MAX_SIZE: Final = {
     CapsuleBlobKind.RECOGNITION_MANIFEST: LIMITS_V1.recognition_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.CONTENT_MANIFEST: LIMITS_V1.content_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.PHOTO: LIMITS_V1.encrypted_photo_max_ciphertext_bytes,
+    CapsuleBlobKind.MEDIA: LIMITS_V1.encrypted_media_max_ciphertext_bytes,
 }
 
 

@@ -12,6 +12,7 @@ enum ArtifactKind {
   RECOGNITION_MANIFEST = 1;
   CONTENT_MANIFEST = 2;
   PHOTO = 3;
+  MEDIA = 4; // ADR-021: at most one, ordinal -1; a voice note today
 }
 
 message ArtifactBinding {

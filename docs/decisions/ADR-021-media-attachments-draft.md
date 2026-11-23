@@ -107,27 +107,32 @@ minimum size. `poster_content_id` ties the video to that photo. So:
 - new apps play the video in that tile when the card is open;
 - no new kind of tile in the expression is needed for the circle.
 
-### Server (not built)
+### Server (built 23 November, behind `media_enabled`, not deployed)
 
-All of these must change together:
-
-- `CapsuleBlobKind.MEDIA`. The Postgres enum `capsule_blob_kind` is native, so
-  it needs an Alembic migration (`ALTER TYPE ... ADD VALUE 'MEDIA'`).
-- `publish_statement.py`: the kind maps, the 5..8 count, the per-kind size cap
-  and the ordinal rule.
-- `upload_preflight_service.py`, `schemas.py`, `api/capsules.py`: draft
-  declarations and upload size checks.
-- `incoming_query_service.py`, `recipient_blob_query_service.py` and
-  `recipient_material_synced_service.py`: the receive side.
-- First gifts: `delivery_v2.proto` artifact kinds and the pending services.
-
-### Compatibility
-
-Released Android builds refuse an incoming capsule whose blob list contains an
-unknown kind (`IncomingCapsuleRepository`: "unsupported incoming blob kind").
-The incoming row keeps `blobs` with the three old kinds and adds a separate
-`media: [...]` that only new clients read. Old apps open the card and never
-see the media.
+- `ArtifactKind.MEDIA = 4`, ordinal -1 (like the manifests), at most one;
+  it sorts after the photos in the canonical artifact order. The publish
+  statement takes 5..8 artifacts.
+- Limits (`limits-v1.json`, all three platforms): `media_count_max = 1`,
+  `encrypted_media_max_ciphertext_bytes = 1048609` (1 MiB of voice plus the
+  AEAD overhead). The server sees only ciphertext, so this one cap covers
+  every kind of media; a circle will raise it.
+- `CapsuleBlobKind.MEDIA`: migration `0021_media_blob_kind` adds the enum
+  label in its own commit (as 0005 did), widens the kind/ordinal check and
+  adds `uq_capsule_blobs_one_media_per_capsule`. The downgrade refuses while
+  media rows exist and drops and rebuilds the partial indexes around the type
+  swap.
+- `media_enabled` (default off): a draft that declares MEDIA is refused
+  while it is off. Reading media never needs the flag.
+- Old clients: released Android builds parse the incoming page with
+  `ignoreUnknownKeys = false` and refuse the WHOLE page over one blob of an
+  unknown kind (and the site checks that the statement's artifacts equal the
+  listed blobs). So a card with media is listed only to a client that asks
+  for it with `GET /v1/capsules/incoming?media=voice`; every other client
+  never sees it, and it waits there for the update instead of breaking the
+  inbox. A client that asks gets the MEDIA blob in the ordinary `blobs` list.
+- Blob download and the synced acknowledgement take the MEDIA kind.
+- Not yet: first gifts (`delivery_v2`, the pending services) and the
+  sender's history; a pending send with media is not offered.
 
 ## 4. Recording and playback
 

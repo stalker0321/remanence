@@ -11,6 +11,8 @@ export const limits = {
   recognitionCiphertext: 1_048_576,
   contentCiphertext: 65_536,
   recipientEnvelopeCiphertext: 16_384,
+  /** ADR-021: one MEDIA artifact, a voice note (1 MiB plus the AEAD overhead). */
+  mediaCiphertext: 1_048_609,
 } as const
 
 export const normalizedPhoto = {
@@ -26,6 +28,8 @@ export function protocolLimitsMatchFixture(): boolean {
     fixture.recognition_manifest_max_ciphertext_bytes === limits.recognitionCiphertext &&
     fixture.content_manifest_max_ciphertext_bytes === limits.contentCiphertext &&
     fixture.recipient_envelope_max_ciphertext_bytes === limits.recipientEnvelopeCiphertext &&
+    fixture.encrypted_media_max_ciphertext_bytes === limits.mediaCiphertext &&
+    fixture.media_count_max === 1 &&
     fixture.normalized_photo_media_type === normalizedPhoto.mediaType &&
     fixture.normalized_photo_max_long_edge_px === normalizedPhoto.maxLongEdgePx &&
     fixture.normalized_photo_max_plaintext_bytes === normalizedPhoto.maxPlaintextBytes &&

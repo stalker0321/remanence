@@ -33,11 +33,13 @@ _KIND_RANK: Final = {
     CapsuleBlobKind.RECOGNITION_MANIFEST: 1,
     CapsuleBlobKind.CONTENT_MANIFEST: 2,
     CapsuleBlobKind.PHOTO: 3,
+    CapsuleBlobKind.MEDIA: 4,
 }
 _KIND_MAX_SIZE: Final = {
     CapsuleBlobKind.RECOGNITION_MANIFEST: LIMITS_V1.recognition_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.CONTENT_MANIFEST: LIMITS_V1.content_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.PHOTO: LIMITS_V1.encrypted_photo_max_ciphertext_bytes,
+    CapsuleBlobKind.MEDIA: LIMITS_V1.encrypted_media_max_ciphertext_bytes,
 }
 
 
@@ -161,15 +163,18 @@ class IncomingCapsuleQueryService:
         authenticated_recipient_user_id: uuid.UUID,
         cursor: str | None = None,
         limit: int = LIMITS_V1.incoming_page_default,
+        media: bool = False,
     ) -> IncomingCapsulePage:
         recipient_id = _require_uuid(authenticated_recipient_user_id)
+        if type(media) is not bool:
+            raise _error("VALIDATION_FAILED")
         after = _require_cursor(cursor)
         limit = _require_limit(limit)
         mapped: IncomingCapsuleQueryError | None = None
         page: IncomingCapsulePage | None = None
         try:
             page = self._list_incoming(
-                recipient_id=recipient_id, after=after, limit=limit
+                recipient_id=recipient_id, after=after, limit=limit, media=media
             )
         except IncomingCapsuleQueryError as exc:
             mapped = exc
@@ -187,6 +192,7 @@ class IncomingCapsuleQueryService:
         recipient_id: uuid.UUID,
         after: IncomingCursor | None,
         limit: int,
+        media: bool,
     ) -> IncomingCapsulePage:
         after_sequence: int | None = None
         if after is not None:
@@ -213,6 +219,16 @@ class IncomingCapsuleQueryService:
                 ).exists(),
             )
         )
+        if not media:
+            # ADR-021: a client that has not said it reads media never sees a
+            # card with media. Released builds refuse a whole page over one
+            # unknown blob kind, so such a card waits for the update instead.
+            stmt = stmt.where(
+                ~select(CapsuleBlob.id).where(
+                    CapsuleBlob.capsule_id == Capsule.id,
+                    CapsuleBlob.kind == CapsuleBlobKind.MEDIA,
+                ).exists()
+            )
         if after is not None:
             if after_sequence is None:
                 raise _error("INTERNAL_ERROR")
@@ -453,6 +469,7 @@ class IncomingCapsuleQueryService:
         seen_ids: set[bytes] = set()
         recognition = 0
         content = 0
+        media = 0
         photos: list[int] = []
         total_size = 0
         for row in rows:
@@ -484,6 +501,8 @@ class IncomingCapsuleQueryService:
                     raise _error("INTERNAL_ERROR")
                 if kind is CapsuleBlobKind.RECOGNITION_MANIFEST:
                     recognition += 1
+                elif kind is CapsuleBlobKind.MEDIA:
+                    media += 1
                 else:
                     content += 1
             snapshots.append(
@@ -498,6 +517,8 @@ class IncomingCapsuleQueryService:
         if recognition != LIMITS_V1.recognition_manifest_count:
             raise _error("INTERNAL_ERROR")
         if content != LIMITS_V1.content_manifest_count:
+            raise _error("INTERNAL_ERROR")
+        if media > LIMITS_V1.media_count_max:
             raise _error("INTERNAL_ERROR")
         if not LIMITS_V1.photo_count_min <= len(photos) <= LIMITS_V1.photo_count_max:
             raise _error("INTERNAL_ERROR")

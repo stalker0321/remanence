@@ -567,3 +567,32 @@ def test_valid_photo_ordinal_permutation_is_rejected(fixture: dict) -> None:
         *(item.id.bytes for item in declarations),
     )
     _assert_invalid(lambda: verify_publish_statement(raw, capsule, declarations), secrets=secrets)
+
+
+def test_one_media_artifact_after_the_photos_verifies_and_a_misplaced_one_fails(fixture: dict) -> None:
+    capsule, declarations = _authoritative_data(fixture)
+    media = CapsuleBlob(
+        id=UUID("00000000-0000-0000-0000-0000000000aa"),
+        capsule_id=capsule.id,
+        kind=CapsuleBlobKind.MEDIA,
+        ordinal=None,
+        object_key=f"capsules/{capsule.id}/media.blob",
+        expected_ciphertext_size=1_048_609,
+        expected_ciphertext_sha256=hashlib.sha256(b"voice").digest(),
+        state=CapsuleBlobState.DECLARED,
+    )
+    with_media = [*declarations, media]
+    raw = _statement_with(capsule, [*_protocol_layout(declarations), media]).SerializeToString(deterministic=True)
+    verified = verify_publish_statement(raw, capsule, with_media)
+    assert [artifact.kind for artifact in verified.artifacts][-1] is CapsuleBlobKind.MEDIA
+    # Canonical order is by kind number: MEDIA (4) before a photo is refused.
+    misplaced = _statement_with(capsule, [media, *_protocol_layout(declarations)]).SerializeToString(deterministic=True)
+    _assert_invalid(lambda: verify_publish_statement(misplaced, capsule, with_media))
+    # A media cap one byte over the limit is refused.
+    big = CapsuleBlob(
+        id=media.id, capsule_id=capsule.id, kind=CapsuleBlobKind.MEDIA, ordinal=None,
+        object_key=media.object_key, expected_ciphertext_size=1_048_610,
+        expected_ciphertext_sha256=media.expected_ciphertext_sha256, state=CapsuleBlobState.DECLARED,
+    )
+    raw_big = _statement_with(capsule, [*_protocol_layout(declarations), big]).SerializeToString(deterministic=True)
+    _assert_invalid(lambda: verify_publish_statement(raw_big, capsule, [*declarations, big]))

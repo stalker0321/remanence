@@ -11,7 +11,7 @@ from psycopg import sql
 from sqlalchemy.engine import make_url
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
-_HEAD = "0020_card_seal"
+_HEAD = "0021_media_blob_kind"
 _HEAD_TABLES = {
     "account_send_access",
     "address_proof_attempts",
@@ -206,6 +206,7 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
         "RECOGNITION_MANIFEST",
         "CONTENT_MANIFEST",
         "PHOTO",
+        "MEDIA",
     ]
     assert _enum_labels(conn, "capsule_blob_state") == ["DECLARED", "STORED"]
     assert _enum_labels(conn, "recipient_delivery_status") == [
@@ -353,6 +354,7 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
         "uq_capsule_blobs_one_recognition_manifest_per_capsule",
         "uq_capsule_blobs_one_content_manifest_per_capsule",
         "uq_capsule_blobs_photo_ordinal_per_capsule",
+        "uq_capsule_blobs_one_media_per_capsule",
         "ix_capsule_idempotency_records_expires_at",
     }
     actual_indexes = {
@@ -371,6 +373,7 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
         "uq_capsule_blobs_one_recognition_manifest_per_capsule": "kind = 'RECOGNITION_MANIFEST'",
         "uq_capsule_blobs_one_content_manifest_per_capsule": "kind = 'CONTENT_MANIFEST'",
         "uq_capsule_blobs_photo_ordinal_per_capsule": "kind = 'PHOTO'",
+        "uq_capsule_blobs_one_media_per_capsule": "kind = 'MEDIA'",
     }
     for index_name, predicate in expected_partial_indexes.items():
         row = conn.execute(

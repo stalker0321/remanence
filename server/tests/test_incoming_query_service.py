@@ -102,6 +102,7 @@ def _add_incoming_ready(
     envelope_recipient_id: UUID | None = None,
     envelope_key_bundle_id: UUID | None = None,
     publication_sequence: int | None = None,
+    with_media: bool = False,
 ) -> Capsule:
     if publication_sequence is None:
         publication_sequence = (
@@ -135,6 +136,8 @@ def _add_incoming_ready(
     ordinals = photo_ordinals if photo_ordinals is not None else tuple(range(photo_count))
     for ordinal in ordinals:
         specs.append((CapsuleBlobKind.PHOTO, ordinal, f"photo-{ordinal}".encode()))
+    if with_media:
+        specs.append((CapsuleBlobKind.MEDIA, None, b"voice"))
     for kind, ordinal, body in specs:
         blob_id = uuid4()
         session.add(
@@ -586,6 +589,34 @@ def test_revoked_capsules_are_excluded_from_ready_pages(session_factory):
         assert revoked.id not in {item.capsule_id for item in page.items}
 
 
+def test_media_cards_are_listed_only_for_clients_that_read_media(session_factory):
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        plain = _add_incoming_ready(
+            session, sender=sender, sender_bundle=sender_bundle,
+            recipient=recipient, recipient_bundle=recipient_bundle, ready_at=_NOW,
+        )
+        voiced = _add_incoming_ready(
+            session, sender=sender, sender_bundle=sender_bundle,
+            recipient=recipient, recipient_bundle=recipient_bundle,
+            ready_at=_NOW + timedelta(seconds=1), with_media=True,
+        )
+        session.commit()
+
+        # Released builds refuse a whole page over one unknown kind: they never see it.
+        old = _query(session, recipient.id, limit=10)
+        assert [item.capsule_id for item in old.items] == [plain.id]
+        service = IncomingCapsuleQueryService(session)
+        page = service.list_incoming(authenticated_recipient_user_id=recipient.id, limit=10, media=True)
+        assert [item.capsule_id for item in page.items] == [plain.id, voiced.id]
+        kinds = [blob.kind for blob in page.items[1].blobs]
+        assert kinds[-1] is CapsuleBlobKind.MEDIA and kinds.count(CapsuleBlobKind.MEDIA) == 1
+        assert page.items[1].blobs[-1].ordinal is None
+        with pytest.raises(IncomingCapsuleQueryError):
+            service.list_incoming(authenticated_recipient_user_id=recipient.id, limit=10, media="voice")
+
+
 def test_cross_user_draft_aborted_excluded_and_ciphertext_synced_included(session_factory):
     with session_factory() as session:
         sender, sender_bundle = _seed_user(session, "sender")
@@ -876,5 +907,6 @@ def test_caller_owns_transaction_and_queries_are_bounded(session_factory, monkey
         assert len(statements) == 2
         joined = " ".join(statements).lower()
         assert "object_key" not in joined
-        blob_queries = [statement for statement in statements if "capsule_blobs" in statement.lower()]
+        # The page query names capsule_blobs only in its media filter (ADR-021); blobs load once.
+        blob_queries = [statement for statement in statements if statement.lower().startswith("select capsule_blobs.")]
         assert len(blob_queries) == 1

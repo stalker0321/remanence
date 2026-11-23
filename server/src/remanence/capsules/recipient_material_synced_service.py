@@ -27,16 +27,19 @@ _KIND_RANK: Final = {
     CapsuleBlobKind.RECOGNITION_MANIFEST: 1,
     CapsuleBlobKind.CONTENT_MANIFEST: 2,
     CapsuleBlobKind.PHOTO: 3,
+    CapsuleBlobKind.MEDIA: 4,
 }
 _KIND_MAX_SIZE: Final = {
     CapsuleBlobKind.RECOGNITION_MANIFEST: LIMITS_V1.recognition_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.CONTENT_MANIFEST: LIMITS_V1.content_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.PHOTO: LIMITS_V1.encrypted_photo_max_ciphertext_bytes,
+    CapsuleBlobKind.MEDIA: LIMITS_V1.encrypted_media_max_ciphertext_bytes,
 }
 _MAX_BLOBS: Final = (
     LIMITS_V1.recognition_manifest_count
     + LIMITS_V1.content_manifest_count
     + LIMITS_V1.photo_count_max
+    + LIMITS_V1.media_count_max
 )
 
 
@@ -338,6 +341,7 @@ class RecipientMaterialSyncedService:
         seen_ids: set[bytes] = set()
         recognition = 0
         content = 0
+        media = 0
         photos: list[int] = []
         total_size = 0
         for row in rows:
@@ -367,11 +371,15 @@ class RecipientMaterialSyncedService:
                     raise _error("INTERNAL_ERROR")
                 if kind is CapsuleBlobKind.RECOGNITION_MANIFEST:
                     recognition += 1
+                elif kind is CapsuleBlobKind.MEDIA:
+                    media += 1
                 else:
                     content += 1
         if recognition != LIMITS_V1.recognition_manifest_count:
             raise _error("INTERNAL_ERROR")
         if content != LIMITS_V1.content_manifest_count:
+            raise _error("INTERNAL_ERROR")
+        if media > LIMITS_V1.media_count_max:
             raise _error("INTERNAL_ERROR")
         if not LIMITS_V1.photo_count_min <= len(photos) <= LIMITS_V1.photo_count_max:
             raise _error("INTERNAL_ERROR")

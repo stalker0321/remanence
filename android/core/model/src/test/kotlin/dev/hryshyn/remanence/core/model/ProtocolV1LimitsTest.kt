@@ -44,6 +44,9 @@ class ProtocolV1LimitsTest {
         assertInt(root, "incoming_page_default", ProtocolV1Limits.INCOMING_PAGE_DEFAULT)
         assertInt(root, "incoming_page_max", ProtocolV1Limits.INCOMING_PAGE_MAX)
         assertBoolean(root, "mvp_track_attachment_allowed", ProtocolV1Limits.MVP_TRACK_ATTACHMENT_ALLOWED)
+        assertInt(root, "media_count_max", ProtocolV1Limits.MEDIA_COUNT_MAX)
+        assertLong(root, "encrypted_media_max_ciphertext_bytes", ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES)
+        assertEquals(1024L * 1024L + ProtocolV1Limits.ARTIFACT_AEAD_OVERHEAD_BYTES, ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES)
 
         assertEquals(
             ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES,
@@ -163,6 +166,8 @@ class ProtocolV1LimitsTest {
             "incoming_page_default",
             "incoming_page_max",
             "mvp_track_attachment_allowed",
+            "media_count_max",
+            "encrypted_media_max_ciphertext_bytes",
         )
     }
 }

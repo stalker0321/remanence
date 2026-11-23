@@ -35,6 +35,10 @@ class ProtocolV1Limits:
     incoming_page_default: int = 50
     incoming_page_max: int = 100
     mvp_track_attachment_allowed: bool = False
+    # ADR-021: at most one MEDIA artifact (a voice note: 1 MiB plaintext plus
+    # the AEAD overhead). The server sees ciphertext only, so this is the cap.
+    media_count_max: int = 1
+    encrypted_media_max_ciphertext_bytes: int = 1_048_609
 
 
 LIMITS_V1 = ProtocolV1Limits()

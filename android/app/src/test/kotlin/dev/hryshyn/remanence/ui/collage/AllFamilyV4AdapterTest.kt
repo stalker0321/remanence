@@ -142,6 +142,27 @@ class AllFamilyV4AdapterTest {
     }
 
     @Test
+    fun aVoiceNoteSealsThePlateAndTheSpineAsVoiceBandsWithoutACover() {
+        val voiceInput = input().copy(music = null)
+        val artwork = GeneratorExpression.ArtworkRef("caa", "https://coverartarchive.org/x.jpg", ByteArray(32), "image/jpeg", 250, 250)
+        for ((planned, sealedMode) in listOf("plate" to "voice-plate", "card" to "voice-card")) {
+            val outcome = AllFamilyV4Adapter.seal(
+                candidate = candidate(plan(musicMode = planned)),
+                input = voiceInput,
+                senderHandle = "Alice",
+                style = style(23),
+                artwork = artwork,
+                voice = true,
+            )
+            val expression = (outcome as? AllFamilyV4Adapter.Outcome.Sealed)?.expression
+                ?: throw AssertionError("expected Sealed, got $outcome")
+            assertEquals(sealedMode, expression.musicRegion?.mode)
+            assertNull(expression.musicRegion?.artwork)
+            assertNull(expression.input.music)
+        }
+    }
+
+    @Test
     fun styleForGrammarIsBundledAndFailClosed() {
         assertEquals(23, style(23).grammar)
         assertNull(AllFamilyV4Adapter.styleForGrammar(99))

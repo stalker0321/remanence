@@ -46,6 +46,8 @@ internal object AllFamilyV4Adapter {
         /** The chosen song's words and the host's run widths: a plate becomes a caption when one line fits. */
         songWords: SongBand.Words? = null,
         runWidth: SongBand.RunWidth? = null,
+        /** A recorded voice note fills the band (ADR-021): the spine stays a spine, every other band is a plate. */
+        voice: Boolean = false,
     ): Outcome {
         if (style.grammar != candidate.grammarId) {
             return Outcome.Rejected(listOf("style belongs to another grammar"))
@@ -135,9 +137,11 @@ internal object AllFamilyV4Adapter {
                     floor(music.rect.w).toInt(), floor(music.rect.h).toInt(),
                 )
                 val type = textType(style.music)
-                val holdsCover = artwork != null && music.mode in GeneratorExpression.MUSIC_COVER_MODES_V4
+                val holdsCover = !voice && artwork != null && music.mode in GeneratorExpression.MUSIC_COVER_MODES_V4
                 // Owner, 9 November 2026: a plate is sealed as a one-line caption when the whole line fits.
-                val mode = if (music.mode == "plate" && songWords != null && runWidth != null &&
+                val mode = if (voice) {
+                    if (music.mode == "card") "voice-card" else "voice-plate"
+                } else if (music.mode == "plate" && songWords != null && runWidth != null &&
                     SongBand.layout(
                         rect, "caption",
                         SongBand.Face(type.family, type.size, type.weight, type.italic, type.line),

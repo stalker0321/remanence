@@ -127,6 +127,7 @@ class ContentManifestCodec {
         blobIdByContentId: Map<String, ByteArray>,
         trackSnapshot: CapsuleTrackSnapshotV1?,
         letter: String? = null,
+        voice: ManifestVoice? = null,
     ): ByteArray {
         require(
             expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V2 ||
@@ -145,7 +146,7 @@ class ContentManifestCodec {
         return build(
             capsuleKeyset, routingContext, photos, note,
             Triple(candidateId, projectionHash, expression), blobIdByContentId,
-            trackSnapshot, letter,
+            trackSnapshot, letter, voice,
         )
     }
 
@@ -158,12 +159,13 @@ class ContentManifestCodec {
         blobIdByContentId: Map<String, ByteArray>?,
         trackSnapshot: CapsuleTrackSnapshotV1? = null,
         letter: String? = null,
+        voice: ManifestVoice? = null,
     ): ByteArray = CapsuleArtifactCryptor().encrypt(
         capsuleKeyset = capsuleKeyset,
         context = contentContext(routingContext),
         plaintext = buildPlaintext(
             routingContext.capsuleId, photos, note,
-            expression, blobIdByContentId, trackSnapshot, letter,
+            expression, blobIdByContentId, trackSnapshot, letter, voice,
         ),
     )
 
@@ -181,6 +183,7 @@ class ContentManifestCodec {
         blobIdByContentId: Map<String, ByteArray>?,
         trackSnapshot: CapsuleTrackSnapshotV1? = null,
         letter: String? = null,
+        voice: ManifestVoice? = null,
     ): ByteArray {
         validatePhotos(photos)
         validateNote(note)
@@ -189,6 +192,15 @@ class ContentManifestCodec {
         }
         require(letter == null || expression != null) { "a letter requires the v2 expression frame" }
         require(letter == null || CapsuleLetter.valid(letter)) { "letter must be 1..${CapsuleLetter.MAX_UTF8_BYTES} UTF-8 bytes" }
+        // One sound per card: a voice note fills a voice band, never beside a song.
+        val voiceBand = expression?.third?.musicRegion?.mode in GeneratorExpression.VOICE_BAND_MODES
+        require((voice != null) == voiceBand) { "voice band and voice note must match" }
+        require(voice == null || (trackSnapshot == null && expression?.third?.input?.music == null)) {
+            "a card carries a song or a voice note, not both"
+        }
+        require(voice == null || (voice.durationMs in 1..ManifestVoice.MAX_MS && voice.peaks.size == ManifestVoice.PEAKS)) {
+            "voice note is out of bounds"
+        }
 
         val builder = ContentManifest.newBuilder()
             .setProtocolVersion(if (expression == null) PROTOCOL_VERSION else PROTOCOL_VERSION_V2)
@@ -226,6 +238,16 @@ class ContentManifestCodec {
             builder.setTrackSnapshot(snapshotBuilder.build())
         }
         letter?.let(builder::setLetter)
+        voice?.let { held ->
+            builder.setMedia(
+                MediaEntry.newBuilder()
+                    .setKind(MediaEntry.Kind.VOICE)
+                    .setBlobId(com.google.protobuf.ByteString.copyFrom(longToBytes(held.blobId)))
+                    .setMimeType(ManifestVoice.MIME_TYPE)
+                    .setDurationMs(held.durationMs)
+                    .setPeaks(com.google.protobuf.ByteString.copyFrom(ByteArray(ManifestVoice.PEAKS) { held.peaks[it].toByte() })),
+            )
+        }
 
         return builder.build().toByteArray()
     }

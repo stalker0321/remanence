@@ -843,7 +843,7 @@ class CapsuleUploadOrchestrator(
         require(idempotencyKey.toString() == capsule.idempotencyKey)
 
         val rows = blobDao.getAllByCapsuleIdAndOwner(capsuleId.toRestString(), owner.toRestString())
-        require(rows.size in 5..7)
+        require(rows.size in 5..8)
         val parsed = rows.map { row ->
             val blobId = BlobId.parseRest(row.blobId)
             val kind = CapsuleArtifactKind.valueOf(row.kind)

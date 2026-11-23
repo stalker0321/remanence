@@ -3,4 +3,20 @@
     <!-- ADR-021: the song band of a card with a voice note is one button; no word is drawn on the card. -->
     <string name="capsule_voice_listen">послушать голосовое</string>
     <string name="capsule_voice_pause">остановить голосовое</string>
+    <!-- ADR-021: recording a voice note in the sound step. -->
+    <string name="create_sound_song">песня</string>
+    <string name="create_sound_voice">голос</string>
+    <string name="voice_record">записать</string>
+    <string name="voice_stop">остановить</string>
+    <string name="voice_listen_own">послушать</string>
+    <string name="voice_pause_own">пауза</string>
+    <string name="voice_rerecord">перезаписать</string>
+    <string name="voice_delete">удалить</string>
+    <string name="voice_hint">до минуты. его включат прямо с открытки</string>
+    <string name="voice_replaces_song">на открытке один звук: голос займёт место песни</string>
+    <string name="voice_denied">нет доступа к микрофону. разрешите его в настройках и попробуйте ещё раз</string>
+    <string name="voice_failed">запись не получилась. попробуйте ещё раз</string>
+    <string name="voice_too_large">запись слишком большая. попробуйте покороче</string>
+    <string name="voice_pending_unavailable">на номер телефона голос пока не отправить</string>
+    <string name="voice_elapsed">%1$s / %2$s</string>
 </resources>

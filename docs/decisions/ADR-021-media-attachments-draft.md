@@ -107,7 +107,7 @@ minimum size. `poster_content_id` ties the video to that photo. So:
 - new apps play the video in that tile when the card is open;
 - no new kind of tile in the expression is needed for the circle.
 
-### Server (deployed 23 November, behind `media_enabled`, which is off)
+### Server (deployed 23 November; `media_enabled` turned on the same day with the site's recording)
 
 - `ArtifactKind.MEDIA = 4`, ordinal -1 (like the manifests), at most one;
   it sorts after the photos in the canonical artifact order. The publish
@@ -176,6 +176,22 @@ binds the MP4's SHA-256, length and peaks; the sealer checks the bytes against
 it, encrypts them as the MEDIA artifact with blob id tag byte 0x03 and writes
 manifest field 9. `createSendCheck.mjs` sends a voice card through the real
 App to a synthetic server and decrypts the MEDIA blob back to the recording.
+
+Android, sending (23 November): the content step's sound section has the same
+two tabs. `VoiceRecorder` records AAC/MP4 (mono, 44.1 kHz, 48 kbit/s) into the
+app's cache with `RECORD_AUDIO` asked for on the first tap, stops itself just
+before a minute, samples the level every 50 ms for the peaks (the loudest
+level of each of 48 slices, the loudest slice at 255), reads the file into
+memory and deletes it; `MediaMetadataRetriever` gives the length.
+`RecordedVoice` holds it for the draft and is zeroed when replaced. A
+recording drops the song and a song drops the recording; either drops the
+offered and frozen layouts. `AllFamilyV4Adapter.seal(voice = true)` seals a
+plate as `voice-plate` and the spine as `voice-card`, without a cover; the
+layout host prepares them with the voice words, and the layout proofs carry
+the sound's SHA-256. `CapsulePublisher` encrypts the MP4 as the one MEDIA
+artifact (tag byte 0x03, ordinal -1) after the photos and writes manifest
+field 9; the outbox takes `OutboxArtifactKind.MEDIA` and 5..8 blobs. A gift
+to a phone number offers no recording and refuses one at publication.
 
 Firefox records only WebM. The site converts a Firefox recording to MP4 in the
 browser if that is fast and small enough; otherwise recording is not offered

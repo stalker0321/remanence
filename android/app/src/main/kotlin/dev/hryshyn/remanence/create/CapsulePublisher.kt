@@ -6,7 +6,9 @@ import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.protobuf.ByteString
 import java.security.MessageDigest
 import java.util.UUID
+import dev.hryshyn.remanence.core.crypto.CapsuleArtifactCryptor
 import dev.hryshyn.remanence.core.crypto.CapsuleKeysetGenerator
+import dev.hryshyn.remanence.core.crypto.ManifestVoice
 import dev.hryshyn.remanence.core.crypto.ContentManifestCodec
 import dev.hryshyn.remanence.core.crypto.ManifestPhoto
 import dev.hryshyn.remanence.core.crypto.PhotoArtifactEncryptor
@@ -19,7 +21,9 @@ import dev.hryshyn.remanence.core.crypto.WrappedKeysetRecord
 import dev.hryshyn.remanence.core.data.outbox.OutboxArtifactKind
 import dev.hryshyn.remanence.core.data.outbox.PreparedOutboxArtifact
 import dev.hryshyn.remanence.core.data.outbox.PreparedOutboxCapsule
+import dev.hryshyn.remanence.core.model.ArtifactAadInput
 import dev.hryshyn.remanence.core.model.ArtifactSlot
+import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -97,6 +101,8 @@ data class CapsulePublishRequest(
     val trackSnapshot: dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1? = null,
     /** Long note read beside the sheet (manifest field 8); requires [expression]. */
     val letter: String? = null,
+    /** The recorded voice note (ADR-021); requires [expression] with a voice band and no song. */
+    val voice: CapsuleVoiceNote? = null,
 ) {
     /** Redacted so note text / photo bytes / keys can never reach logs. */
     override fun toString(): String =
@@ -107,8 +113,27 @@ data class CapsulePublishRequest(
             "photoCount=${photoJpegs.size}, notePresent=${noteUtf8 != null}, " +
             "expression=${if (expression == null) "v1" else "v2"}, " +
             "trackSnapshot=${if (trackSnapshot == null) "absent" else "present"}, " +
-            "letterPresent=${letter != null}, " +
+            "letterPresent=${letter != null}, voicePresent=${voice != null}, " +
             "frontFingerprintProfileId=$frontFingerprintProfileId)"
+}
+
+/**
+ * A recorded voice note: the AAC/MP4 the recipient plays from the band, its
+ * length and the [ManifestVoice.PEAKS] amplitudes (0..255) the band draws.
+ */
+class CapsuleVoiceNote(
+    val mp4: ByteArray,
+    val durationMs: Int,
+    val peaks: IntArray,
+) {
+    init {
+        require(mp4.size >= 8 && String(mp4, 4, 4, Charsets.US_ASCII) == "ftyp") { "voice note must be an MP4" }
+        require(mp4.size + ProtocolV1Limits.ARTIFACT_AEAD_OVERHEAD_BYTES <= ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES) { "voice note is too large" }
+        require(durationMs in 1..ManifestVoice.MAX_MS) { "voice note length out of bounds" }
+        require(peaks.size == ManifestVoice.PEAKS && peaks.all { it in 0..255 }) { "voice note peaks out of bounds" }
+    }
+
+    override fun toString(): String = "CapsuleVoiceNote(<redacted>, durationMs=$durationMs)"
 }
 
 /** ADR-018 v2 expression payload; [contentIds] are authored order, one per photoJpeg. */
@@ -189,6 +214,9 @@ class CapsulePublisher(
         require(request.trackSnapshot == null || request.expression != null) {
             "track snapshot requires the v2 expression frame"
         }
+        require(request.voice == null || (request.expression != null && request.trackSnapshot == null)) {
+            "a voice note requires the v2 expression frame and no song"
+        }
         // M2-P08: the current sender owns the retry key; ownerUserId
         // must equal senderUserId before any crypto work begins.
         require(request.ownerUserId == request.senderUserId.value.toString()) {
@@ -242,6 +270,8 @@ class CapsulePublisher(
         val manifestPhotos = request.photoJpegs.mapIndexed { index, _ ->
             ManifestPhoto(CapsulePhotoIdentity.photoBlobId(request.capsuleId, index).value, index, request.photoWidthsPx[index], request.photoHeightsPx[index])
         }
+        val mediaBlob = blob(MEDIA_BLOB_BYTE)
+        val manifestVoice = request.voice?.let { ManifestVoice(mediaBlob.value, it.durationMs, ByteArray(it.peaks.size) { index -> it.peaks[index].toByte() }) }
         val contentCiphertext = if (request.expression != null) {
             val artifact = request.expression
             require(artifact.contentIds.size == request.photoJpegs.size) {
@@ -266,6 +296,7 @@ class CapsulePublisher(
                 blobIdByContentId,
                 request.trackSnapshot,
                 request.letter,
+                manifestVoice,
             )
         } else {
             ContentManifestCodec().buildAndEncrypt(
@@ -301,6 +332,28 @@ class CapsulePublisher(
                 ArtifactSlot(photoBlob, CapsuleArtifactKind.PHOTO, index),
                 encrypted.ciphertext.size.toLong(),
                 ByteString.copyFrom(encrypted.ciphertextSha256),
+            )
+        }
+
+        // 3b. The voice note, one MEDIA artifact after the photos.
+        request.voice?.let { voice ->
+            val ciphertext = CapsuleArtifactCryptor().encrypt(
+                capsuleKeyset,
+                ArtifactAadInput(
+                    capsuleId = request.capsuleId,
+                    blobId = mediaBlob,
+                    artifactKind = CapsuleArtifactKind.MEDIA,
+                    ordinal = NON_PHOTO_ORDINAL,
+                    senderUserId = senderUser,
+                    recipientUserId = recipientUser,
+                ),
+                voice.mp4,
+            )
+            artifacts += PreparedOutboxArtifact(mediaBlob.value, OutboxArtifactKind.MEDIA, NON_PHOTO_ORDINAL, ciphertext)
+            bindings += PublishArtifact(
+                ArtifactSlot(mediaBlob, CapsuleArtifactKind.MEDIA, NON_PHOTO_ORDINAL),
+                ciphertext.size.toLong(),
+                ByteString.copyFrom(sha256(ciphertext)),
             )
         }
 
@@ -443,6 +496,7 @@ class CapsulePublisher(
     internal companion object {
         const val RECOGNITION_BLOB_BYTE = 0x01
         const val CONTENT_BLOB_BYTE = 0x02
+        const val MEDIA_BLOB_BYTE = 0x03
         const val PHOTO_BLOB_BASE = 0x10
         const val NON_PHOTO_ORDINAL = -1
     }

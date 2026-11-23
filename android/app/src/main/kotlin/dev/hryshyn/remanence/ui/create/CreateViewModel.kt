@@ -434,6 +434,8 @@ class CreateViewModel(
 
     fun setMusicSelection(hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?) {
         if (_musicSelection.value == hit) return
+        // One sound per card: a song drops the recorded voice note.
+        if (hit != null) dropVoiceNote()
         _musicSelection.value = hit
         collageChoices.clear()
         frozenCollageSelection = null
@@ -450,6 +452,33 @@ class CreateViewModel(
         frozenDrawableInputs = null
         clearCropState()
         startMusicArtworkResolution(null)
+    }
+
+    /**
+     * ADR-021: the recorded voice note, in memory only. It takes the song's
+     * place in the band, so recording one drops the song, and like a song it
+     * changes the layouts: the offered and frozen sheets are dropped.
+     */
+    private val _voiceNote = MutableStateFlow<RecordedVoice?>(null)
+    val voiceNote: StateFlow<RecordedVoice?> = _voiceNote.asStateFlow()
+
+    fun setVoiceNote(voice: RecordedVoice?) {
+        if (_voiceNote.value === voice) return
+        _voiceNote.value?.wipe()
+        _voiceNote.value = voice
+        if (voice != null && _musicSelection.value != null) {
+            _musicSelection.value = null
+            startMusicArtworkResolution(null)
+        }
+        collageChoices.clear()
+        frozenCollageSelection = null
+        frozenDrawableInputs = null
+        clearCropState()
+    }
+
+    private fun dropVoiceNote() {
+        _voiceNote.value?.wipe()
+        _voiceNote.value = null
     }
 
     /**
@@ -557,6 +586,7 @@ class CreateViewModel(
         trackId = collageChooserTrackFor(_musicSelection.value)?.trackId?.toString(),
         artworkSize = _musicArtworkBitmap.value?.let { "${it.width}x${it.height}" },
         artwork = _musicArtwork.value,
+        voice = _voiceNote.value?.sha256Hex,
     )
 
     /** Positive Ready inputs by candidate id (equality-checked on every use). */
@@ -846,10 +876,12 @@ class CreateViewModel(
         // accounts never reach here (Create entry gate), this is defense in
         // depth that fails closed without a placeholder.
         val senderHandle = sender.handle ?: return null
-        val artwork = _musicArtwork.value
+        // A voice note is planned as a song without a cover and sealed in a voice band.
+        val voice = _voiceNote.value
+        val artwork = if (voice != null) null else _musicArtwork.value
         val familyInput = dev.hryshyn.remanence.ui.collage.AllFamilyInput(
             id = input.ownerId, sender = senderHandle, note = input.note,
-            music = input.music != null, artwork = artwork != null, photos = photos,
+            music = input.music != null || voice != null, artwork = artwork != null, photos = photos,
         )
         // Production supplies the host's real font measurer. Capture its metrics
         // on the UI thread before moving matching/solver work off-main.
@@ -876,12 +908,12 @@ class CreateViewModel(
             }
         }
         // The song band's caption choice reads the same words and widths the canvas draws.
-        val songWords = collageChooserTrack?.let { dev.hryshyn.remanence.ui.collage.SongBand.Words(it.title, it.artistDisplay) }
+        val songWords = collageChooserTrack?.takeIf { voice == null }?.let { dev.hryshyn.remanence.ui.collage.SongBand.Words(it.title, it.artistDisplay) }
         val runWidth = textMeasurer?.let { dev.hryshyn.remanence.ui.collage.CollageRenderer.runWidth(it) }
         val sealed = ArrayList<CollageCandidate>(outcome.candidates.size)
         for (candidate in outcome.candidates) {
           for (style in AllFamilyV4Adapter.stylesForGrammar(candidate.grammarId)) {
-            val sealedOutcome = AllFamilyV4Adapter.seal(candidate, input, senderHandle, style, artwork, markFits, songWords, runWidth)
+            val sealedOutcome = AllFamilyV4Adapter.seal(candidate, input, senderHandle, style, artwork, markFits, songWords, runWidth, voice = voice != null)
             if (sealedOutcome !is AllFamilyV4Adapter.Outcome.Sealed) continue
             sealed += CollageCandidate(
                 candidateId = GeneratorBer1Provider.candidateIdFor(sealedOutcome.expression),
@@ -1403,6 +1435,8 @@ class CreateViewModel(
         val trackSnapshot: CapsuleTrackSnapshotV1?,
         /** Long note captured at publication entry; null when empty or the feature is off. */
         val letter: String? = null,
+        /** An owned copy of the recorded voice note, captured at publication entry. */
+        val voice: dev.hryshyn.remanence.create.CapsuleVoiceNote? = null,
         /**
          * T186 M12e-gap3: immutable route + ORIGINAL lease captured at
          * publication entry (startPublishing, before ANY identity or
@@ -1491,6 +1525,7 @@ class CreateViewModel(
         // destroy the selection with zero safety benefit.
         _musicSelection.value = null
         startMusicArtworkResolution(null)
+        dropVoiceNote()
         clearCropState()
         frontAttempt.reset()
         frontFingerprintId = null
@@ -2137,6 +2172,18 @@ class CreateViewModel(
         }
         val pendingRouteForInputs = frozenRouteForPublish as?
             dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending
+        // ADR-021: a first gift to a phone number carries no voice note yet.
+        val voiceNote = _voiceNote.value
+        if (voiceNote != null && pendingRouteForInputs != null) {
+            failGuard("a voice note cannot go to a phone number yet; publishing cancelled")
+            return
+        }
+        val voiceForInputs = try {
+            voiceNote?.note()
+        } catch (_: IllegalArgumentException) {
+            failGuard("the voice note is invalid; publishing cancelled")
+            return
+        }
         // T186 M12e-gap3b: the ORIGINAL lease is entry state. When a
         // pending route is bound but its lease is unavailable here,
         // fail closed synchronously — never pass a null lease through
@@ -2176,6 +2223,7 @@ class CreateViewModel(
             photoIds = photoSelection.selectedIds.toList(),
             trackSnapshot = trackSnapshot,
             letter = currentLetter(),
+            voice = voiceForInputs,
             // T186 M12e-gap3: capture the immutable route + ORIGINAL
             // lease synchronously here (no awaits above since the
             // guard) so the boundary consumes entry-time state even
@@ -2933,6 +2981,7 @@ class CreateViewModel(
                         ),
                         trackSnapshot = trackSnapshot,
                         letter = inputs.letter,
+                        voice = inputs.voice,
                     ),
                 )
                 }
@@ -3286,6 +3335,7 @@ class CreateViewModel(
         // with every other content state (see beginSession for the rationale).
         _musicSelection.value = null
         startMusicArtworkResolution(null)
+        dropVoiceNote()
         frontAttempt.reset()
         frontFingerprintId = null
         clearCropState()

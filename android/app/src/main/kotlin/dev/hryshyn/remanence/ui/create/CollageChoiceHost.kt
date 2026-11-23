@@ -48,6 +48,8 @@ internal data class PrepareInputs(
     val trackId: String?,
     val artworkSize: String?,
     val artwork: GeneratorExpression.ArtworkRef? = null,
+    /** SHA-256 of the recorded voice note, or null. */
+    val voice: String? = null,
 )
 
 /**
@@ -63,6 +65,7 @@ internal data class CollagePreparationInputs(
     val cropSource: CollageCropSource,
     val artwork: GeneratorExpression.ArtworkRef?,
     val artworkBitmap: ImageBitmap?,
+    val voice: dev.hryshyn.remanence.ui.collage.SongBand.VoiceWords? = null,
 )
 
 /**
@@ -95,6 +98,8 @@ internal fun CollageChoiceHost(
     onShown: (Int) -> Unit = {},
     /** The whole text when the note is only its start: the preview then turns over like the opened card. */
     letter: String? = null,
+    /** The recorded voice note the `voice-` bands draw (ADR-021). */
+    voice: dev.hryshyn.remanence.ui.collage.SongBand.VoiceWords? = null,
     contentWrapper: @Composable (CanvasParcel, NavParcel) -> Unit = { canvas, nav ->
         nav()
         canvas()
@@ -108,14 +113,14 @@ internal fun CollageChoiceHost(
     val preparingCopy = stringResource(R.string.create_preparing_expressions)
     val noteArg = note?.takeIf { it.isNotBlank() }
     val currentOnPrepared by rememberUpdatedState(onPrepared)
-    val preparationInputs = CollagePreparationInputs(input, sources, note, track, cropSource, artwork, artworkBitmap)
+    val preparationInputs = CollagePreparationInputs(input, sources, note, track, cropSource, artwork, artworkBitmap, voice)
     val host = remember(session) { Any() }
     DisposableEffect(session, preparationInputs, measurer) {
         session.attachHost(host)
         onDispose { session.detachHost(host) }
     }
 
-    LaunchedEffect(session, session.draftGeneration, input, sources, note, track, cropSource, artwork, artworkBitmap, measurer) {
+    LaunchedEffect(session, session.draftGeneration, input, sources, note, track, cropSource, artwork, artworkBitmap, voice, measurer) {
         val retained = session.retainedCandidates(preparationInputs)
         val generation = session.beginPreparing(retainCandidates = retained != null)
         try {
@@ -136,7 +141,7 @@ internal fun CollageChoiceHost(
             val cover = artworkBitmap?.let { CollageRenderer.SourcePhoto(it.width, it.height) }
             val drawable = candidates.filter { candidate ->
                 kotlinx.coroutines.yield()
-                val result = CollageRenderer.prepare(candidate.expression, noteArg, track, sizes, measurer, artwork = cover)
+                val result = CollageRenderer.prepare(candidate.expression, noteArg, track, sizes, measurer, artwork = cover, voice = voice)
                 if (BuildConfig.DEBUG && result is CollageRenderer.SceneResult.Rejected) {
                     Log.d("CollagePreparation", "renderer=${result.reason}")
                 }
@@ -173,13 +178,14 @@ internal fun CollageChoiceHost(
 
     // Crop edits replace one expression without rebuilding the candidate set.
     val displayed = session.displayed
-    val prepared = remember(displayed, images, noteArg, track, artworkBitmap, measurer) {
+    val prepared = remember(displayed, images, noteArg, track, artworkBitmap, voice, measurer) {
         displayed?.let {
             CollageRenderer.prepare(
                 it.expression, noteArg, track,
                 images.mapValues { image -> CollageRenderer.SourcePhoto(image.value.width, image.value.height) },
                 measurer,
                 artwork = artworkBitmap?.let { image -> CollageRenderer.SourcePhoto(image.width, image.height) },
+                voice = voice,
             )
         }
     }

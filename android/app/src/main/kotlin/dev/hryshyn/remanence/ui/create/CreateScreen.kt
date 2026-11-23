@@ -612,10 +612,22 @@ private fun ContentStepContent(
                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("create_letter_hint"))
             }
             Spacer(Modifier.height(12.dp))
-            MusicPickerContent(
-                search = repository::search, vmSelection = selection, selectedArtwork = artwork,
-                onSelect = viewModel::setMusicSelection, onClearSelection = viewModel::clearMusicSelection,
-            )
+            // ADR-021: one sound per card, a song or a recorded voice note.
+            val voice by viewModel.voiceNote.collectAsStateWithLifecycle()
+            val route by viewModel.pendingRoute.collectAsStateWithLifecycle()
+            val phoneGift = dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled() &&
+                route is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending
+            var voiceTab by rememberSaveable { mutableStateOf(voice != null) }
+            SoundTabs(voiceTab, onVoiceTab = { voiceTab = it })
+            if (voiceTab) {
+                VoiceDraft(voice, onVoice = viewModel::setVoiceNote, songChosen = selection != null,
+                    phoneGift = phoneGift, enabled = !preparing)
+            } else {
+                MusicPickerContent(
+                    search = repository::search, vmSelection = selection, selectedArtwork = artwork,
+                    onSelect = viewModel::setMusicSelection, onClearSelection = viewModel::clearMusicSelection,
+                )
+            }
             val preview by viewModel.generatorPreview.collectAsStateWithLifecycle()
             val notice = createPreviewNotice(preview)?.let { stringResource(it) }
                 ?: viewModel.collageChoices.notice?.let { stringResource(R.string.create_no_fitting_expression) }
@@ -918,6 +930,7 @@ private fun CollageStepChooser(
     val musicSelection by viewModel.musicSelection.collectAsStateWithLifecycle()
     val artwork by viewModel.musicArtwork.collectAsStateWithLifecycle()
     val artworkBitmap by viewModel.musicArtworkBitmap.collectAsStateWithLifecycle()
+    val voice by viewModel.voiceNote.collectAsStateWithLifecycle()
     val input = viewModel.collageChooserInputFor(musicSelection)
     val track = viewModel.collageChooserTrackFor(musicSelection)
     val musicAction = rememberTrackServiceAction(track)
@@ -937,7 +950,7 @@ private fun CollageStepChooser(
             note = sides.front.takeIf { it.isNotEmpty() }, letter = sides.letter,
             track = track,
             cropSource = viewModel.collageCropSource ?: remember { dev.hryshyn.remanence.ui.collage.CollageCropSource { null } },
-            artwork = artwork, artworkBitmap = artworkBitmap,
+            artwork = artwork, artworkBitmap = artworkBitmap, voice = voice?.words,
             frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
             onNavigate = viewModel::clearFrozenCollageSelection, onMeasured = viewModel::onPreviewMeasured,
             onPrepared = viewModel::onCandidatePrepared, prepareInputs = viewModel.prepareInputs(),

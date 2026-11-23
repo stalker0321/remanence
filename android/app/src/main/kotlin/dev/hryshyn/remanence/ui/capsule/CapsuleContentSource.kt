@@ -173,6 +173,29 @@ class CapsuleContentSource(
     override suspend fun voice(capsuleId: String): dev.hryshyn.remanence.core.crypto.ManifestVoice? =
         decryptContent(capsuleId)?.voice
 
+    /** The sender's own voice note: the MEDIA blob the manifest names, decrypted on demand. */
+    override suspend fun loadVoice(capsuleId: String): ByteArray? {
+        val voice = voice(capsuleId) ?: return null
+        return withContext(Dispatchers.IO) {
+            val row = database.outboxBlobDao()
+                .getAllByCapsuleIdAndOwner(capsuleId, requireOwnerUserId())
+                .single { it.kind == OutboxArtifactKind.MEDIA.name && UUID.fromString(it.blobId) == voice.blobId }
+            val routing = routing(capsuleId)
+            CapsuleArtifactCryptor().decrypt(
+                capsuleKeyset(capsuleId),
+                ArtifactAadInput(
+                    capsuleId = CapsuleId(UUID.fromString(capsuleId)),
+                    blobId = BlobId(voice.blobId),
+                    artifactKind = CapsuleArtifactKind.MEDIA,
+                    ordinal = -1,
+                    senderUserId = routing.senderUserId,
+                    recipientUserId = routing.recipientUserId,
+                ),
+                java.io.File(row.localCiphertextPath).readBytes(),
+            )
+        }
+    }
+
     /**
      * ADR-018: a v2 outbox capsule (e.g. a self-send) renders its sealed
      * exact BER1 expression; v1 keeps the existing photo path; an

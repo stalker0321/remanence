@@ -146,7 +146,8 @@ class PresentationVoiceTest {
         val blobMap = contentIds.mapIndexed { index, id -> id to uuidBytes(photoBlobs[index].value) }.toMap()
         val built = codec.buildAndEncryptV2(
             keyset, routing(contentBlob), manifestPhotos, null, "cand-1",
-            expression(if (voice != null) "voice-plate" else null), blobMap,
+            expression(if (voice != null) "voice-plate" else null), blobMap, null,
+            voice = voice?.let { ManifestVoice(mediaBlob.value, 4_200, ByteArray(48)) },
         )
         val cryptor = CapsuleArtifactCryptor()
         val content = if (voice == null) {

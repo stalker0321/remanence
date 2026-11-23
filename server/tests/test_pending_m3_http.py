@@ -1293,6 +1293,23 @@ def test_pending_incoming_feed_discovery_and_v1_isolation(session_factory) -> No
         _as(recipient_id, recipient_session)
         paged = client.get("/v2/pending-incoming", params={"limit": 1})
         assert len(paged.json()["items"]) == 1
+        # ADR-021: a first gift with a video square is listed only to a client
+        # that reads video; a voice-only client and an old one never see it.
+        from remanence.pending.claim_models import PendingDelivery as _Delivery
+
+        with session_factory() as session:
+            row = session.get(_Delivery, delivery_id)
+            row.blob_declarations = [*row.blob_declarations, {
+                "blob_id": str(uuid.uuid4()), "kind": 5, "ordinal": -1,
+                "ciphertext_size": 10, "ciphertext_sha256_hex": "00" * 32,
+            }]
+            session.commit()
+        assert client.get("/v2/pending-incoming").json()["items"] == []
+        assert client.get("/v2/pending-incoming", params={"media": "voice"}).json()["items"] == []
+        filmed = client.get("/v2/pending-incoming", params={"media": "video"}).json()["items"]
+        assert [entry["capsule_id"] for entry in filmed] == [str(capsule_id)]
+        assert len(filmed[0]["blob_refs"]) == 2
+        assert client.get("/v2/pending-incoming", params={"media": "audio"}).status_code == 400
 
 
 def test_upload_oversize_undeclared_cancel_race(session_factory) -> None:
@@ -1658,3 +1675,29 @@ def test_http_claim_bind_then_r1_routes_known_v1_distinct_keys(session_factory) 
     assert len(email_sender.dispatched) == dispatched_before
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(_PD)) == deliveries_before
+
+
+def test_pending_declarations_take_one_voice_note_and_one_video_within_their_caps() -> None:
+    from remanence.pending.publication import PublicationError, declared_media, validate_declarations
+
+    def entry(kind: int, ordinal: int = -1, size: int = 10) -> dict:
+        return {"blob_id": str(uuid.uuid4()), "kind": kind, "ordinal": ordinal,
+                "ciphertext_size": size, "ciphertext_sha256_hex": "ab" * 32}
+
+    def ordered(entries: list[dict]) -> list[dict]:
+        return sorted(entries, key=lambda e: (e["kind"], e["ordinal"], e["blob_id"]))
+
+    base = [entry(1), entry(2), entry(3, 0), entry(3, 1), entry(3, 2)]
+    both = validate_declarations(ordered([*base, entry(4, size=1_048_609), entry(5, size=6_291_489)]))
+    assert declared_media(both) == {4, 5}
+    assert declared_media(validate_declarations(ordered(base))) == set()
+    for bad in (
+        [*base, entry(4, size=1_048_610)],
+        [*base, entry(5, size=6_291_490)],
+        [*base, entry(5), entry(5)],
+        [*base, entry(4), entry(4)],
+        [*base, entry(5, ordinal=0)],
+        [*base, entry(6)],
+    ):
+        with pytest.raises(PublicationError):
+            validate_declarations(ordered(bad))

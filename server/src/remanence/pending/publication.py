@@ -16,6 +16,7 @@ from typing import BinaryIO
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from remanence.capsules.limits import LIMITS_V1
 from remanence.pending import card_seal, domains
 from remanence.pending.claim_models import PendingDelivery
 from remanence.pending.locator_store import activate, allocate_reserved
@@ -133,10 +134,18 @@ def parse_statement(raw: bytes) -> dv2.PendingPublishStatementV2:
     return statement
 
 
+_MEDIA_CAPS = {
+    4: LIMITS_V1.encrypted_media_max_ciphertext_bytes,
+    5: LIMITS_V1.encrypted_video_max_ciphertext_bytes,
+}
+
+
 def validate_declarations(declarations: list) -> list[dict]:
-    """R3 shape validation: each entry needs blob_id UUID, kind 1..3,
-    ordinal (-1 except PHOTO 0..4), non-negative size, 32-byte sha."""
-    if not isinstance(declarations, list) or len(declarations) > 8:
+    """R3 shape validation: each entry needs blob_id UUID, kind 1..5,
+    ordinal (-1 except PHOTO 0..4), non-negative size, 32-byte sha. ADR-021:
+    at most one MEDIA (4, a voice note) and one VIDEO (5, the video square),
+    each within its v1 ciphertext cap."""
+    if not isinstance(declarations, list) or len(declarations) > 9:
         raise PublicationError("PROTOCOL_UNSUPPORTED")
     cleaned: list[dict] = []
     for entry in declarations:
@@ -150,7 +159,9 @@ def validate_declarations(declarations: list) -> list[dict]:
             sha = bytes.fromhex(str(entry["ciphertext_sha256_hex"]))
         except Exception as exc:
             raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
-        if kind not in (1, 2, 3) or len(sha) != 32 or size < 0:
+        if kind not in (1, 2, 3, 4, 5) or len(sha) != 32 or size < 0:
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+        if size > _MEDIA_CAPS.get(kind, size):
             raise PublicationError("PROTOCOL_UNSUPPORTED")
         if kind != 3 and ordinal != -1:
             raise PublicationError("PROTOCOL_UNSUPPORTED")
@@ -168,7 +179,15 @@ def validate_declarations(declarations: list) -> list[dict]:
     order = [(e["kind"], e["ordinal"], e["blob_id"]) for e in cleaned]
     if order != sorted(order):
         raise PublicationError("PROTOCOL_UNSUPPORTED")
+    kinds = [e["kind"] for e in cleaned]
+    if kinds.count(4) > LIMITS_V1.media_count_max or kinds.count(5) > LIMITS_V1.video_count_max:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
     return cleaned
+
+
+def declared_media(declarations: list | None) -> set[int]:
+    """The ADR-021 media kinds (4 voice note, 5 video square) a delivery carries."""
+    return {e["kind"] for e in (declarations or []) if e.get("kind") in (4, 5)}
 
 
 def declarations_match_s(declarations: list | None, statement) -> bool:

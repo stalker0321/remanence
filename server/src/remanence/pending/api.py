@@ -530,6 +530,12 @@ def create_pending_delivery(
         if payload.claim_policy_version != 1:
             return _problem("PROTOCOL_UNSUPPORTED", 404)
         declarations = publication_service.validate_declarations(payload.artifacts)
+        # ADR-021: a first gift with a voice note or a video waits for the same
+        # flags as an ordinary card with one.
+        media = publication_service.declared_media(declarations)
+        settings = request.app.state.settings
+        if (4 in media and not settings.media_enabled) or (5 in media and not settings.video_enabled):
+            return _problem("PROTOCOL_UNSUPPORTED", 404)
         # Idempotency: same capsule+target redraft returns the same DRAFT;
         # anything else conflicts (savepoint-scoped, no TX poisoning).
         from sqlalchemy import select as _select
@@ -1387,6 +1393,7 @@ def list_pending_incoming(
     principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     cursor: str | None = None,
     limit: int = 50,
+    media: str | None = None,
 ):
     """Independent claim-time cursor owned feed (frozen DTO). v1 incoming
     never returns v2 records: separate route, separate cursor, separate
@@ -1407,6 +1414,11 @@ def list_pending_incoming(
     ctx = _gate(request, "pending_protocol_enabled")
     if isinstance(ctx, JSONResponse):
         return ctx
+    # ADR-021, as on the v1 incoming list: media=voice reads voice notes,
+    # media=video voice notes and video squares; other clients never see them.
+    if media not in (None, "voice", "video"):
+        return _problem("VALIDATION_FAILED", 400)
+    readable = {None: set(), "voice": {4}, "video": {4, 5}}[media]
     limit = max(1, min(limit, 200))
     from remanence.users.models import User as _FeedUser
 
@@ -1442,6 +1454,8 @@ def list_pending_incoming(
             continue
         claim = db.get(_FeedClaim, delivery.delivery_target_id)
         if claim is None or claim.account_user_id != principal.user_id:
+            continue
+        if not publication_service.declared_media(delivery.blob_declarations) <= readable:
             continue
         completion = db.get(_Completion, row.capsule_id)
         blobs = delivery.blob_declarations or []

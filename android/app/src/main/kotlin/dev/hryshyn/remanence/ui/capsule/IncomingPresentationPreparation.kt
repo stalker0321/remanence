@@ -139,6 +139,8 @@ internal class PreparedIncomingPresentation internal constructor(
 
     internal fun loadPhoto(ordinal: Int): ByteArray = material.loadPhoto(ordinal)
 
+    internal fun loadVoice(): ByteArray? = material.loadVoice()
+
     /** Used only while the owner/capsule boundary is held before grant issue. */
     internal fun isOpenForGrant(): Boolean = !closed.get()
 
@@ -807,6 +809,7 @@ internal class IncomingPresentationPreparation(
             ArtifactKind.RECOGNITION_MANIFEST -> CapsuleArtifactKind.RECOGNITION_MANIFEST
             ArtifactKind.CONTENT_MANIFEST -> CapsuleArtifactKind.CONTENT_MANIFEST
             ArtifactKind.PHOTO -> CapsuleArtifactKind.PHOTO
+            ArtifactKind.MEDIA -> CapsuleArtifactKind.MEDIA
             else -> return null
         }
         val expectedOrdinal = if (kind == CapsuleArtifactKind.PHOTO) binding.ordinal else null
@@ -819,6 +822,7 @@ internal class IncomingPresentationPreparation(
                 ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.CONTENT_MANIFEST -> ProtocolV1Limits.CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.PHOTO -> ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.MEDIA -> ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES
         }
         if (blob.expectedSizeBytes !in 1L..maximum) return null
 

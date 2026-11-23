@@ -42,6 +42,11 @@ internal class IncomingPresentationContentSource(
         return prepared.voice()
     }
 
+    override suspend fun loadVoice(capsuleId: String): ByteArray? {
+        require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
+        return prepared.loadVoice()
+    }
+
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {
         require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
         if (prepared.protocolVersion == 1) return CapsulePresentationAdmission.LegacyV1

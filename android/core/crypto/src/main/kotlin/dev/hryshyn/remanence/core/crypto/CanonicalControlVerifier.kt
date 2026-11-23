@@ -199,6 +199,7 @@ internal class CanonicalControlVerifier(
             ArtifactKind.RECOGNITION_MANIFEST -> CapsuleArtifactKind.RECOGNITION_MANIFEST
             ArtifactKind.CONTENT_MANIFEST -> CapsuleArtifactKind.CONTENT_MANIFEST
             ArtifactKind.PHOTO -> CapsuleArtifactKind.PHOTO
+            ArtifactKind.MEDIA -> CapsuleArtifactKind.MEDIA
             else -> throw IllegalArgumentException("unknown artifact kind")
         },
         ordinal = ordinal,

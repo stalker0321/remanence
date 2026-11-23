@@ -28,6 +28,7 @@ object CanonicalArtifactOrder {
         CapsuleArtifactKind.RECOGNITION_MANIFEST -> ArtifactKind.RECOGNITION_MANIFEST.number
         CapsuleArtifactKind.CONTENT_MANIFEST -> ArtifactKind.CONTENT_MANIFEST.number
         CapsuleArtifactKind.PHOTO -> ArtifactKind.PHOTO.number
+        CapsuleArtifactKind.MEDIA -> ArtifactKind.MEDIA.number
     }
 
     private fun compareUnsignedBytes(left: com.google.protobuf.ByteString, right: com.google.protobuf.ByteString): Int {

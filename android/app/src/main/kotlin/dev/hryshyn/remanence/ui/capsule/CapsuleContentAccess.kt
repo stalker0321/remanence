@@ -49,6 +49,9 @@ interface CapsuleContentReader {
     /** The voice note in the song band (manifest field 9), or null. */
     suspend fun voice(capsuleId: String): dev.hryshyn.remanence.core.crypto.ManifestVoice? = null
 
+    /** The voice note's decrypted MP4, owned by the caller (zero it after use), or null. */
+    suspend fun loadVoice(capsuleId: String): ByteArray? = null
+
     /**
      * Default: a reader that has no content-manifest view is treated as the
      * legacy v1 photo path, so every existing reader/test is unchanged.
@@ -127,6 +130,18 @@ class GrantGuardedCapsuleContentSource(
         val voice = delegate.voice(capsuleId)
         validateLiveGrant()
         return voice
+    }
+
+    override suspend fun loadVoice(capsuleId: String): ByteArray? {
+        validateLiveGrant()
+        val sound = delegate.loadVoice(capsuleId)
+        try {
+            validateLiveGrant()
+        } catch (refused: Exception) {
+            sound?.fill(0)
+            throw refused
+        }
+        return sound
     }
 
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {

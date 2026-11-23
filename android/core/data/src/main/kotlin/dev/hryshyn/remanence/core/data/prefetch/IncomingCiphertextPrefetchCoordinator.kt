@@ -561,9 +561,9 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
         val capsule = CapsuleId.parseRest(row.capsuleId)
         val blob = BlobId.parseRest(row.blobId)
         val kind = CapsuleArtifactKind.valueOf(row.kind)
-        require(kind == CapsuleArtifactKind.CONTENT_MANIFEST || kind == CapsuleArtifactKind.PHOTO)
+        require(kind != CapsuleArtifactKind.RECOGNITION_MANIFEST)
         val ordinal = when (kind) {
-                CapsuleArtifactKind.CONTENT_MANIFEST -> {
+                CapsuleArtifactKind.CONTENT_MANIFEST, CapsuleArtifactKind.MEDIA -> {
                     require(row.ordinal == null)
                     ProtocolV1Limits.NON_PHOTO_ORDINAL
                 }
@@ -576,6 +576,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
         val maxBytes = when (kind) {
             CapsuleArtifactKind.CONTENT_MANIFEST -> ProtocolV1Limits.CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.PHOTO -> ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.MEDIA -> ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.RECOGNITION_MANIFEST ->
                 throw IllegalArgumentException("recognition is not prefetch work")
         }
@@ -609,6 +610,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                 ?: throw IllegalArgumentException("photo ordinal is missing")
             CapsuleArtifactKind.RECOGNITION_MANIFEST,
             CapsuleArtifactKind.CONTENT_MANIFEST,
+            CapsuleArtifactKind.MEDIA,
             -> {
                 require(row.ordinal == null)
                 ProtocolV1Limits.NON_PHOTO_ORDINAL
@@ -619,6 +621,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                 ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.CONTENT_MANIFEST -> ProtocolV1Limits.CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.PHOTO -> ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.MEDIA -> ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES
         }
         require(row.expectedSizeBytes in 1L..maxBytes)
         require(row.expectedSha256.size == SHA256_BYTES)

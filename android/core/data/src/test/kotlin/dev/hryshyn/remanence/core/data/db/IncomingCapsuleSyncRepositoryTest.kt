@@ -68,6 +68,7 @@ class IncomingCapsuleSyncRepositoryTest {
         val request = server.takeRequest()
         assertEquals("/v1/capsules/incoming", request.url.encodedPath)
         assertEquals("50", request.url.queryParameter("limit"))
+        assertEquals("voice", request.url.queryParameter("media"))
         assertEquals("Bearer access-token", request.headers["Authorization"])
         assertEquals(1, countRows("incoming_capsule"))
         assertEquals(1, countRows("incoming_envelope"))
@@ -482,6 +483,26 @@ class IncomingCapsuleSyncRepositoryTest {
     }
 
     @Test
+    fun aVoiceNoteIsKeptAsOneMediaBlob() = runTest {
+        server.enqueue(json(pageJson(items = listOf(itemJson(media = listOf(MEDIA_BLOB_ID to 1_048_609))))))
+        assertIs<IncomingSyncResult.Committed>(repository().syncNextPage())
+        assertEquals(6, countRows("blob_cache"))
+        val media = database.blobCacheDao().getByBlobIdAndOwner(MEDIA_BLOB_ID, OWNER)!!
+        assertEquals("MEDIA", media.kind)
+        assertNull(media.ordinal)
+        assertEquals(BlobCacheState.DOWNLOADING, media.cacheState)
+    }
+
+    @Test
+    fun aSecondOrOversizedVoiceNoteRefusesThePage() = runTest {
+        server.enqueue(json(pageJson(items = listOf(itemJson(media = listOf(MEDIA_BLOB_ID to 10, SECOND_MEDIA_BLOB_ID to 10))))))
+        assertEquals(IncomingSyncFailure.INVALID_RESPONSE, assertIs<IncomingSyncResult.Failure>(repository().syncNextPage()).reason)
+        server.enqueue(json(pageJson(items = listOf(itemJson(media = listOf(MEDIA_BLOB_ID to 1_048_610))))))
+        assertEquals(IncomingSyncFailure.INVALID_RESPONSE, assertIs<IncomingSyncResult.Failure>(repository().syncNextPage()).reason)
+        assertEquals(0, countRows("incoming_capsule"))
+    }
+
+    @Test
     fun strictMalformedResponseAndBindingMismatchFailAsTransportErrors() = runTest {
         server.enqueue(
             MockResponse.Builder()
@@ -587,6 +608,8 @@ class IncomingCapsuleSyncRepositoryTest {
         envelopeKeyBundleId: String = RECIPIENT_BUNDLE_ID,
         blobDigests: List<ByteArray> = BLOB_DIGESTS,
         blobIds: List<String> = BLOB_IDS,
+        /** MEDIA blobs (id to ciphertext size) listed after the photos. */
+        media: List<Pair<String, Int>> = emptyList(),
     ): String {
         val statement = byteArrayOf(1, 2, 3)
         val blobJson = blobIds.mapIndexed { index, blobId ->
@@ -596,7 +619,11 @@ class IncomingCapsuleSyncRepositoryTest {
                 else -> "PHOTO" to (index - 2).toString()
             }
             """{"blob_id":"$blobId","kind":"$kind","ordinal":$ordinal,"ciphertext_size":10,"ciphertext_sha256":"${b64(blobDigests[index])}"}"""
-        }.joinToString(",")
+        }.plus(
+            media.map { (blobId, size) ->
+                """{"blob_id":"$blobId","kind":"MEDIA","ordinal":null,"ciphertext_size":$size,"ciphertext_sha256":"${b64(ByteArray(32) { 9 })}"}"""
+            },
+        ).joinToString(",")
         return """
             {
               "capsule_id":"$capsuleId",
@@ -674,6 +701,8 @@ class IncomingCapsuleSyncRepositoryTest {
             "0198f0a0-0000-7000-8000-00000000e004",
             "0198f0a0-0000-7000-8000-00000000e005",
         )
+        const val MEDIA_BLOB_ID = "0198f0a0-0000-7000-8000-00000000d009"
+        const val SECOND_MEDIA_BLOB_ID = "0198f0a0-0000-7000-8000-00000000d00a"
         val BLOB_DIGESTS = BLOB_IDS.mapIndexed { index, _ -> ByteArray(32) { (index + 1).toByte() } }
     }
 }

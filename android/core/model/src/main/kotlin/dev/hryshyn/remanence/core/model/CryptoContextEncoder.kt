@@ -89,7 +89,10 @@ object CryptoContextEncoder {
         val valid = when (kind) {
             CapsuleArtifactKind.PHOTO ->
                 ordinal in ProtocolV1Limits.PHOTO_ORDINAL_MIN..ProtocolV1Limits.PHOTO_ORDINAL_MAX
-            CapsuleArtifactKind.RECOGNITION_MANIFEST, CapsuleArtifactKind.CONTENT_MANIFEST ->
+            CapsuleArtifactKind.RECOGNITION_MANIFEST,
+            CapsuleArtifactKind.CONTENT_MANIFEST,
+            CapsuleArtifactKind.MEDIA,
+            ->
                 ordinal == ProtocolV1Limits.NON_PHOTO_ORDINAL
         }
         if (!valid) {
@@ -102,6 +105,7 @@ object CryptoContextEncoder {
             CapsuleArtifactKind.RECOGNITION_MANIFEST -> ArtifactKind.RECOGNITION_MANIFEST
             CapsuleArtifactKind.CONTENT_MANIFEST -> ArtifactKind.CONTENT_MANIFEST
             CapsuleArtifactKind.PHOTO -> ArtifactKind.PHOTO
+            CapsuleArtifactKind.MEDIA -> ArtifactKind.MEDIA
         }
 
     private fun encode(prefix: String, context: MessageLite): ByteString {

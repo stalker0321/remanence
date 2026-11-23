@@ -151,6 +151,16 @@ voice note"); while it plays a pause glyph in the band's own form covers the
 play button the card draws. `stageVoiceCheck.mjs` plays a real AAC tone in all
 three forms. A first gift carries no media yet.
 
+Android, receiving (23 November): the incoming list asks with `media=voice`;
+`CapsuleArtifactKind.MEDIA` joins the layout (at most one, ordinal -1, after
+the photos), the blob cache, the prefetch (after the photos) and the
+presentation gate, which requires the manifest to name exactly the one signed
+MEDIA binding. `PreparedPresentationMaterial.loadVoice` decrypts it (an MP4)
+when the card opens; the sound stays in memory, the platform player reads it
+through a `MediaDataSource` (nothing is written to disk) and it is zeroed when
+the card closes. The band is one button with the same pause glyph as the site
+and keeps playing while the card is turned to its letter.
+
 Firefox records only WebM. The site converts a Firefox recording to MP4 in the
 browser if that is fast and small enough; otherwise recording is not offered
 in Firefox. Playing a received voice note or circle works there either way.

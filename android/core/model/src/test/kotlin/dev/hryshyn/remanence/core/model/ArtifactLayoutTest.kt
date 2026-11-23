@@ -32,6 +32,21 @@ class ArtifactLayoutTest {
     }
 
     @Test
+    fun oneVoiceNoteJoinsTheLayoutAndSortsAfterThePhotos() {
+        val voiced = listOf(media(9), photo(3, 0), recognition(), content(), photo(4, 1), photo(5, 2))
+        assertValidPreserving(voiced)
+        val sorted = voiced.sortedWith(CanonicalArtifactOrder::compare)
+        assertEquals(CapsuleArtifactKind.MEDIA, sorted.last().kind)
+        assertTrue(CanonicalArtifactOrder.isCanonical(sorted))
+        assertInvalid(ArtifactLayoutError.MEDIA_CARDINALITY, recognition(), content(), photo(3, 0), photo(4, 1), photo(5, 2), media(9), media(10))
+        assertInvalid(
+            ArtifactLayoutError.NON_PHOTO_ORDINAL,
+            recognition(), content(), photo(3, 0), photo(4, 1), photo(5, 2),
+            ArtifactSlot(blob(9), CapsuleArtifactKind.MEDIA, 0),
+        )
+    }
+
+    @Test
     fun twoAndSixPhotosArePhotoCardinality() {
         assertInvalid(
             ArtifactLayoutError.PHOTO_CARDINALITY,
@@ -198,6 +213,8 @@ class ArtifactLayoutTest {
 
     private fun content(id: Int = 2): ArtifactSlot =
         ArtifactSlot(blob(id), CapsuleArtifactKind.CONTENT_MANIFEST, ProtocolV1Limits.NON_PHOTO_ORDINAL)
+
+    private fun media(id: Int): ArtifactSlot = ArtifactSlot(blob(id), CapsuleArtifactKind.MEDIA, ProtocolV1Limits.NON_PHOTO_ORDINAL)
 
     private fun photo(id: Int, ordinal: Int): ArtifactSlot =
         ArtifactSlot(blob(id), CapsuleArtifactKind.PHOTO, ordinal)

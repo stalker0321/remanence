@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ADR-021: the song band of a card with a voice note is one button; no word is drawn on the card. -->
+    <string name="capsule_voice_listen">listen to the voice note</string>
+    <string name="capsule_voice_pause">pause the voice note</string>
+</resources>

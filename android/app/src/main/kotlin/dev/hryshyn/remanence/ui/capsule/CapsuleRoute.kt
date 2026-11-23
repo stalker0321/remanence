@@ -237,6 +237,7 @@ internal fun CapsuleRoute(
                             track = source.trackSnapshot(binding.capsuleId),
                             letter = source.letter(binding.capsuleId),
                             voice = source.voice(binding.capsuleId),
+                            loadVoice = { source.loadVoice(binding.capsuleId) },
                             // Client-only verified cover fetch; failure degrades
                             // to the text/no-art layout.
                             artworkFetcher = ArtworkFetcher.Default,

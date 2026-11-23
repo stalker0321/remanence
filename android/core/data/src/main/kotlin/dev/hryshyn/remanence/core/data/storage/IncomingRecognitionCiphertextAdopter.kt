@@ -57,6 +57,7 @@ class IncomingCiphertextAdoptionRequest(
                     ordinal in ProtocolV1Limits.PHOTO_ORDINAL_MIN..ProtocolV1Limits.PHOTO_ORDINAL_MAX
                 CapsuleArtifactKind.RECOGNITION_MANIFEST,
                 CapsuleArtifactKind.CONTENT_MANIFEST,
+                CapsuleArtifactKind.MEDIA,
                 -> ordinal == ProtocolV1Limits.NON_PHOTO_ORDINAL
             },
         ) { "artifact ordinal is invalid" }
@@ -82,6 +83,8 @@ class IncomingCiphertextAdoptionRequest(
                 ProtocolV1Limits.CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.PHOTO ->
                 ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.MEDIA ->
+                ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES
         }
     }
 }

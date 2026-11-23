@@ -182,6 +182,8 @@ class IncomingCapsuleRepository internal constructor(
         val url = baseUrl.resolve(PATH).newBuilder().apply {
             if (cursor != null) addQueryParameter("cursor", cursor)
             addQueryParameter("limit", limit.toString())
+            // ADR-021: the server lists a card with a voice note only to a client that reads it.
+            addQueryParameter("media", "voice")
         }.build()
         val requestBuilder = Request.Builder()
             .url(url)
@@ -379,12 +381,14 @@ class IncomingCapsuleRepository internal constructor(
                 }
                 CapsuleArtifactKind.RECOGNITION_MANIFEST,
                 CapsuleArtifactKind.CONTENT_MANIFEST,
+                CapsuleArtifactKind.MEDIA,
                 -> blob.ordinal.also { require(it == null) }
             }
             val maxBytes = when (kind) {
                 CapsuleArtifactKind.RECOGNITION_MANIFEST -> MAX_RECOGNITION_BYTES
                 CapsuleArtifactKind.CONTENT_MANIFEST -> MAX_CONTENT_BYTES
                 CapsuleArtifactKind.PHOTO -> MAX_PHOTO_BYTES
+                CapsuleArtifactKind.MEDIA -> MAX_MEDIA_BYTES
             }
             require(blob.ciphertextSize in 1..maxBytes)
             val digest = decodeBase64Url(blob.ciphertextSha256, expectedBytes = SHA256_BYTES)
@@ -513,9 +517,10 @@ class IncomingCapsuleRepository internal constructor(
         private const val MAX_RECOGNITION_BYTES = 1_048_576
         private const val MAX_CONTENT_BYTES = 65_536
         private const val MAX_PHOTO_BYTES = 8_388_641
+        private const val MAX_MEDIA_BYTES = 1_048_609
         private const val MAX_TOTAL_CIPHERTEXT_BYTES = 44_040_192L
         private const val MIN_BLOB_COUNT = 5
-        private const val MAX_BLOB_COUNT = 7
+        private const val MAX_BLOB_COUNT = 8
         private const val PHOTO_ORDINAL_MIN = 0
         private const val PHOTO_ORDINAL_MAX = 4
         private const val NON_PHOTO_ORDINAL = -1

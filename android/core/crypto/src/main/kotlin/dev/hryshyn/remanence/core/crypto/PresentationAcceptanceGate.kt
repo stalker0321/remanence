@@ -143,6 +143,42 @@ class PreparedPresentationMaterial internal constructor(
         }
     }
 
+    /**
+     * Decrypts the voice note (ADR-021) from the snapshot captured at prepare
+     * time, or null when the card has none. The gate already tied it to the
+     * one signed MEDIA binding; the sound must be an MP4 (an `ftyp` box first).
+     */
+    fun loadVoice(): ByteArray? {
+        val voice = requireOpen().voice ?: return null
+        val capsuleKeyset = capsuleKeysetValue ?: error("prepared material is closed")
+        val blobId = BlobId(voice.blobId)
+        val ciphertext = ciphertexts[blobId]?.copyOf()
+            ?: throw IllegalStateException("verified voice ciphertext is unavailable")
+        val sound = try {
+            CapsuleArtifactCryptor().decrypt(
+                capsuleKeyset,
+                ArtifactAadInput(
+                    capsuleId = CapsuleId.fromProtoBytes(statement.capsuleId),
+                    blobId = blobId,
+                    artifactKind = CapsuleArtifactKind.MEDIA,
+                    ordinal = NON_PHOTO_ORDINAL,
+                    senderUserId = UserId.fromProtoBytes(statement.senderUserId),
+                    recipientUserId = UserId.fromProtoBytes(statement.recipientUserId),
+                ),
+                ciphertext,
+            )
+        } finally {
+            ciphertext.fill(0)
+        }
+        if (sound.size < 8 || sound[4] != 'f'.code.toByte() || sound[5] != 't'.code.toByte() ||
+            sound[6] != 'y'.code.toByte() || sound[7] != 'p'.code.toByte()
+        ) {
+            sound.fill(0)
+            throw GeneralSecurityException("voice note is not an MP4")
+        }
+        return sound
+    }
+
     override fun close() {
         if (closed) return
         closed = true
@@ -160,6 +196,10 @@ class PreparedPresentationMaterial internal constructor(
     private fun requireOpen(): ContentManifestContent {
         check(!closed) { "prepared presentation material is closed" }
         return manifestValue ?: error("prepared presentation material is closed")
+    }
+
+    private companion object {
+        const val NON_PHOTO_ORDINAL = -1
     }
 }
 
@@ -302,6 +342,17 @@ class PresentationAcceptanceGate(
             if (!java.security.MessageDigest.isEqual(signedBinding.blobId.toByteArray(), descriptorBytes)) {
                 return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
             }
+        }
+
+        // ADR-021: the manifest names exactly the one signed MEDIA binding, or neither exists.
+        val mediaBindings = verified.statement.artifactsList.filter { it.kind == ArtifactKind.MEDIA }
+        val voice = manifest.voice
+        if (voice == null) {
+            if (mediaBindings.isNotEmpty()) {
+                return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
+            }
+        } else if (mediaBindings.size != 1 || BlobId.fromProtoBytes(mediaBindings.single().blobId) != BlobId(voice.blobId)) {
+            return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
         }
 
         return PresentationAcceptancePreparationResult.Prepared(

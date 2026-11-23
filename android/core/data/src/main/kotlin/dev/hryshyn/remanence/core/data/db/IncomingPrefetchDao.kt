@@ -49,7 +49,7 @@ sealed interface IncomingPrefetchCommitResult {
 abstract class IncomingPrefetchDao {
 
     /**
-     * Selects only remaining content/photo blobs of READY, INDEX_CACHED
+     * Selects only remaining content/photo/media blobs of READY, INDEX_CACHED
      * capsules. The bound and order are deterministic; recognition is already
      * complete at this state and is checked again by the completion predicate.
      */
@@ -65,16 +65,16 @@ abstract class IncomingPrefetchDao {
             "WHERE b.owner_user_id = :ownerUserId " +
             "AND c.server_status = 'READY' " +
             "AND c.material_state = 'INDEX_CACHED' " +
-            "AND b.kind IN ('CONTENT_MANIFEST', 'PHOTO') " +
+            "AND b.kind IN ('CONTENT_MANIFEST', 'PHOTO', 'MEDIA') " +
             "AND (b.cache_state = 'DOWNLOADING' OR " +
             "(b.cache_state = 'CACHED' AND NOT EXISTS (" +
             "SELECT 1 FROM blob_cache AS pending " +
             "WHERE pending.owner_user_id = b.owner_user_id " +
             "AND pending.capsule_id = b.capsule_id " +
-            "AND pending.kind IN ('CONTENT_MANIFEST', 'PHOTO') " +
+            "AND pending.kind IN ('CONTENT_MANIFEST', 'PHOTO', 'MEDIA') " +
             "AND pending.cache_state = 'DOWNLOADING'))) " +
             "ORDER BY b.capsule_id ASC, " +
-            "CASE b.kind WHEN 'CONTENT_MANIFEST' THEN 0 ELSE 1 END ASC, " +
+            "CASE b.kind WHEN 'CONTENT_MANIFEST' THEN 0 WHEN 'PHOTO' THEN 1 ELSE 2 END ASC, " +
             "COALESCE(b.ordinal, -1) ASC, b.blob_id ASC " +
             "LIMIT :limit",
     )
@@ -96,7 +96,7 @@ abstract class IncomingPrefetchDao {
             "WHERE b.blob_id = :blobId AND b.capsule_id = :capsuleId " +
             "AND b.owner_user_id = :ownerUserId " +
             "AND c.server_status = 'READY' AND c.material_state = 'INDEX_CACHED' " +
-            "AND b.kind IN ('CONTENT_MANIFEST', 'PHOTO') " +
+            "AND b.kind IN ('CONTENT_MANIFEST', 'PHOTO', 'MEDIA') " +
             "LIMIT 1",
     )
     internal abstract suspend fun getCandidateForOwner(
@@ -327,6 +327,7 @@ abstract class IncomingPrefetchDao {
                 ordinal != null && ordinal in ProtocolV1Limits.PHOTO_ORDINAL_MIN..ProtocolV1Limits.PHOTO_ORDINAL_MAX
             CapsuleArtifactKind.RECOGNITION_MANIFEST,
             CapsuleArtifactKind.CONTENT_MANIFEST,
+            CapsuleArtifactKind.MEDIA,
             -> ordinal == null
         }
         val maxSize = when (parsedKind) {
@@ -334,6 +335,7 @@ abstract class IncomingPrefetchDao {
                 ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.CONTENT_MANIFEST -> ProtocolV1Limits.CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES
             CapsuleArtifactKind.PHOTO -> ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.MEDIA -> ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES
         }
         return ordinalValid && sizeBytes in 1L..maxSize && sha256.size == SHA256_BYTES
     }
@@ -355,11 +357,13 @@ abstract class IncomingPrefetchDao {
                     CapsuleArtifactKind.CONTENT_MANIFEST ->
                         ProtocolV1Limits.CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES
                     CapsuleArtifactKind.PHOTO -> ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
+                    CapsuleArtifactKind.MEDIA -> ProtocolV1Limits.ENCRYPTED_MEDIA_MAX_CIPHERTEXT_BYTES
                 }
                 val ordinal = when (kind) {
                     CapsuleArtifactKind.PHOTO -> row.ordinal ?: return false
                     CapsuleArtifactKind.RECOGNITION_MANIFEST,
                     CapsuleArtifactKind.CONTENT_MANIFEST,
+                    CapsuleArtifactKind.MEDIA,
                     -> if (row.ordinal == null) ProtocolV1Limits.NON_PHOTO_ORDINAL else return false
                 }
                 if (row.expectedSizeBytes !in 1L..maxSize || row.expectedSha256.size != SHA256_BYTES ||

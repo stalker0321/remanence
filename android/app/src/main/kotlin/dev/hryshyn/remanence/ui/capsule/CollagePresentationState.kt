@@ -55,8 +55,10 @@ class CollagePresentationState(
     val track: CapsuleTrackSnapshotV1? = null,
     /** Long note read beside the sheet; never drawn on it. */
     val letter: String? = null,
-    /** The voice note drawn in the song band (ADR-021); its sound is fetched on play. */
+    /** The voice note drawn in the song band (ADR-021). */
     val voice: dev.hryshyn.remanence.core.crypto.ManifestVoice? = null,
+    /** Decrypts the voice note's MP4 (owned by this state once returned); called only when [voice] is set. */
+    private val loadVoice: suspend () -> ByteArray? = { null },
     private val decoder: Ber1PhotoDecoder = DefaultBer1PhotoDecoder,
     /**
      * Direct client-only cover fetcher. Null (or a fetch failure) degrades a
@@ -76,6 +78,8 @@ class CollagePresentationState(
             val bitmaps: Map<String, ImageBitmap>,
             /** Verified cover bitmap for a sealed thumbnail, else null. */
             val artwork: ImageBitmap? = null,
+            /** The voice note's MP4 while the card is open; zeroed by [close]. */
+            val sound: VoiceSound? = null,
         ) : Status
 
         data class Unsupported(val reason: String) : Status
@@ -97,6 +101,7 @@ class CollagePresentationState(
     private val lock = Any()
     private var closed = false
     private var started = false
+    private var heldSound: VoiceSound? = null
 
     /**
      * Decrypts (via [loadPhoto]) and decodes every sealed content id exactly
@@ -144,12 +149,19 @@ class CollagePresentationState(
                 }
             }
             val artworkBitmap = loadArtwork()
+            val sound = if (voice != null) {
+                VoiceSound(loadVoice() ?: throw IllegalStateException("the voice note is missing"))
+            } else {
+                null
+            }
             synchronized(lock) {
                 if (closed) {
                     decoded.clear()
+                    sound?.wipe()
                     return
                 }
-                status = Status.Ready(decoded, artworkBitmap)
+                heldSound = sound
+                status = Status.Ready(decoded, artworkBitmap, sound)
             }
         } catch (cancelled: CancellationException) {
             synchronized(lock) { decoded.clear() }
@@ -206,6 +218,8 @@ class CollagePresentationState(
             if (closed) return
             closed = true
             status = Status.Loading
+            heldSound?.wipe()
+            heldSound = null
         }
     }
 
@@ -272,6 +286,8 @@ internal fun CollagePresentationHost(
                     val export = exportFactory(validateExport)
                     val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
                     val musicLabel = state.track?.let { stringResource(R.string.track_open_action, it.title, it.artistDisplay) }
+                    // The voice note plays on while the card is turned; it stops when the card closes.
+                    val voicePlayer = status.sound?.let { rememberVoicePlayer(it) }
                     // The player cue is viewer furniture, not authored media.
                     // Keep every sealed photo/text/cover rect unchanged.
                     val contentScene = remember(result.scene) {
@@ -285,6 +301,7 @@ internal fun CollagePresentationHost(
                             if (!turned) {
                                 CapsuleMusicCue(result.scene, images)
                                 if (letter != null) LetterMark(result.scene, measurer, onTurn = { turned = true })
+                                if (voicePlayer != null) VoiceBand(result.scene, voicePlayer)
                             }
                         }) { sheetModifier ->
                     CardSides(turned && letter != null, Modifier.fillMaxSize(), front = {

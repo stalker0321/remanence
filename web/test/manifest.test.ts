@@ -550,3 +550,18 @@ describe('content manifest encoder', () => {
     if (withinResult.ok) expect(withinResult.bytes.length).toBeLessThanOrEqual(65536)
   })
 })
+
+describe('content manifest from a protobuf encoder', () => {
+  // test/fixtures/manifest-proto3.bin: the song-band manifest this file encodes
+  // ('Probe note text.', 3 photos, TRACK), parsed and re-serialized by Python
+  // protobuf. Like Android's protobuf-java it leaves zero scalars out, so the
+  // first photo and source carry no ordinal field.
+  it('opens with a zero ordinal left out of the bytes', async () => {
+    const { readFileSync } = await import('node:fs')
+    const bytes = new Uint8Array(readFileSync(new URL('./fixtures/manifest-proto3.bin', import.meta.url)))
+    const parsed = await parseContentManifest(bytes)
+    expect(parsed.photos.map((photo) => photo.ordinal)).toEqual([0, 1, 2])
+    expect(parsed.note).toBe('Probe note text.')
+    expect(parsed.track).toEqual({ title: TRACK.title, artistDisplay: TRACK.artistDisplay })
+  })
+})

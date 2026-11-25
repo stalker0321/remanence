@@ -184,7 +184,8 @@ function parsePhoto(bytes: Uint8Array): ManifestPhoto {
   if (blobId.length !== 16) throw new ProtocolError('INVALID_ENCODING')
   return {
     blobId,
-    ordinal: requiredNumber(fields, 2),
+    // proto3: Android leaves a zero ordinal out of the bytes.
+    ordinal: numberOrZero(fields, 2),
     mediaType: text(requiredBytes(fields, 3)),
     width: requiredNumber(fields, 4),
     height: requiredNumber(fields, 5),
@@ -297,7 +298,7 @@ function parseSource(bytes: Uint8Array): { ordinal: number; blobId: Uint8Array; 
   const contentHash = text(requiredBytes(fields, 4))
   if (blobId.length !== 16 || !/^[0-9a-f]{64}$/.test(contentHash)) throw new ProtocolError('INVALID_ENCODING')
   return {
-    ordinal: requiredNumber(fields, 1),
+    ordinal: numberOrZero(fields, 1),
     blobId,
     contentId: text(requiredBytes(fields, 3)),
     contentHash,

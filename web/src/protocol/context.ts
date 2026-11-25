@@ -25,6 +25,8 @@ export interface ArtifactContext {
   ordinal: number
   senderUserId: string
   recipientUserId: string
+  /** Web builds before 25 November wrote a zero ordinal; their photo 0 opens only with it. */
+  legacyZeroOrdinal?: boolean
 }
 
 export interface EnvelopeContext {
@@ -41,7 +43,8 @@ export function artifactAad(input: ArtifactContext): Uint8Array {
     protoBytes(2, uuidToBytes(input.capsuleId)),
     protoBytes(3, uuidToBytes(input.blobId)),
     protoVarint(4, kindValue[input.kind]),
-    protoVarint(5, zigzag32(input.ordinal)),
+    // proto3, as Android and the server encode it: a zero ordinal is left out.
+    input.ordinal === 0 && !input.legacyZeroOrdinal ? new Uint8Array(0) : protoVarint(5, zigzag32(input.ordinal)),
     protoBytes(6, uuidToBytes(input.senderUserId)),
     protoBytes(7, uuidToBytes(input.recipientUserId)),
   ])

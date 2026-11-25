@@ -121,6 +121,14 @@ describe('granted postcard', () => {
     )).rejects.toMatchObject({ code: 'GRANT' })
   })
 
+  it('opens a card sealed by a web build before 25 November (key field 2, zero ordinal in photo 0 AAD)', async () => {
+    const material = await jsPressMaterial(false, true)
+    const { session, keys, grant } = matched()
+    keys.hold(session.getSnapshot(), material.capabilities())
+    const opened = await openGrantedPostcard(session, keys, grant, material.capsule, material.content, material.photos, fitText)
+    expect(opened.photos.size).toBe(3)
+  })
+
   it('decrypts the voice note with the card, wipes it after, and holds it as audio until the sheet closes', async () => {
     const material = await jsPressMaterial(true)
     const { session, keys, grant } = matched()

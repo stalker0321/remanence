@@ -146,7 +146,11 @@ export async function openGrantedPostcard(
         capsuleArtifactAad(capsule, blobId, 'PHOTO', source.ordinal),
         sealed.ciphertext,
         'PHOTO',
-      )
+      ).catch(async (error: unknown) => {
+        // Photo 0 of a card the site sealed before 25 November carries a zero ordinal in its AAD.
+        if (source.ordinal !== 0 || capsule.pending || !(error instanceof ProtocolError) || error.code !== 'ARTIFACT_REJECTED') throw error
+        return fresh().decryptArtifact(keyset!, capsuleArtifactAad(capsule, blobId, 'PHOTO', 0, true), sealed.ciphertext, 'PHOTO')
+      })
       plains.push(plain)
       fresh()
       const size = jpegSize(plain)

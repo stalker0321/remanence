@@ -56,8 +56,9 @@ function str(field: number, value: string): Uint8Array {
   return protoBytes(field, utf8(value))
 }
 
-function aesKeyset(raw: Uint8Array): Uint8Array {
-  const material = protoBytes(2, raw)
+/** Tink's AesGcmKey keeps the key in field 3; web builds before 25 November wrote field 2 (`legacy`). */
+function aesKeyset(raw: Uint8Array, legacy = false): Uint8Array {
+  const material = protoBytes(legacy ? 2 : 3, raw)
   const data = concat([
     protoBytes(1, utf8('type.googleapis.com/google.crypto.tink.AesGcmKey')),
     protoBytes(2, material),
@@ -214,9 +215,10 @@ export interface JsPressMaterial {
   ciphertext: (blobId: string) => Uint8Array
 }
 
-export async function jsPressMaterial(voice = false): Promise<JsPressMaterial> {
+/** `legacy` seals as web builds before 25 November did: key in field 2, photo 0 AAD with a zero ordinal. */
+export async function jsPressMaterial(voice = false, legacy = false): Promise<JsPressMaterial> {
   const raw = crypto.getRandomValues(new Uint8Array(32))
-  const keyset = aesKeyset(raw)
+  const keyset = aesKeyset(raw, legacy)
   const statement = new Uint8Array(32).fill(9)
   const body = await jsPressPlain('hello', voice)
   const contentCiphertext = await framed(raw, body.plain, artifactAad({
@@ -234,6 +236,7 @@ export async function jsPressMaterial(voice = false): Promise<JsPressMaterial> {
     ordinal,
     senderUserId: jsPressIds.sender,
     recipientUserId: jsPressIds.account,
+    legacyZeroOrdinal: legacy,
   }))))
   const mediaCiphertext = voice ? await framed(raw, jsVoiceSound, artifactAad({
     capsuleId: jsPressIds.capsule,

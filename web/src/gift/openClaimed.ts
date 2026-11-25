@@ -42,7 +42,7 @@ export async function openClaimedEnvelope(caps: KeyCapabilities, capsule: Incomi
 }
 
 /** The artifact AAD for either kind of incoming postcard. */
-export function capsuleArtifactAad(capsule: IncomingCapsule, blobId: string, kind: ArtifactKind, ordinal: number): Uint8Array {
+export function capsuleArtifactAad(capsule: IncomingCapsule, blobId: string, kind: ArtifactKind, ordinal: number, legacyZeroOrdinal = false): Uint8Array {
   if (capsule.pending) {
     return artifactAadV2({
       capsuleId: capsule.capsuleId, blobId, kind, ordinal,
@@ -51,6 +51,6 @@ export function capsuleArtifactAad(capsule: IncomingCapsule, blobId: string, kin
   }
   return artifactAad({
     capsuleId: capsule.capsuleId, blobId, kind, ordinal,
-    senderUserId: capsule.senderUserId, recipientUserId: capsule.recipientUserId,
+    senderUserId: capsule.senderUserId, recipientUserId: capsule.recipientUserId, legacyZeroOrdinal,
   })
 }

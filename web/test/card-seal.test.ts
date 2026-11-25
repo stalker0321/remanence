@@ -100,6 +100,19 @@ describe('delivery v2 wire', () => {
     expect([...await addressCommitment(raw(vector.opening_b64))]).toEqual([...raw(wire.address_commitment_b64)])
   })
 
+  it('leaves a zero photo ordinal out of a first gift AAD, as Android protobuf does', () => {
+    const photo = (ordinal: number) => [...artifactAadV2({
+      capsuleId: id('capsule'), blobId: id('blob'), kind: 'PHOTO', ordinal, senderUserId: id('sender'), deliveryTargetId: id('target'),
+    })]
+    const zero = photo(0)
+    const one = photo(1)
+    const at = one.findIndex((byte, index) => byte === 0x20 && one[index + 1] === 3)
+    // kind PHOTO, then ordinal 1 (zigzag 2), then the sender; with 0 the ordinal is absent.
+    expect(one.slice(at, at + 5)).toEqual([0x20, 3, 0x28, 2, 0x32])
+    expect(zero.slice(at, at + 3)).toEqual([0x20, 3, 0x32])
+    expect(zero.length).toBe(one.length - 2)
+  })
+
   it('binds the voice note and video square of a first gift under kinds 4 and 5 (ADR-021)', () => {
     const aad = (kind: 'RECOGNITION_MANIFEST' | 'MEDIA' | 'VIDEO') => [...artifactAadV2({
       capsuleId: id('capsule'), blobId: id('blob'), kind, ordinal: -1, senderUserId: id('sender'), deliveryTargetId: id('target'),

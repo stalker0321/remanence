@@ -246,7 +246,8 @@ export function artifactAadV2(input: {
     protoBytes(2, uuidToBytes(input.capsuleId)),
     protoBytes(3, uuidToBytes(input.blobId)),
     protoVarint(4, KIND_VALUE[input.kind]),
-    protoVarint(5, zigzag32(input.ordinal)),
+    // proto3, as Android encodes it: a zero ordinal is left out.
+    input.ordinal === 0 ? new Uint8Array(0) : protoVarint(5, zigzag32(input.ordinal)),
     protoBytes(6, uuidToBytes(input.senderUserId)),
     protoBytes(7, uuidToBytes(input.deliveryTargetId)),
   ]))

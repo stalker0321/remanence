@@ -947,7 +947,9 @@ class CreateViewModel(
                         text = note, family = font, size = size.toInt(), weight = 400, italic = false,
                         line = line.toInt(), maxWidth = kotlin.math.floor(width).toInt(), maxHeight = Int.MAX_VALUE,
                     ))
-                    dev.hryshyn.remanence.ui.collage.FrozenGrammarPlans.TextMetric(layout.size.height.toDouble(), layout.lineCount)
+                    // One rule on both platforms: a note is lines x line height tall. Compose's own
+                    // height trims the leading and comes out shorter than the site allows.
+                    dev.hryshyn.remanence.ui.collage.FrozenGrammarPlans.TextMetric(layout.lineCount * line, layout.lineCount)
                 })
         } ?: dev.hryshyn.remanence.ui.collage.FrozenGrammarPlans.LINE_HEIGHT_STUB
         val outcome = withContext(ioDispatcher) {

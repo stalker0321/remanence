@@ -165,6 +165,47 @@ class CollageV4PublishGateTest {
         )
     }
 
+    /** A V4 candidate whose band holds a voice note (ADR-021): no song anywhere. */
+    private fun voiceBandV4(): CollageCandidate {
+        val v4 = asV4(candidateV3())
+        val expression = v4.expression.copy(
+            musicRegion = GeneratorExpression.MusicRegion(
+                x = 10, y = 400, width = 320, height = 64, mode = "voice-plate",
+                type = GeneratorExpression.TextType("StudySans", 20, 400, false, 23),
+                artwork = null,
+            ),
+        )
+        val validation = GeneratorExpression.validateResolved(expression)
+        assertTrue(
+            "the voice-band fixture must be valid V4, got " +
+                (validation as? GeneratorExpression.InputValidation.Invalid)?.reasons,
+            validation is GeneratorExpression.InputValidation.Valid,
+        )
+        return v4.copy(candidateId = GeneratorBer1Provider.candidateIdFor(expression), expression = expression)
+    }
+
+    @Test
+    fun voiceBandIsAcceptedWithoutATrackSnapshot() {
+        val input = input()
+        val frozen = requireNotNull(buildFrozenSelection(voiceBandV4(), input, capsuleId))
+        val acceptance = acceptFrozenForPublish(frozen, input, trackSnapshot = null, capsuleId = capsuleId)
+        assertTrue("a voice band needs no song, got $acceptance", acceptance is FrozenPublishAcceptance.Accepted)
+    }
+
+    @Test
+    fun voiceBandBesideASongIsRefused() {
+        val input = input()
+        val frozen = requireNotNull(buildFrozenSelection(voiceBandV4(), input, capsuleId))
+        val song = dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1.parse(
+            "0198f0a0-0000-7000-8000-0000000000aa", "song", "artist", null, null,
+        )
+        val acceptance = acceptFrozenForPublish(frozen, input, trackSnapshot = song, capsuleId = capsuleId)
+        assertEquals(
+            FrozenPublishAcceptance.Refused("a voice band carries a song"),
+            acceptance,
+        )
+    }
+
     @Test
     fun structurallyInvalidInputHashIsRejectedByValidation() {
         // Guards F2 itself: a short/uppercase hash must never validate, so the

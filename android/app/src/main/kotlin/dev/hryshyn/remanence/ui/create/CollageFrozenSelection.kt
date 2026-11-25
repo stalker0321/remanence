@@ -77,6 +77,14 @@ internal fun acceptFrozenForPublish(
         return FrozenPublishAcceptance.Refused("the frozen collage input changed")
     }
 
+    // A voice band (ADR-021) holds the voice note, never a song: no track
+    // snapshot and no music input. The manifest binds it to the voice note.
+    if (expression.musicRegion?.mode in GeneratorExpression.VOICE_BAND_MODES) {
+        if (trackSnapshot != null || expression.input.music != null) {
+            return FrozenPublishAcceptance.Refused("a voice band carries a song")
+        }
+        return FrozenPublishAcceptance.Accepted(frozen)
+    }
     val musicRegionPresent = expression.musicRegion != null
     if (musicRegionPresent != (trackSnapshot != null)) {
         return FrozenPublishAcceptance.Refused("the frozen collage music does not match the track snapshot")

@@ -454,6 +454,7 @@ export function Scan({
     setChoices([])
     setOpenStatus('scanPreparing')
     let senders = new Map<string, string>()
+    let unreadable = 0
     const attempt = ++operation.current
     const controller = new AbortController()
     openAbort.current?.abort()
@@ -494,6 +495,7 @@ export function Scan({
           signal: controller.signal,
         })
         if (controller.signal.aborted) return
+        unreadable = index.skipped
         senders = new Map(incoming.items.map((item) => [item.capsuleId, item.senderUserId]))
         await receivePostcard(
           store,
@@ -529,7 +531,9 @@ export function Scan({
           setChoices(error.choices.map((capsuleId) => ({ capsuleId, handle: handles.get(senders.get(capsuleId) ?? '') ?? null })))
           onNotice('chooseSender')
         }
-      } else if (!controller.signal.aborted && operation.current === attempt) onNotice(explainScan(error))
+      } else if (!controller.signal.aborted && operation.current === attempt) {
+        onNotice(error instanceof ScanError && error.code === 'NO_MATCH' && unreadable > 0 ? 'noMatchUnreadable' : explainScan(error))
+      }
     } finally {
       if (operation.current === attempt) { busy.current = false; setWorking(false) }
     }

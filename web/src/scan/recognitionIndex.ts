@@ -95,17 +95,20 @@ function wipeEntry(entry: RecognitionIndexEntry): void {
 export class RecognitionIndex {
   readonly hasMore: boolean
   readonly nextCursor: string | null
+  /** Incoming cards left out because they could not be read; the rest still match. */
+  readonly skipped: number
   #entries: RecognitionIndexEntry[]
   #fence: OwnerFence
   #emptied = false
   #unsubscribe: () => void
   #onAbort: () => void
 
-  constructor(entries: RecognitionIndexEntry[], fence: OwnerFence, page: { hasMore: boolean; nextCursor: string | null }) {
+  constructor(entries: RecognitionIndexEntry[], fence: OwnerFence, page: { hasMore: boolean; nextCursor: string | null }, skipped = 0) {
     this.#entries = entries
     this.#fence = fence
     this.hasMore = page.hasMore
     this.nextCursor = page.nextCursor
+    this.skipped = skipped
     // Immediate cleanup across the LIVE lifetime: lock/sign-out/abort wipes
     // rows now, without waiting for entries()/caller finally.
     this.#unsubscribe = fence.session.subscribe(() => {
@@ -366,6 +369,11 @@ export async function buildRecognitionIndex(deps: BuildRecognitionIndexDeps): Pr
       })
     }
 
+    // One card that cannot be read (a newer format, a broken file) is left out
+    // of the index; it must not stop the others from matching. Nothing from it
+    // reaches the index, so it can never open. Listing-level faults above,
+    // staleness and fence loss still refuse the whole build.
+    let skipped = 0
     for (const item of snapshot) {
       fenceOrRefuse()
       const itemBuffers: Uint8Array[] = []
@@ -459,6 +467,9 @@ export async function buildRecognitionIndex(deps: BuildRecognitionIndexDeps): Pr
         }
         if (scope.invalidated) refuse('stale')
         entries.push({ capsuleId: item.capsuleId, fingerprint })
+      } catch (error) {
+        if (!(error instanceof RecognitionIndexError) || error.code !== 'invalid') throw error
+        skipped += 1
       } finally {
         // Per-item temporaries are wiped BEFORE the item completes (scope 3):
         // descriptor rows above are independent copies and stay owned by the
@@ -476,7 +487,7 @@ export async function buildRecognitionIndex(deps: BuildRecognitionIndexDeps): Pr
     signal?.removeEventListener('abort', onAbort)
     scope.detachEntries()
     scope.wipeAll() // any residual registered snapshot copies are zeroed
-    return new RecognitionIndex(entries, fence, page)
+    return new RecognitionIndex(entries, fence, page, skipped)
   } catch (error) {
     disposePartialEntries()
     scope.wipeAll()

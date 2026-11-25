@@ -260,6 +260,7 @@
   "emptyIndex": "Scan error when nobody has sent a postcard yet.",
   "bodyMissing": "Scan error when the postcard was found but its contents are missing.",
   "integrityFailed": "Scan error when the postcard failed its integrity check.",
+  "noMatchUnreadable": "Scan error when no postcard matched and some incoming postcards could not be read (left out of matching).",
   "keysLocked": "Scan notice asking the user to confirm with a passkey first.",
   "scanCancelled": "Scan notice when recognition was stopped or cancelled.",
   "incompleteIndex": "Scan error when not all incoming postcards could load.",

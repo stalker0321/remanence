@@ -39,6 +39,7 @@ import {
 import {
   buildRecognitionIndex,
   RecognitionIndexError,
+  type RecognitionIndex,
 } from '../src/scan/recognitionIndex'
 import type { IncomingBlob, IncomingCapsule } from '../src/sync/incoming'
 import type { ApiTransport, ByteTransport } from '../src/auth/http'
@@ -294,6 +295,17 @@ async function expectIndexRefusal(code: 'unavailable' | 'invalid' | 'stale', run
 }
 
 describe('buildRecognitionIndex', () => {
+  /** An unreadable card is left out of the index; nothing from it can match. */
+  async function expectLeftOut(build: () => Promise<RecognitionIndex>): Promise<void> {
+    const index = await build()
+    try {
+      expect(index.skipped).toBe(1)
+      expect(index.entries()).toHaveLength(0)
+    } finally {
+      index.dispose()
+    }
+  }
+
   it('real HPKE + AEAD round trip yields one format-3 entry, downloads only the recognition blob, and never leaves keys-unlocked', async () => {
     const wire = serializeSiftFingerprint(validFingerprint())
     const { sealed } = await sealWithWire(wire)
@@ -377,14 +389,14 @@ describe('buildRecognitionIndex', () => {
     }))
   })
 
-  it('a tampered envelope fails the whole build as invalid', async () => {
+  it('a tampered envelope leaves that card out and the build stands', async () => {
     const wire = serializeSiftFingerprint(validFingerprint())
     const { sealed } = await sealWithWire(wire)
     const fixture = recipientFixture(sealed)
     const tampered = sealed.envelopeCiphertext.slice()
     tampered[40] = (tampered[40] ?? 0) ^ 0xff
     fixture.item.envelopeCiphertext = tampered
-    await expectIndexRefusal('invalid', () => buildRecognitionIndex({
+    await expectLeftOut(() => buildRecognitionIndex({
       session: fixture.session,
       keys: fixture.keys,
       transport: fixture.transport,
@@ -432,7 +444,7 @@ describe('buildRecognitionIndex', () => {
     }))
   })
 
-  it('a tampered manifest ciphertext with a consistently re-declared hash fails as invalid at decrypt', async () => {
+  it('a tampered manifest ciphertext with a consistently re-declared hash is left out at decrypt', async () => {
     const wire = serializeSiftFingerprint(validFingerprint())
     const { sealed } = await sealWithWire(wire)
     const fixture = recipientFixture(sealed)
@@ -445,7 +457,7 @@ describe('buildRecognitionIndex', () => {
     item.blobs = item.blobs.map((blob) => (blob.kind === 'RECOGNITION_MANIFEST'
       ? { ...blob, ciphertextSize: tampered.length, ciphertextSha256: tamperedSha }
       : blob))
-    await expectIndexRefusal('invalid', () => buildRecognitionIndex({
+    await expectLeftOut(() => buildRecognitionIndex({
       session: fixture.session,
       keys: fixture.keys,
       transport: fixture.transport,
@@ -601,7 +613,7 @@ describe('buildRecognitionIndex', () => {
     }
   })
 
-  it('R2: an unknown envelope field after a valid prefix refuses invalid and wipes the opened plaintext', async () => {
+  it('R2: an unknown envelope field after a valid prefix leaves the card out and wipes the opened plaintext', async () => {
     const wire = serializeSiftFingerprint(validFingerprint())
     const { sealed } = await sealWithWire(wire)
     const openedBuffers: Uint8Array[] = []
@@ -614,7 +626,7 @@ describe('buildRecognitionIndex', () => {
         return extended
       },
     })
-    await expectIndexRefusal('invalid', () => buildRecognitionIndex({
+    await expectLeftOut(() => buildRecognitionIndex({
       session: fixture.session,
       keys: fixture.keys,
       transport: fixture.transport,
@@ -622,6 +634,43 @@ describe('buildRecognitionIndex', () => {
     }))
     expect(openedBuffers.length).toBe(1)
     expect(openedBuffers[0]!.every((byte) => byte === 0)).toBe(true)
+  })
+
+  it('a broken card beside a good one: the good one is indexed, the broken one left out', async () => {
+    const wire = serializeSiftFingerprint(validFingerprint())
+    const { sealed: good } = await sealWithWire(wire)
+    const { sealed: broken } = await sealWithWire(wire, 'c0c1c2c3-c4c5-c6c7-c8c9-cacbcccdcecf')
+    const fixture = recipientFixture(good)
+    const envelope = broken.envelopeCiphertext.slice()
+    envelope[40] = (envelope[40] ?? 0) ^ 0xff
+    fixture.catalog.items.unshift({
+      capsuleId: broken.capsuleId,
+      senderUserId: broken.senderUserId,
+      recipientUserId: broken.recipientUserId,
+      senderKeyBundleId: broken.senderKeyBundleId,
+      recipientKeyBundleId: broken.recipientKeyBundleId,
+      envelopeCiphertext: envelope,
+      statementSha256: broken.statementSha256,
+      blobs: broken.blobs.map((blob) => ({
+        blobId: blob.blobId,
+        kind: blob.kind,
+        ordinal: blob.kind === 'PHOTO' ? blob.ordinal : null,
+        ciphertextSize: blob.ciphertextSize,
+        ciphertextSha256: b64(blob.ciphertextSha256),
+      })),
+    })
+    const index = await buildRecognitionIndex({
+      session: fixture.session,
+      keys: fixture.keys,
+      transport: fixture.transport,
+      catalog: fixture.catalog,
+    })
+    try {
+      expect(index.skipped).toBe(1)
+      expect(index.entries().map((entry) => entry.capsuleId)).toEqual([good.capsuleId])
+    } finally {
+      index.dispose()
+    }
   })
 
   it('R3: lock during the SECOND item download immediately wipes the FIRST item nonzero partial rows before the await settles', async () => {

@@ -260,6 +260,7 @@
   "emptyIndex": "no one has sent you a postcard yet",
   "bodyMissing": "the postcard was found, but its contents are missing",
   "integrityFailed": "this postcard didn’t pass the check, so it wasn’t opened",
+  "noMatchUnreadable": "couldn’t find a postcard in this photo, and some of your postcards couldn’t be read",
   "keysLocked": "confirm with your passkey first",
   "scanCancelled": "stopped",
   "incompleteIndex": "couldn’t load all your postcards. try again",

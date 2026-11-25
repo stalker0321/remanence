@@ -20,9 +20,12 @@ export interface PrivateScalar {
 
 export function parseAes256GcmKeyset(bytes: Uint8Array): AesKey {
   const { keyId, value } = oneKey(bytes, AES_URL, 1)
-  const key = readMessage(value, [1, 2])
+  // Tink's AesGcmKey keeps the key in field 3 (Android writes that). Web
+  // builds before 25 November wrote field 2; those cards still open here.
+  const key = readMessage(value, [1, 2, 3])
   if (fieldNumber(key, 1, 0) !== 0) throw new ProtocolError('UNKNOWN_VERSION')
-  const raw = fieldBytes(key, 2)
+  if (key.has(2) === key.has(3)) throw new ProtocolError('INVALID_PROTO')
+  const raw = fieldBytes(key, key.has(3) ? 3 : 2)
   if (raw.length !== 32) throw new ProtocolError('INVALID_KEY')
   return { keyId, key: raw }
 }

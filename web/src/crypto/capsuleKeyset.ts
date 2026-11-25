@@ -9,7 +9,7 @@ import { utf8 } from '../protocol/bytes'
  *   Key     { key_data = 1; status = 2 (ENABLED=1); key_id = 3; output_prefix_type = 4 (TINK=1) }
  *   KeyData { type_url = 1 ("type.googleapis.com/google.crypto.tink.AesGcmKey");
  *             value = 2 (serialized AesGcmKey); key_material_type = 3 (SYMMETRIC=1) }
- *   AesGcmKey { version = 1 (0/default); key_value = 2 (32 random bytes) }
+ *   AesGcmKey { version = 1 (0/default); key_value = 3 (32 random bytes) }
  *
  * One fresh 256-bit key via `crypto.getRandomValues` on every call; never
  * derived from account/identity/images/route IDs/time/password. Key id: four
@@ -46,7 +46,7 @@ const TAG_KEY_OUTPUT_PREFIX = 0x20
 const TAG_KEYDATA_TYPE_URL = 0x0a
 const TAG_KEYDATA_VALUE = 0x12
 const TAG_KEYDATA_MATERIAL = 0x18
-const TAG_AES_GCM_KEY_VALUE = 0x12
+const TAG_AES_GCM_KEY_VALUE = 0x1a
 
 function varintLength(value: number): number {
   let rest = value
@@ -116,7 +116,7 @@ export function generateCapsuleKeyset(): Uint8Array {
     // KeyData.value = 2 (AesGcmKey message)
     keyset[offset++] = TAG_KEYDATA_VALUE
     offset = writeVarint(keyset, offset, aesGcmKeyLength)
-    // AesGcmKey.key_value = 2 (the SINGLE raw-key copy into the final buffer)
+    // AesGcmKey.key_value = 3 (the SINGLE raw-key copy into the final buffer)
     keyset[offset++] = TAG_AES_GCM_KEY_VALUE
     offset = writeVarint(keyset, offset, KEY_BYTES)
     keyset.set(rawKey, offset)

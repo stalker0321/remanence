@@ -50,9 +50,10 @@ function explicitRead(keyset: Uint8Array): ExplicitKeyset {
   const data = readMessage(fieldBytes(key, 1), [1, 2, 3])
   const url = new TextDecoder('utf-8', { fatal: true }).decode(fieldBytes(data, 1))
   const material = fieldNumber(data, 3)
-  const aes = readMessage(fieldBytes(data, 2), [1, 2])
+  // Tink's AesGcmKey: version = 1, key_value = 3 (what Android writes and reads).
+  const aes = readMessage(fieldBytes(data, 2), [1, 3])
   const version = fieldNumber(aes, 1, 0)
-  const raw = fieldBytes(aes, 2)
+  const raw = fieldBytes(aes, 3)
   return { primary, keyId, status, prefix, url, material, version, raw }
 }
 
@@ -252,5 +253,40 @@ describe('capsule keyset generator', () => {
     expect(raw!.every((value) => value === 0)).toBe(true)
     expect(partial).not.toBeNull()
     expect((partial as unknown as Uint8Array).every((value) => value === 0)).toBe(true)
+  })
+})
+
+describe('AES-GCM keyset parser', () => {
+  // Serialized by Tink itself (python tink, as Android's Tink writes it):
+  // AesGcmKey { version = 0; key_value (field 3) = 0x0b * 32 }, key id 0x1234abcd.
+  const tinkHex = '08cdd7d2910112640a580a30747970652e676f6f676c65617069732e636f6d2f676f6f676c652e63727970746f2e74696e6b2e41657347636d4b657912221a20'
+    + '0b'.repeat(32) + '1801100118cdd7d291012001'
+  const bytes = (hex: string) => Uint8Array.from(hex.match(/../g)!.map((pair) => parseInt(pair, 16)))
+
+  it('reads a keyset Tink wrote (key in field 3)', () => {
+    const parsed = parseAes256GcmKeyset(bytes(tinkHex))
+    expect(parsed.keyId).toBe(0x1234abcd)
+    expect(Array.from(parsed.key)).toEqual(new Array(32).fill(0x0b))
+  })
+
+  it('still reads the field-2 keysets earlier web builds wrote', () => {
+    const legacy = bytes(tinkHex.replace('12221a20', '12221220'))
+    expect(Array.from(parseAes256GcmKeyset(legacy).key)).toEqual(new Array(32).fill(0x0b))
+  })
+
+  it('refuses a key that carries both fields', () => {
+    // AesGcmKey grows by 34 bytes: KeyData 0x58 -> 0x7a, value 0x22 -> 0x44, Key 0x64 -> 0x86 0x01.
+    const both = bytes(tinkHex
+      .replace('12640a580a30', '1286010a7a0a30')
+      .replace('12221a20' + '0b'.repeat(32), '12441a20' + '0b'.repeat(32) + '1220' + '0c'.repeat(32)))
+    expect(() => parseAes256GcmKeyset(both)).toThrow()
+  })
+
+  it('the generator writes what Tink writes', () => {
+    const generated = generateCapsuleKeyset()
+    const data = readMessage(fieldBytes(readMessage(fieldBytes(readMessage(generated, [1, 2]), 2), [1, 2, 3, 4]), 1), [1, 2, 3])
+    const aes = readMessage(fieldBytes(data, 2), [1, 3])
+    expect(aes.has(2)).toBe(false)
+    expect(fieldBytes(aes, 3).length).toBe(32)
   })
 })

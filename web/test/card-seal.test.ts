@@ -67,6 +67,8 @@ describe('delivery v2 wire', () => {
       ['RECOGNITION_MANIFEST', null, 1000], ['PHOTO', 4, 3000000],
     ])
     expect(statement.blobs[1]?.blobId).toBe(id('photo'))
+    // Downloads check the hash as standard base64, as the incoming listing carries it.
+    for (const blob of statement.blobs) expect(raw(blob.ciphertextSha256)).toHaveLength(32)
   })
 
   it('reads the claim binding and challenge', () => {

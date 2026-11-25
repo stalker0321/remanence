@@ -1,3 +1,4 @@
+import { b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
 import { arrayBuffer, concat, utf8 } from '../protocol/bytes'
 import { protoBytes, protoVarint, zigzag32 } from '../protocol/proto'
 import { uuidToBytes } from '../protocol/uuid'
@@ -108,7 +109,8 @@ export function parseStatement(raw: Uint8Array): PendingStatement {
       kind,
       ordinal: kind === 'PHOTO' ? ordinal : null,
       ciphertextSize: numberOf(artifact, 4),
-      ciphertextSha256: [...bytesOf(artifact, 5)].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
+      // Standard base64, as the incoming listing carries it: downloads check against it.
+      ciphertextSha256: b64(bytesOf(artifact, 5)),
     }
   })
   return {

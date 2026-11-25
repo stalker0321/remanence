@@ -234,7 +234,7 @@
   "recoveryPending": "the passkey is saved, but setup isn’t finished. don’t create another one",
   "wrongPasskey": "this passkey is for a different account",
   "authFailed": "couldn’t sign in",
-  "googleUnavailable": "Google sign-in isn’t available here",
+  "googleUnavailable": "Google sign-in didn’t open. check that you’re signed in to Google in this browser, then try again",
   "googleCancelled": "the Google window was closed",
   "useCamera": "turn on camera",
   "takePicture": "take photo",

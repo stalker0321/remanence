@@ -234,7 +234,7 @@
   "recoveryPending": "Account notice that the passkey is saved but setup is not finished.",
   "wrongPasskey": "Auth error when the passkey belongs to a different account.",
   "authFailed": "Generic sign-in error.",
-  "googleUnavailable": "Auth error when Google sign-in is not available here.",
+  "googleUnavailable": "Auth error when the Google sign-in prompt could not open (often: the browser is not signed in to Google, or Google sign-in is not configured).",
   "googleCancelled": "Auth error when the Google window was closed.",
   "useCamera": "Scan and create button that turns on the camera.",
   "takePicture": "Scan and create button that captures a photo.",

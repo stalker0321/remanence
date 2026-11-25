@@ -83,7 +83,7 @@ export function AtomicAccount(props: { store: SessionStore; keys: MemoryKeys; tr
     : state.phase === 'assertion-required' ? 'atomicAssertion' : state.phase === 'saving' ? 'atomicSaving' : null
   const errorMessage: MessageKey | null = state.error === null || state.phase === 'unknown' ? null : ({ HANDLE_TAKEN: 'handleTaken', HANDLE_INVALID: 'handleInvalid',
     PRF_UNAVAILABLE: 'prfUnavailable', PASSKEY_CANCELLED: 'passkeyCancelled', PASSKEY_UNAVAILABLE: 'passkeyUnavailable',
-    GOOGLE_CANCELLED: 'googleCancelled', EXISTING_ACCOUNT_REQUIRES_LINK: 'linkRequired', CLIENT_UPGRADE_REQUIRED: 'upgradeRequired',
+    GOOGLE_CANCELLED: 'googleCancelled', GOOGLE_CLIENT_UNAVAILABLE: 'googleUnavailable', EXISTING_ACCOUNT_REQUIRES_LINK: 'linkRequired', CLIENT_UPGRADE_REQUIRED: 'upgradeRequired',
     REGISTRATION_ADMISSION_CLOSED: 'atomicUnavailable', WRONG_CREDENTIAL: 'wrongPasskey', WRONG_ACCOUNT: 'wrongPasskey',
   } as Record<string, MessageKey>)[state.error] ?? 'atomicFailure'
   const unsupported = state.error === 'PRF_UNAVAILABLE'

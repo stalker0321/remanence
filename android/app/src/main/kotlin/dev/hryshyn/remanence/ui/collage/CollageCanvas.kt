@@ -754,7 +754,7 @@ fun CollageCanvas(
                                                 textLayoutResult = layout,
                                                 color = Color(mark.color),
                                                 topLeft = Offset(
-                                                    mark.region.x.toFloat(),
+                                                    mark.region.x + markLead(mark, layout.size.width),
                                                     mark.region.y.toFloat(),
                                                 ),
                                             )
@@ -770,7 +770,7 @@ fun CollageCanvas(
                                             drawText(
                                                 textLayoutResult = layout,
                                                 color = Color(mark.color),
-                                                topLeft = Offset.Zero,
+                                                topLeft = Offset(markLead(mark, layout.size.width), 0f),
                                             )
                                         }
                                     dev.hryshyn.remanence.core.model.GeneratorExpression.MarkOrientation.VERTICAL_DOWN ->
@@ -784,7 +784,7 @@ fun CollageCanvas(
                                             drawText(
                                                 textLayoutResult = layout,
                                                 color = Color(mark.color),
-                                                topLeft = Offset.Zero,
+                                                topLeft = Offset(markLead(mark, layout.size.width), 0f),
                                             )
                                         }
                                 }
@@ -826,6 +826,22 @@ fun CollageCanvas(
 
 private fun TextLayoutResult.fitsRegion(region: CollageRenderer.RectI): Boolean =
     !hasVisualOverflow && size.width in 1..region.width && size.height in 1..region.height
+
+/**
+ * Where an unwrapped mark starts along its reading direction: its layout is
+ * only as wide as its text, so `textAlign` alone moves nothing and the sealed
+ * alignment places the layout in the box instead.
+ */
+internal fun markLead(mark: CollageRenderer.SceneProvenance, textWidth: Int): Float {
+    val horizontal = mark.orientation ==
+        dev.hryshyn.remanence.core.model.GeneratorExpression.MarkOrientation.HORIZONTAL
+    val free = ((if (horizontal) mark.region.width else mark.region.height) - textWidth).coerceAtLeast(0)
+    return free * when (mark.align) {
+        dev.hryshyn.remanence.core.model.GeneratorExpression.MarkAlign.RIGHT -> 1f
+        dev.hryshyn.remanence.core.model.GeneratorExpression.MarkAlign.CENTER -> 0.5f
+        else -> 0f
+    }
+}
 
 private fun TextLayoutResult.fitsProvenance(mark: CollageRenderer.SceneProvenance): Boolean {
     if (hasVisualOverflow) return false

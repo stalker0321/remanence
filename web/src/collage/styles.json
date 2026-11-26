@@ -1285,5 +1285,1332 @@
     },
     "tracking": -0.02,
     "surfaceMode": "flat"
+  },
+  {
+    "id": "kiosk",
+    "version": "character-1",
+    "grammar": 5,
+    "palette": {
+      "paper": "#ece8dc",
+      "ink": "#1c1c1c",
+      "sound": "#e2502b",
+      "soundInk": "#fff4e6",
+      "surface": "#ece8dc",
+      "edge": "#1c1c1c"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 84,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 22,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.03,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#e2502b",
+      "align": null,
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "late-edition",
+    "version": "character-1",
+    "grammar": 5,
+    "palette": {
+      "paper": "#14171f",
+      "ink": "#ebe5d6",
+      "sound": "#c9b6ff",
+      "soundInk": "#14171f",
+      "surface": "#14171f",
+      "edge": "#ebe5d6"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 70,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 19,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 25,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.035,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "LOWER",
+      "ink": "#c9b6ff",
+      "align": "RIGHT",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "citrus",
+    "version": "character-1",
+    "grammar": 17,
+    "palette": {
+      "paper": "#f4e544",
+      "ink": "#1d2b24",
+      "sound": "#1d2b24",
+      "soundInk": "#f4e544",
+      "surface": "#f4e544",
+      "edge": "#1d2b24"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 70,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 16,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Gothic",
+      "size": 20,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": -0.05,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": null,
+      "align": null,
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "cobalt",
+    "version": "character-1",
+    "grammar": 17,
+    "palette": {
+      "paper": "#eef0f4",
+      "ink": "#1f3fbf",
+      "sound": "#1f3fbf",
+      "soundInk": "#eef0f4",
+      "surface": "#eef0f4",
+      "edge": "#1f3fbf"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 66,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 17,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.03,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "LOWER",
+      "ink": null,
+      "align": "CENTER",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "seam",
+    "version": "character-1",
+    "grammar": 26,
+    "palette": {
+      "paper": "#f1ede4",
+      "ink": "#2a2622",
+      "sound": "#2a2622",
+      "soundInk": "#f1ede4",
+      "surface": "#f1ede4",
+      "edge": "#2a2622"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 27,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySans",
+      "size": 19,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.14,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#c4452d",
+      "align": "LEFT",
+      "orientation": null,
+      "swapWithSender": true
+    }
+  },
+  {
+    "id": "dusk",
+    "version": "character-1",
+    "grammar": 26,
+    "palette": {
+      "paper": "#2c2440",
+      "ink": "#f2dcc0",
+      "sound": "#f29e6b",
+      "soundInk": "#2c2440",
+      "surface": "#2c2440",
+      "edge": "#f2dcc0"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 30,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 20,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 25,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.01,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": "#f29e6b",
+      "align": "CENTER",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "blue-letter-sound",
+    "version": "character-1",
+    "grammar": 5,
+    "palette": {
+      "paper": "#1525a0",
+      "ink": "#f9edd8",
+      "sound": "#ffc94a",
+      "soundInk": "#1525a0",
+      "surface": "#1525a0",
+      "edge": "#f9edd8"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 67,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 20,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 26,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.045,
+    "surfaceMode": "flat"
+  },
+  {
+    "id": "tape",
+    "version": "character-1",
+    "grammar": 6,
+    "palette": {
+      "paper": "#eef1e6",
+      "ink": "#1e1e1e",
+      "sound": "#2f6bff",
+      "soundInk": "#ffffff",
+      "surface": "#eef1e6",
+      "edge": "#1e1e1e"
+    },
+    "brand": {
+      "font": "StudyMono",
+      "size": 21,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySans",
+      "size": 20,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.3,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#2f6bff",
+      "align": null,
+      "orientation": "VERTICAL_DOWN",
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "cassis",
+    "version": "character-1",
+    "grammar": 6,
+    "palette": {
+      "paper": "#3a1631",
+      "ink": "#ffd9e6",
+      "sound": "#ffd9e6",
+      "soundInk": "#3a1631",
+      "surface": "#3a1631",
+      "edge": "#ffd9e6"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 26,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 18,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.02,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": "#ff8fb8",
+      "align": null,
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "night-signal",
+    "version": "character-1",
+    "grammar": 11,
+    "palette": {
+      "paper": "#1b1b1d",
+      "ink": "#f2f2ee",
+      "sound": "#ffd400",
+      "soundInk": "#1b1b1d",
+      "surface": "#1b1b1d",
+      "edge": "#f2f2ee"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 54,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 22,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.02,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#ffd400",
+      "align": "RIGHT",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "linen",
+    "version": "character-1",
+    "grammar": 11,
+    "palette": {
+      "paper": "#efe9df",
+      "ink": "#3b3a36",
+      "sound": "#7a8b6f",
+      "soundInk": "#f7f3ea",
+      "surface": "#efe9df",
+      "edge": "#3b3a36"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 50,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 18,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.03,
+    "surfaceMode": "soft",
+    "wordmark": {
+      "case": "LOWER",
+      "ink": "#7a8b6f",
+      "align": "CENTER",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "blueprint",
+    "version": "character-1",
+    "grammar": 12,
+    "palette": {
+      "paper": "#1d3fa8",
+      "ink": "#e9eefc",
+      "sound": "#e9eefc",
+      "soundInk": "#1d3fa8",
+      "surface": "#1d3fa8",
+      "edge": "#e9eefc"
+    },
+    "brand": {
+      "font": "StudyMono",
+      "size": 20,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 19,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudyMono",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": 0.25,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": null,
+      "align": null,
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "rust-film",
+    "version": "character-1",
+    "grammar": 12,
+    "palette": {
+      "paper": "#2a1d17",
+      "ink": "#f0dcc4",
+      "sound": "#d9693b",
+      "soundInk": "#2a1d17",
+      "surface": "#2a1d17",
+      "edge": "#f0dcc4"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 23,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 18,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 19,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 19,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.01,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": "#d9693b",
+      "align": null,
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "gallery",
+    "version": "character-1",
+    "grammar": 18,
+    "palette": {
+      "paper": "#d9d6cf",
+      "ink": "#222222",
+      "sound": "#222222",
+      "soundInk": "#f5f3ee",
+      "surface": "#ffffff",
+      "edge": "#bcb8af"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 20,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "Gothic",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Gothic",
+      "size": 19,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.2,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#222222",
+      "align": null,
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "mint-mount",
+    "version": "character-1",
+    "grammar": 18,
+    "palette": {
+      "paper": "#2f5d50",
+      "ink": "#22322c",
+      "sound": "#f2b8a0",
+      "soundInk": "#22322c",
+      "surface": "#eef3ea",
+      "edge": "#c9d8cc"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 20,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 19,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": 0.18,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#c4553c",
+      "align": null,
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "record-shop",
+    "version": "character-1",
+    "grammar": 20,
+    "palette": {
+      "paper": "#f3efe4",
+      "ink": "#1f1f1f",
+      "sound": "#1f1f1f",
+      "soundInk": "#f3efe4",
+      "surface": "#f3efe4",
+      "edge": "#1f1f1f"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 27,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 23,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.1,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#e8402f",
+      "align": "LEFT",
+      "orientation": null,
+      "swapWithSender": true
+    }
+  },
+  {
+    "id": "midnight-sleeve",
+    "version": "character-1",
+    "grammar": 20,
+    "palette": {
+      "paper": "#0f1b2e",
+      "ink": "#e8e3d3",
+      "sound": "#d9b25f",
+      "soundInk": "#0f1b2e",
+      "surface": "#0f1b2e",
+      "edge": "#e8e3d3"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 20,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 19,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 23,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.01,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": "#d9b25f",
+      "align": "CENTER",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "typewriter",
+    "version": "character-1",
+    "grammar": 21,
+    "palette": {
+      "paper": "#f4f1ea",
+      "ink": "#2b2b2b",
+      "sound": "#2b2b2b",
+      "soundInk": "#f4f1ea",
+      "surface": "#f4f1ea",
+      "edge": "#2b2b2b"
+    },
+    "brand": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 26,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 21,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudyMono",
+      "size": 17,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": 0.25,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#c23b22",
+      "align": null,
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "sage-letter",
+    "version": "character-1",
+    "grammar": 21,
+    "palette": {
+      "paper": "#5f7563",
+      "ink": "#f3efe2",
+      "sound": "#f3efe2",
+      "soundInk": "#3d4f40",
+      "surface": "#5f7563",
+      "edge": "#f3efe2"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 31,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 26,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.01,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": "#f6d58e",
+      "align": null,
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "marquee",
+    "version": "character-1",
+    "grammar": 22,
+    "palette": {
+      "paper": "#1c1a24",
+      "ink": "#f3efe6",
+      "sound": "#ffcf3f",
+      "soundInk": "#1c1a24",
+      "surface": "#1c1a24",
+      "edge": "#f3efe6"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 34,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 17,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 23,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.06,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#ffcf3f",
+      "align": "LEFT",
+      "orientation": null,
+      "swapWithSender": true
+    }
+  },
+  {
+    "id": "peony",
+    "version": "character-1",
+    "grammar": 22,
+    "palette": {
+      "paper": "#f6d9de",
+      "ink": "#3c1f2b",
+      "sound": "#3c1f2b",
+      "soundInk": "#f6d9de",
+      "surface": "#f6d9de",
+      "edge": "#3c1f2b"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 34,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 25,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.01,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": "#b5345a",
+      "align": "CENTER",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "traffic",
+    "version": "character-1",
+    "grammar": 23,
+    "palette": {
+      "paper": "#f2f0ea",
+      "ink": "#1d1d1b",
+      "sound": "#ff4d1f",
+      "soundInk": "#1d1d1b",
+      "surface": "#f2f0ea",
+      "edge": "#1d1d1b"
+    },
+    "brand": {
+      "font": "Narrow",
+      "size": 30,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 17,
+      "weight": 700,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Narrow",
+      "size": 23,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.12,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#1d1d1b",
+      "align": "CENTER",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "sea-glass",
+    "version": "character-1",
+    "grammar": 23,
+    "palette": {
+      "paper": "#1f3a3d",
+      "ink": "#e6f2ee",
+      "sound": "#9fd8c8",
+      "soundInk": "#1f3a3d",
+      "surface": "#1f3a3d",
+      "edge": "#e6f2ee"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 30,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 18,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.02,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": "#1f3a3d",
+      "align": "RIGHT",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "lime-pulse",
+    "version": "character-1",
+    "grammar": 24,
+    "palette": {
+      "paper": "#141414",
+      "ink": "#f0f0ea",
+      "sound": "#c8f03c",
+      "soundInk": "#141414",
+      "surface": "#141414",
+      "edge": "#f0f0ea"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 30,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 23,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Gothic",
+      "size": 21,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.04,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#141414",
+      "align": "RIGHT",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "coral-pulse",
+    "version": "character-1",
+    "grammar": 24,
+    "palette": {
+      "paper": "#f3ece2",
+      "ink": "#2d2622",
+      "sound": "#ff7a5c",
+      "soundInk": "#2d2622",
+      "surface": "#f3ece2",
+      "edge": "#2d2622"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 32,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 18,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.02,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": "#fff6ec",
+      "align": "CENTER",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "contact-sheet",
+    "version": "character-1",
+    "grammar": 25,
+    "palette": {
+      "paper": "#e7e5df",
+      "ink": "#1e1e1e",
+      "sound": "#1e1e1e",
+      "soundInk": "#e7e5df",
+      "surface": "#ffffff",
+      "edge": "#1e1e1e"
+    },
+    "brand": {
+      "font": "StudyMono",
+      "size": 18,
+      "weight": 400,
+      "italic": false
+    },
+    "sender": {
+      "font": "StudyMono",
+      "size": 15,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySans",
+      "size": 19,
+      "weight": 400,
+      "italic": false
+    },
+    "tracking": 0.3,
+    "surfaceMode": "edge",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#d23c2a",
+      "align": "LEFT",
+      "orientation": null,
+      "swapWithSender": true
+    }
+  },
+  {
+    "id": "night-print",
+    "version": "character-1",
+    "grammar": 25,
+    "palette": {
+      "paper": "#16181d",
+      "ink": "#e8e4da",
+      "sound": "#e8e4da",
+      "soundInk": "#16181d",
+      "surface": "#f4f1ea",
+      "edge": "#2c2f36"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySerif",
+      "size": 19,
+      "weight": 400,
+      "italic": true
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 21,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.01,
+    "surfaceMode": "print",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": "#c9a7ff",
+      "align": "CENTER",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "museum",
+    "version": "character-1",
+    "grammar": 27,
+    "palette": {
+      "paper": "#f5f3ee",
+      "ink": "#151515",
+      "sound": "#151515",
+      "soundInk": "#f5f3ee",
+      "surface": "#f5f3ee",
+      "edge": "#151515"
+    },
+    "brand": {
+      "font": "Gothic",
+      "size": 20,
+      "weight": 700,
+      "italic": false
+    },
+    "sender": {
+      "font": "Gothic",
+      "size": 17,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySans",
+      "size": 22,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "Gothic",
+      "size": 20,
+      "weight": 700,
+      "italic": false
+    },
+    "tracking": 0.3,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "UPPER",
+      "ink": "#151515",
+      "align": "LEFT",
+      "orientation": null,
+      "swapWithSender": false
+    }
+  },
+  {
+    "id": "ember-hero",
+    "version": "character-1",
+    "grammar": 27,
+    "palette": {
+      "paper": "#2a1410",
+      "ink": "#f6e2c8",
+      "sound": "#ff8a3d",
+      "soundInk": "#2a1410",
+      "surface": "#2a1410",
+      "edge": "#f6e2c8"
+    },
+    "brand": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": true
+    },
+    "sender": {
+      "font": "StudySans",
+      "size": 16,
+      "weight": 400,
+      "italic": false
+    },
+    "note": {
+      "font": "StudySerif",
+      "size": 24,
+      "weight": 400,
+      "italic": false
+    },
+    "music": {
+      "font": "StudySerif",
+      "size": 22,
+      "weight": 400,
+      "italic": true
+    },
+    "tracking": -0.01,
+    "surfaceMode": "flat",
+    "wordmark": {
+      "case": "TITLE",
+      "ink": "#ff8a3d",
+      "align": "LEFT",
+      "orientation": null,
+      "swapWithSender": true
+    }
   }
 ]

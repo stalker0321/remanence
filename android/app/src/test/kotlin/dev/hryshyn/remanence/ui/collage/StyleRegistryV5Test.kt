@@ -1,5 +1,9 @@
 package dev.hryshyn.remanence.ui.collage
 
+import java.io.File
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -68,6 +72,20 @@ class StyleRegistryV5Test {
                 "$id surface mode",
                 s.surfaceMode in setOf("flat", "soft", "edge", "raised", "print"),
             )
+        }
+    }
+
+    /** The site checks the same file, so a sealed style opens on both. */
+    @Test
+    fun digestsMatchTheSharedFixture() {
+        var dir: File? = File(System.getProperty("user.dir")).absoluteFile
+        while (dir != null && !File(dir, "protocol/fixtures").isDirectory) dir = dir.parentFile
+        val fixture = File(requireNotNull(dir) { "protocol/fixtures not found" }, "protocol/fixtures/style-digests-v1.json")
+        val digests = Json.parseToJsonElement(fixture.readText()).jsonObject.getValue("digests").jsonObject
+        assertEquals(StyleRegistry.ids, digests.keys)
+        for ((id, hex) in digests) {
+            val actual = requireNotNull(StyleRegistry.digest(id)).joinToString("") { "%02x".format(it) }
+            assertEquals(id, hex.jsonPrimitive.content, actual)
         }
     }
 }

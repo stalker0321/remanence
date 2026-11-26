@@ -302,20 +302,50 @@ function paintMic(context: CanvasRenderingContext2D, box: { x: number; y: number
   context.restore()
 }
 
+/**
+ * Android `CollageCanvas` provenance: the mark set in its sealed face with
+ * brand tracking, placed along its reading direction by its alignment;
+ * vertical-up turns -90° about the box's bottom-left, vertical-down +90°
+ * about its top-right. Horizontal marks are clipped to their box.
+ */
 function paintMark(context: CanvasRenderingContext2D, mark: Scene['provenance'][number]): void {
-  if (mark.orientation === 'horizontal') {
-    writeText(context, mark.text, mark.region, mark, mark.color, false)
-    return
+  const { region } = mark
+  const horizontal = mark.orientation === 'horizontal'
+  context.save()
+  if (horizontal) {
+    context.beginPath()
+    context.rect(region.x, region.y, region.width, region.height)
+    context.clip()
+    context.translate(region.x, region.y)
+  } else if (mark.orientation === 'vertical-up') {
+    context.translate(region.x, region.y + region.height)
+    context.rotate(-Math.PI / 2)
+  } else {
+    context.translate(region.x + region.width, region.y)
+    context.rotate(Math.PI / 2)
   }
-  const x = mark.orientation === 'vertical-up' ? mark.region.x : mark.region.x + mark.region.width
-  const y = mark.orientation === 'vertical-up' ? mark.region.y + mark.region.height : mark.region.y
-  const turn = mark.orientation === 'vertical-up' ? -Math.PI / 2 : Math.PI / 2
-  rotated(context, x, y, () => {
-    context.rotate(turn)
-    context.fillStyle = css(mark.color)
-    context.font = fontOf(mark)
-    context.fillText(mark.text, 0, mark.size)
-  }, false)
+  context.fillStyle = css(mark.color)
+  context.font = fontOf(mark)
+  const spacing = mark.tracking * mark.size
+  const glyphs = [...mark.text]
+  const width = Math.ceil(context.measureText(mark.text).width + spacing * glyphs.length)
+  const lead = Math.max(0, (horizontal ? region.width : region.height) - width) * alignShare(mark.align)
+  if (spacing === 0) {
+    context.fillText(mark.text, lead, mark.size)
+  } else {
+    // Android's letterSpacing puts half the space before each glyph and half after.
+    let prefix = ''
+    glyphs.forEach((glyph, index) => {
+      context.fillText(glyph, lead + context.measureText(prefix).width + spacing * (index + 0.5), mark.size)
+      prefix += glyph
+    })
+  }
+  context.restore()
+}
+
+/** Where a mark sits in the free length of its box. */
+export function alignShare(align: Scene['provenance'][number]['align']): number {
+  return align === 'right' ? 1 : align === 'center' ? 0.5 : 0
 }
 
 function paintPlay(context: CanvasRenderingContext2D, region: Rect, track: Scene['music']): void {

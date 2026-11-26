@@ -27,7 +27,33 @@ export interface CollageStyle {
   music: TextRole
   tracking: number
   surfaceMode: string
+  /** Character styles only: how the word sits in the card; absent keeps the sealed mark as is. */
+  wordmark?: Wordmark
 }
+
+/**
+ * Android `StyleRegistry.Wordmark`: the word's case and colour at draw time,
+ * and at seal time its alignment, orientation, or a swap with the sender's box.
+ * Names are the Android enum names, as the canonical bytes carry them.
+ */
+export interface Wordmark {
+  case: 'LOWER' | 'UPPER' | 'TITLE'
+  ink: string | null
+  align: 'LEFT' | 'CENTER' | 'RIGHT' | null
+  orientation: 'HORIZONTAL' | 'VERTICAL_UP' | 'VERTICAL_DOWN' | null
+  swapWithSender: boolean
+}
+
+export const CHARACTER_VERSION = 'character-1'
+
+/**
+ * Android `StyleRegistry.CHARACTER_STYLES_OFFERED`: receivers open character
+ * styles now; senders get them once Android offers them too.
+ */
+export const CHARACTER_STYLES_OFFERED = false
+
+/** Old styles a character style replaces for senders once offered. */
+const REPLACED_BY_CHARACTER = new Set(['blue-letter'])
 
 const styles = new Map<string, CollageStyle>((records as CollageStyle[]).map((style) => [style.id, style]))
 const digests = new Map<string, Promise<Uint8Array>>()
@@ -45,6 +71,25 @@ export function styleById(id: string): CollageStyle | null {
 
 export function styleIds(): string[] {
   return [...styles.keys()]
+}
+
+/** Old receivers cannot open a style they lack, so new styles stay hidden from senders until offered. */
+export function offeredToSenders(style: CollageStyle, characterOffered = CHARACTER_STYLES_OFFERED): boolean {
+  if (style.version === CHARACTER_VERSION) return characterOffered
+  if (REPLACED_BY_CHARACTER.has(style.id)) return !characterOffered
+  return true
+}
+
+/** The brand text as drawn; the sealed text stays `Remanence`. */
+export function brandDisplay(style: CollageStyle, sealed: string): string {
+  if (style.wordmark?.case === 'LOWER') return sealed.toLowerCase()
+  if (style.wordmark?.case === 'UPPER') return sealed.toUpperCase()
+  return sealed
+}
+
+/** Brand tracking counts toward the fit only for character styles, as on Android. */
+export function markFitTracking(style: CollageStyle, kind: 'brand' | 'sender'): number {
+  return kind === 'brand' && style.wordmark ? style.tracking : 0
 }
 
 export function canonicalStyleBytes(style: CollageStyle): Uint8Array {
@@ -65,6 +110,15 @@ export function canonicalStyleBytes(style: CollageStyle): Uint8Array {
   }
   out.int(roundAwayFromZero(style.tracking * 1000))
   out.str(style.surfaceMode)
+  // Older records end here, so their digests are unchanged.
+  const mark = style.wordmark
+  if (mark) {
+    out.str(mark.case)
+    out.str(mark.ink ?? '')
+    out.str(mark.align ?? '')
+    out.str(mark.orientation ?? '')
+    out.byte(mark.swapWithSender ? 1 : 0)
+  }
   return out.finish()
 }
 

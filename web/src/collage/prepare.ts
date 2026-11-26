@@ -25,7 +25,7 @@ import {
   type ResolvedExpression,
   validateResolved,
 } from './model'
-import { equalBytes, opaqueColor, PALETTE_VERSION, styleById, styleDigest, type CollageStyle } from './styles'
+import { brandDisplay, equalBytes, markFitTracking, opaqueColor, PALETTE_VERSION, styleById, styleDigest, type CollageStyle } from './styles'
 import { layoutCreatorNote, type CreatorNoteLayout } from './creatorNote'
 import { isSongBandMode, songBandLayout, voiceBandLayout, voiceBandShape, type RunWidth, type SongBandLayout, type SongBandMode, type VoiceWords } from './songBand'
 
@@ -137,6 +137,8 @@ export interface TextMeasureRequest {
   maxWidth: number
   maxHeight: number
   softWrap?: boolean
+  /** Letter spacing in em, added after every character as Android's `letterSpacing` does. */
+  tracking?: number
 }
 
 export interface TextMeasurement {
@@ -311,10 +313,11 @@ export async function prepare(
   const provenance: SceneProvenance[] = []
   for (const [index, mark] of (expression.provenance ?? []).entries()) {
     if (!fontFile(mark.family, mark.weight, mark.italic)) return reject('font face for provenance is not bundled')
-    if (!markFits(measurer, mark)) return reject(`provenance ${index} does not fit its sealed region`)
+    const shown = mark.kind === 'brand' ? brandDisplay(style, mark.text) : mark.text
+    if (!markFits(measurer, { ...mark, text: shown }, markFitTracking(style, mark.kind))) return reject(`provenance ${index} does not fit its sealed region`)
     provenance.push({
       kind: mark.kind,
-      text: mark.text,
+      text: shown,
       region: rectOf(mark),
       family: mark.family,
       size: mark.size,
@@ -349,8 +352,12 @@ export async function prepare(
   }
 }
 
-/** The recipient's own fit check for one provenance mark in its sealed box. */
-export function markFits(measurer: TextMeasurer, mark: Pick<ProvenanceMark, 'text' | 'family' | 'size' | 'weight' | 'italic' | 'line' | 'orientation' | 'width' | 'height'>): boolean {
+/** The recipient's own fit check for one provenance mark in its sealed box, as shown and spaced. */
+export function markFits(
+  measurer: TextMeasurer,
+  mark: Pick<ProvenanceMark, 'text' | 'family' | 'size' | 'weight' | 'italic' | 'line' | 'orientation' | 'width' | 'height'>,
+  tracking = 0,
+): boolean {
   const horizontal = mark.orientation === 'horizontal'
   const maxWidth = horizontal ? mark.width : mark.height
   const maxHeight = horizontal ? mark.height : mark.width
@@ -363,12 +370,14 @@ export function markFits(measurer: TextMeasurer, mark: Pick<ProvenanceMark, 'tex
     line: mark.line,
     maxWidth,
     maxHeight,
+    tracking,
   })
   return !measurement.hasVisualOverflow && measurement.width >= 1 && measurement.height >= 1 && measurement.width <= maxWidth && measurement.height <= maxHeight
 }
 
-/** Marks are ink, except the brand on the sound ribbon of grammars 23 and 24. */
+/** Marks are ink, except a character style's own word colour and the brand on the sound ribbon of grammars 23 and 24. */
 export function markColor(kind: ProvenanceMark['kind'], grammarId: string, style: CollageStyle): number {
+  if (kind === 'brand' && style.wordmark?.ink) return opaqueColor(style.wordmark.ink)
   const onSound = kind === 'brand' && (grammarId === 'g23' || grammarId === 'g24')
   return opaqueColor(onSound ? style.palette.soundInk : style.palette.ink)
 }

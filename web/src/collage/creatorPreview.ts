@@ -28,7 +28,7 @@ import {
 import { markLine, MUSIC_COVER_MODES_V4, type ArtworkRef } from './model'
 import { mountRect } from './mount'
 import { layoutCreatorNote, wrapNoteLines, type CreatorNoteFace, type CreatorNoteLayout } from './creatorNote'
-import { opaqueColor, roleTextType, styleById, styleIds, type CollageStyle } from './styles'
+import { brandDisplay, markFitTracking, offeredToSenders, opaqueColor, roleTextType, styleById, styleIds, type CollageStyle, type Wordmark } from './styles'
 import type { Scene } from './prepare'
 import { solveCropDetailed, type CollageAnalysis } from './analysis/cropSolver'
 import { assign, assignmentOk, hasProminentFace, isObjectPhoto, matrixCell } from './analysis/resolve'
@@ -362,7 +362,7 @@ export function previewCandidate(
     slots,
     music: plan.music === null ? null : { region: mountRect(plan.music.rect), mode: plan.music.mode },
     note: plan.note === null ? null : { region: mountRect(plan.note.rect), state: plan.note.state, size: plan.note.size, line: plan.note.line },
-    provenance: choice.markFits === undefined ? grammarMarks : styleMarks(grammarMarks, style!, choice.markFits),
+    provenance: choice.markFits === undefined ? grammarMarks : styleMarks(grammarMarks, style!, choice.markFits) ?? fail(`style ${style!.id} has no room for its word`),
     decor: plan.decor.map((plane) => ({ kind: plane.kind, region: mountRect(plane.rect) })),
   }
 }
@@ -376,27 +376,64 @@ function senderText(handle: string): string {
 }
 
 /**
- * Android `AllFamilyV4Adapter.styleMarks` for the bundled styles: each mark
- * takes its style's brand or sender type at the largest size, down to 16
- * (brand) or 14 (sender), that the recipient's fit check accepts; a type
- * that fits nowhere keeps the grammar's mark.
+ * Android `AllFamilyV4Adapter.styleMarks`: each mark takes its style's brand
+ * or sender type at the largest size, down to 16 (brand) or 14 (sender), that
+ * the recipient's fit check accepts. A character style may first swap the
+ * brand into the sender line's box and set the brand's alignment and
+ * orientation. An older style whose type fits nowhere keeps the grammar's
+ * mark; a character style is refused (null), since its word is the point.
  */
-function styleMarks(marks: CreatorProvenanceView[], style: CollageStyle, fits: (mark: CreatorProvenanceView) => boolean): CreatorProvenanceView[] {
-  return marks.map((mark) => {
+function styleMarks(marks: CreatorProvenanceView[], style: CollageStyle, fits: (mark: CreatorProvenanceView) => boolean): CreatorProvenanceView[] | null {
+  const wordmark = style.wordmark
+  let placed = marks
+  const brandIndex = marks.findIndex((mark) => mark.kind === 'brand')
+  const senderIndex = marks.findIndex((mark) => mark.kind === 'sender')
+  if (wordmark?.swapWithSender && brandIndex >= 0 && senderIndex >= 0) {
+    const brand = marks[brandIndex]!
+    const sender = marks[senderIndex]!
+    placed = [...marks]
+    placed[brandIndex] = { ...brand, region: { ...sender.region }, orientation: sender.orientation }
+    placed[senderIndex] = {
+      ...sender,
+      region: { ...brand.region },
+      orientation: brand.orientation,
+      align: brand.orientation === 'horizontal' ? 'right' : 'left',
+    }
+  }
+  const styled: CreatorProvenanceView[] = []
+  for (const mark of placed) {
     const brand = mark.kind === 'brand'
     const type = brand ? style.brand : style.sender
+    const oriented = brand && wordmark
+      ? { ...mark, align: wordmarkAlign(wordmark.align) ?? mark.align, orientation: wordmarkOrientation(wordmark.orientation) ?? mark.orientation }
+      : mark
     const smallest = Math.min(type.size, brand ? 16 : 14)
-    for (let size = type.size; size >= smallest; size--) {
-      const styled = { ...mark, family: type.font, size, weight: type.weight, italic: type.italic, line: markLine(size) }
-      if (fits(styled)) return styled
+    let chosen: CreatorProvenanceView | null = null
+    for (let size = type.size; size >= smallest && chosen === null; size--) {
+      const candidate = { ...oriented, family: type.font, size, weight: type.weight, italic: type.italic, line: markLine(size) }
+      if (fits(candidate)) chosen = candidate
     }
-    return mark
-  })
+    if (chosen === null && wordmark) return null
+    styled.push(chosen ?? mark)
+  }
+  return styled
 }
 
-/** The recipient's mark check over a creator mark. */
-export function creatorMarkFits(measurer: TextMeasurer): (mark: CreatorProvenanceView) => boolean {
-  return (mark) => markFits(measurer, { ...mark, width: mark.region.width, height: mark.region.height })
+function wordmarkAlign(value: Wordmark['align']): CreatorProvenanceView['align'] | null {
+  return value === null ? null : (value.toLowerCase() as CreatorProvenanceView['align'])
+}
+
+function wordmarkOrientation(value: Wordmark['orientation']): CreatorProvenanceView['orientation'] | null {
+  return value === null ? null : (value.toLowerCase().replace('_', '-') as CreatorProvenanceView['orientation'])
+}
+
+/** The recipient's mark check over a creator mark, as the style shows and spaces it. */
+export function creatorMarkFits(measurer: TextMeasurer, style: CollageStyle): (mark: CreatorProvenanceView) => boolean {
+  return (mark) => markFits(
+    measurer,
+    { ...mark, text: mark.kind === 'brand' ? brandDisplay(style, mark.text) : mark.text, width: mark.region.width, height: mark.region.height },
+    markFitTracking(style, mark.kind),
+  )
 }
 
 export interface CreatorSceneInput {
@@ -504,7 +541,7 @@ export function creatorScene(input: CreatorSceneInput): Scene {
     artwork,
     provenance: input.view.provenance.map((mark) => ({
       kind: mark.kind,
-      text: mark.kind === 'brand' ? BRAND_TEXT : senderText(input.senderHandle),
+      text: mark.kind === 'brand' ? brandDisplay(style!, BRAND_TEXT) : senderText(input.senderHandle),
       region: { ...mark.region },
       family: mark.family,
       size: mark.size,
@@ -558,6 +595,8 @@ export interface ChoicesInput {
   cover?: ArtworkRef | null
   /** Only these styles (tests); every bundled style otherwise. */
   styleIds?: readonly string[]
+  /** Offers the character styles (tests, review); `CHARACTER_STYLES_OFFERED` otherwise. */
+  characterOffered?: boolean
   /**
    * The photos' analyses (faces, objects, fields), keyed by content id. With
    * one for every photo, photos are matched to tiles and cropped the way
@@ -618,7 +657,6 @@ export function creatorChoices(input: ChoicesInput): CreatorCandidateView[] {
   const poster = input.posterContentId ?? null
   const matching = analysed === null ? null : new Matching(input.preview.photos.map((photo) => photo.contentId), analysed, poster)
   const allowed = new Set(input.styleIds ?? styleIds())
-  const fits = creatorMarkFits(input.measurer)
   const perGrammar = new Map<number, { styles: CollageStyle[]; branches: Map<string, Branch[]> }>()
   const buckets: Array<[number, string[]]> = []
   for (const gid of ACTIVE_GRAMMAR_IDS) {
@@ -627,7 +665,7 @@ export function creatorChoices(input: ChoicesInput): CreatorCandidateView[] {
     const styles = styleIds()
       .sort()
       .map((id) => styleById(id)!)
-      .filter((style) => style.grammar === gid && allowed.has(style.id))
+      .filter((style) => style.grammar === gid && allowed.has(style.id) && offeredToSenders(style, input.characterOffered))
     if (styles.length === 0) continue
     const branches = new Map<string, Branch[]>()
     for (const style of styles) {
@@ -674,7 +712,7 @@ export function creatorChoices(input: ChoicesInput): CreatorCandidateView[] {
           ? null
           : matching === null ? { order: branch.order, crops: new Map() } : matching.placement(branch.plan, branch.order)
         if (branch.order !== null && placement === null) continue
-        const view = tryView(branch.plan, byId, input, style, fits, placement)
+        const view = tryView(branch.plan, byId, input, style, placement)
         if (view === null) continue
         drawable.push(view)
         break
@@ -751,9 +789,9 @@ function tryView(
   byId: ReadonlyMap<string, CreatorPhoto>,
   input: ChoicesInput,
   style: CollageStyle,
-  fits: (mark: CreatorProvenanceView) => boolean,
   placement: BranchPlacement | null = null,
 ): CreatorCandidateView | null {
+  const fits = creatorMarkFits(input.measurer, style)
   try {
     const view = previewCandidate(plan, byId, input.transforms, { grammarId: plan.grammarId, styleId: style.id, markFits: fits }, input.preview.sender, placement)
     if (view.provenance.some((mark) => !fits(mark))) return null

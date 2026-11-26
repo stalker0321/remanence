@@ -3,7 +3,8 @@ import { CollageError } from '../src/collage/errors'
 import { decodeExpression, encodeExpression } from '../src/collage/codec'
 import { decorStroke, drawList } from '../src/collage/paint'
 import { prepare, sourceRect } from '../src/collage/prepare'
-import { styleDigestHex } from '../src/collage/styles'
+import { styleDigestHex, styleIds } from '../src/collage/styles'
+import sharedDigests from '../../protocol/fixtures/style-digests-v1.json'
 import { bytesToHex } from '../src/protocol/bytes'
 import {
   artworkExpression,
@@ -45,6 +46,12 @@ describe('frozen expression bytes', () => {
     expect(await styleDigestHex('press')).toBe('1f68610fa70b5210a72643d58f795c777d7a0e1eae262c522426d4b79a9a9a93')
     expect(await styleDigestHex('blue-letter')).toBe('da2d58fba44cb343a7020a8598d559d89d5e59a55f3651334b5c5647ef1872c3')
     expect(await styleDigestHex('poster')).toBe('628aec674a6d38afda3029e690f7a8b8ac13db90ed3bf3b2bb6bcadceccce5d4')
+  })
+
+  it('digests every bundled style as Android does, character styles with their word', async () => {
+    // Android's StyleRegistryV5Test checks the same file.
+    expect(styleIds().sort()).toEqual(Object.keys(sharedDigests.digests).sort())
+    for (const [id, hex] of Object.entries(sharedDigests.digests)) expect(await styleDigestHex(id), id).toBe(hex)
   })
 })
 

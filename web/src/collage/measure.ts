@@ -25,7 +25,9 @@ export function canvasTextMeasurer(doc: Document): TextMeasurer {
       context.font = style
       const lines = request.text.split('\n')
       let width = 0
-      for (const line of lines) width = Math.max(width, context.measureText(line).width)
+      // Android's letterSpacing adds `tracking * size` to every character's advance.
+      const spacing = (request.tracking ?? 0) * request.size
+      for (const line of lines) width = Math.max(width, context.measureText(line).width + spacing * [...line].length)
       // Android's Compose layout (CollageTextMeasurer, density 1): the first line is as tall as
       // the font size and each further line adds the line box. Measured on every bundled face,
       // size and line the layouts use; the recipient's fit checks must agree with the sender's.

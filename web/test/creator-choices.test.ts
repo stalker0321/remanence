@@ -5,7 +5,7 @@ import { parseContentManifest } from '../src/collage/wire'
 import { captureFrozenRenderedPlan } from '../src/collage/frozenRenderedPlan'
 import { buildFrozenExpression } from '../src/collage/frozenExpression'
 import { prepare, type TextMeasurer } from '../src/collage/prepare'
-import { styleById } from '../src/collage/styles'
+import { CHARACTER_VERSION, opaqueColor, styleById, styleIds } from '../src/collage/styles'
 import type { ArtworkRef } from '../src/collage/model'
 import { freezeSelection } from '../src/create/creatorFreeze'
 
@@ -23,7 +23,8 @@ const measurer: TextMeasurer = {
   measure(request) {
     const glyph = request.size * 0.5
     const lines = request.text.split('\n')
-    const width = Math.max(...lines.map((line) => line.length * glyph))
+    const spacing = (request.tracking ?? 0) * request.size
+    const width = Math.max(...lines.map((line) => line.length * (glyph + spacing)))
     if (request.softWrap === false || width <= request.maxWidth) {
       const height = lines.length * request.line
       return { width, height, hasVisualOverflow: height > request.maxHeight }
@@ -256,3 +257,67 @@ describe('creator choices with a video square', () => {
     })
   }
 })
+
+describe('character styles on the site', () => {
+  const characterIds = styleIds().filter((id) => styleById(id)!.version === CHARACTER_VERSION)
+
+  it('stay hidden from senders until offered, and then replace blue-letter', () => {
+    const preview = { id: 'c', sender: SENDER, photos: photos([1.5, 0.75, 1]), note: 'Summer by the sea.' }
+    const hidden = creatorChoices({ preview, measurer, track: null, seed: 's' })
+    expect(hidden.some((view) => characterIds.includes(view.styleId))).toBe(false)
+    const offered = creatorChoices({ preview, measurer, track: null, seed: 's', characterOffered: true })
+    expect(offered.some((view) => characterIds.includes(view.styleId))).toBe(true)
+    expect(offered.some((view) => view.styleId === 'blue-letter')).toBe(false)
+  })
+
+  for (const [label, aspects, note, withTrack] of [
+    ['3 photos, note', [1.5, 0.75, 1], 'Summer by the sea.', false],
+    ['4 photos and a song', [0.75, 0.75, 1.5, 1], null, true],
+    ['5 photos, note', [1.5, 1, 0.66, 1.2, 0.8], 'Rain twice.', false],
+  ] as const) {
+    it(`seal the word as Remanence and open it as the style shows it: ${label}`, async () => {
+      const source = photos([...aspects])
+      const views = creatorChoices({
+        preview: { id: 'c', sender: SENDER, photos: source, note, music: withTrack ? { artwork: false } : null },
+        measurer,
+        track: withTrack ? TRACK : null,
+        seed: label,
+        styleIds: characterIds,
+        characterOffered: true,
+      })
+      expect(views.length).toBeGreaterThan(0)
+      for (const view of views) {
+        const style = styleById(view.styleId)!
+        const at = `${view.grammarId}/${view.styleId}/${view.branch}`
+        const { scene, opened, expression } = await sealAndOpen(view, source, note, withTrack)
+        expect(opened.kind, `${at}: ${opened.kind === 'rejected' ? opened.reason : ''}`).toBe('ready')
+        if (opened.kind !== 'ready') continue
+        const sealed = expression.provenance!.find((mark) => mark.kind === 'brand')!
+        const shown = opened.scene.provenance.find((mark) => mark.kind === 'brand')!
+        expect(sealed.text, at).toBe('Remanence')
+        expect(shown.text, at).toBe(scene.provenance.find((mark) => mark.kind === 'brand')!.text)
+        if (style.wordmark?.case === 'UPPER') expect(shown.text, at).toBe('REMANENCE')
+        if (style.wordmark?.case === 'LOWER') expect(shown.text, at).toBe('remanence')
+        if (style.wordmark?.ink) expect(shown.color, at).toBe(opaqueColor(style.wordmark.ink))
+        if (style.wordmark?.align) expect(sealed.align, at).toBe(style.wordmark.align.toLowerCase())
+        if (style.wordmark?.orientation) expect(sealed.orientation, at).toBe(style.wordmark.orientation.toLowerCase().replace('_', '-'))
+        expect(opened.scene.provenance.map((mark) => [mark.family, mark.size, mark.region, mark.align])).toEqual(scene.provenance.map((mark) => [mark.family, mark.size, mark.region, mark.align]))
+      }
+    })
+  }
+
+  it('swap the word into the sender line and set the sender right', () => {
+    const preview = { id: 'c', sender: SENDER, photos: photos([1.5, 0.75, 1]), note: 'Summer by the sea.' }
+    const plain = creatorChoices({ preview, measurer, track: null, seed: 's', styleIds: ['saffron'] })
+    const swapped = creatorChoices({ preview, measurer, track: null, seed: 's', styleIds: ['seam'], characterOffered: true })
+    const before = plain.find((view) => view.grammarId === 'g26')
+    const after = swapped.find((view) => view.branch === before?.branch)
+    expect(before && after).toBeTruthy()
+    const mark = (view: CreatorCandidateView, kind: 'brand' | 'sender') => view.provenance.find((item) => item.kind === kind)!
+    expect(mark(after!, 'brand').region).toEqual(mark(before!, 'sender').region)
+    expect(mark(after!, 'sender').region).toEqual(mark(before!, 'brand').region)
+    expect(mark(after!, 'brand').align).toBe('left')
+    expect(mark(after!, 'sender').align).toBe(mark(before!, 'brand').orientation === 'horizontal' ? 'right' : 'left')
+  })
+})
+

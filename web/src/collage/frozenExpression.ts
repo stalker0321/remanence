@@ -7,6 +7,7 @@ import { FONT_VERSION } from './fonts'
 import type { FrozenRenderedRect } from './frozenRenderedPlan'
 import { ACTIVE_GRAMMAR_IDS } from './planGrammars'
 import {
+  BRAND_TEXT,
   EXPRESSION_CONTRACT_V4,
   MUSIC_MODES_V4,
   MUSIC_VOICE_MODES_V4,
@@ -19,7 +20,7 @@ import {
   validateResolved,
 } from './model'
 import { sourceRect } from './prepare'
-import { PALETTE_VERSION, roleTextType, styleById, styleDigest, type CollageStyle } from './styles'
+import { brandDisplay, PALETTE_VERSION, roleTextType, styleById, styleDigest, type CollageStyle } from './styles'
 
 /**
  * T255 — pure local adapter: ONE frozen creator snapshot -> the EXISTING V4
@@ -286,9 +287,14 @@ export async function buildFrozenExpression(frozen: CreatorFreeze, epoch: bigint
   if (frozen.renderedPlan.provenance.some((mark) => !intRect(mark.region))) {
     return refuse('fraction', 'provenance region is not integral')
   }
+  // The brand was painted as the style shows the word; the sealed text stays the word itself.
+  const brandShown = brandDisplay(style, BRAND_TEXT)
+  if (frozen.renderedPlan.provenance.some((mark) => mark.kind === 'brand' && mark.text !== brandShown)) {
+    return refuse('contract', 'brand provenance was not painted as the style shows it')
+  }
   const provenance: ProvenanceMark[] = frozen.renderedPlan.provenance.map((mark) => ({
     kind: mark.kind,
-    text: mark.text,
+    text: mark.kind === 'brand' ? BRAND_TEXT : mark.text,
     x: mark.region.x,
     y: mark.region.y,
     width: mark.region.width,
